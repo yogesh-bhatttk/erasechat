@@ -1,0 +1,77 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_extensionName__",
+  "version": "1.0.0",
+  "default_locale": "en",
+  "description": "__MSG_extensionDescription__",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{a1b2c3d4-e5f6-7890-abcd-ef1234567890}",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": [
+    "storage",
+    "scripting",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://*.slack.com/*",
+    "https://slack.com/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
+  "minimum_chrome_version": "109",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "__MSG_actionTitle__",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
+      },
+      "description": "Open SlackClean Premium Popup"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.slack.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "content.css",
+        "fonts/outfit-variable.woff2"
+      ],
+      "matches": [
+        "https://*.slack.com/*"
+      ]
+    }
+  ]
+}
+

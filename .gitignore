@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Playwright / test artifacts
+test-results/
+playwright-report/
+.playwright-mcp/
+blob-report/
+.last-run.json
+
+# Local agent/dev tooling (not part of the shipped extension)
+.agents/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Packaged builds
+*.zip
+*.xpi
+web-ext-artifacts/

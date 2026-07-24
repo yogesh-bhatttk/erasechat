@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SlackClean Premium</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <header class="header">
+      <div class="logo-container">
+        <svg class="logo" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="logo-bubble" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#8B5CF6" />
+              <stop offset="100%" stop-color="#EC4899" />
+            </linearGradient>
+            <linearGradient id="logo-tile" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#1E1B3A" />
+              <stop offset="100%" stop-color="#0F172A" />
+            </linearGradient>
+            <radialGradient id="logo-glow" cx="50%" cy="42%" r="55%">
+              <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.45" />
+              <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0" />
+            </radialGradient>
+          </defs>
+          <rect width="512" height="512" rx="112" fill="url(#logo-tile)" />
+          <rect width="512" height="512" rx="112" fill="url(#logo-glow)" />
+          <g>
+            <rect x="86" y="104" width="340" height="232" rx="56" fill="url(#logo-bubble)" />
+            <path d="M150 300 L118 402 L236 322 Z" fill="url(#logo-bubble)" />
+          </g>
+          <g transform="rotate(34 256 232) translate(6 -6)">
+            <rect x="245" y="96" width="24" height="150" rx="12" fill="#F8FAFC" />
+            <rect x="234" y="240" width="46" height="26" rx="9" fill="#CBD5E1" />
+            <path d="M234 266 H280 L312 372 Q257 386 202 372 Z" fill="#F8FAFC" />
+            <g stroke="#94A3B8" stroke-width="7" stroke-linecap="round">
+              <line x1="245" y1="272" x2="233" y2="368" />
+              <line x1="257" y1="272" x2="257" y2="372" />
+              <line x1="269" y1="272" x2="281" y2="368" />
+            </g>
+          </g>
+          <path d="M368 150 l10 24 24 10 -24 10 -10 24 -10 -24 -24 -10 24 -10 Z" fill="#FFFFFF" />
+          <path d="M150 168 l7 16 16 7 -16 7 -7 16 -7 -16 -16 -7 16 -7 Z" fill="#F9A8D4" />
+          <circle cx="410" cy="330" r="12" fill="#F9A8D4" />
+          <circle cx="132" cy="392" r="9" fill="#FFFFFF" opacity="0.9" />
+        </svg>
+        <div class="brand">
+          <h1>SlackClean</h1>
+          <span class="badge" data-i18n="premiumBadge">PREMIUM</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <!-- State 1: Active on Slack tab -->
+      <div id="slack-active-state" class="state-container hidden">
+        <div class="status-card">
+          <div class="pulse-indicator"></div>
+          <p data-i18n="popupStatusDetected">Slack Web Client Detected</p>
+        </div>
+
+        <div class="workspace-info">
+          <p class="label" data-i18n="popupConnectedTo">Connected to Workspace</p>
+          <h2 id="workspace-name" data-i18n="popupWorkspaceLoading">Loading Workspace...</h2>
+          <p class="desc" data-i18n="popupCleanDesc">Clean messages in channels, private groups, and direct messages.</p>
+        </div>
+
+        <button id="btn-launch" class="btn btn-primary" data-i18n-aria="popupOpenDashboardAria" aria-label="Open Clean Dashboard modal overlay">
+          <span data-i18n="popupOpenDashboard">Open Clean Dashboard</span>
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+            <polyline points="12 5 19 12 12 19"></polyline>
+          </svg>
+        </button>
+      </div>
+
+      <!-- State 2: Not on Slack tab -->
+      <div id="slack-inactive-state" class="state-container">
+        <div class="status-card inactive">
+          <span class="warning-dot"></span>
+          <p data-i18n="popupStatusOffline">Slack Client Offline</p>
+        </div>
+
+        <div class="redirect-info">
+          <h3 data-i18n="popupOpenToBegin">Open Slack to Begin</h3>
+          <p data-i18n="popupOpenToBeginBody">To use SlackClean Premium, you must open Slack in your browser and log into your workspace.</p>
+        </div>
+
+        <button id="btn-goto-slack" class="btn btn-secondary" data-i18n-aria="popupGotoSlackAria" aria-label="Navigate to app.slack.com web client">
+          <span data-i18n="popupGotoSlack">Open app.slack.com</span>
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+        </button>
+      </div>
+    </main>
+
+    <!-- First-Run Onboarding (SC-UX-01) -->
+    <div id="onboarding-card" class="onboarding-card hidden">
+      <h3 data-i18n="onboardingTitle">👋 Welcome to SlackClean Premium!</h3>
+      <p data-i18n="onboardingIntro">Bulk delete your Slack messages with advanced filters, thread support, and safety controls.</p>
+      <ul>
+        <li data-i18n="onboardingBullet1">🔒 All processing happens locally in your browser</li>
+        <li data-i18n="onboardingBullet2">📋 Scan & preview messages before deleting</li>
+        <li data-i18n="onboardingBullet3">⏸️ Pause, resume, or cancel anytime</li>
+        <li data-i18n="onboardingBullet4">📥 Export messages as CSV backup</li>
+      </ul>
+      <p class="onboarding-privacy"><span data-i18n="onboardingPrivacy">This is an independent tool, not affiliated with or endorsed by Slack. It uses your existing Slack login session to delete messages on your behalf; deletions are permanent. No data is sent to external servers.</span> <a href="PRIVACY_POLICY.md" id="privacy-link" data-i18n="privacyPolicy">Privacy Policy</a></p>
+      <button id="btn-dismiss-onboarding" class="btn btn-primary" style="margin-top:8px; padding:8px 16px; font-size:12px;" data-i18n="onboardingDismiss">Got It — Let's Go!</button>
+    </div>
+
+    <footer class="footer">
+      <p><span data-i18n="footerLocalOnly">Local-Only Processing</span> • <a href="PRIVACY_POLICY.md" style="color:#8B5CF6; text-decoration:none;" data-i18n="privacyPolicy">Privacy Policy</a></p>
+    </footer>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

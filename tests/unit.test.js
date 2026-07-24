@@ -1,0 +1,390 @@
+// SlackClean Premium - Node.js Unit Test Suite
+// Runs with zero dependencies:  node --test tests/unit.test.js
+//
+// These tests import the ACTUAL production logic from shared-filters.js — the same
+// module the background service worker loads — so there is no risk of testing a fork.
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const {
+  isSafeRegex,
+  qualifies,
+  decideItemAction,
+  stringToColor,
+  isSlackHostname,
+  fileShareCount
+} = require('../shared-filters.js');
+
+// ============================================================
+// isSafeRegex — Comprehensive ReDoS Detection
+// ============================================================
+
+test('isSafeRegex: accepts safe simple patterns', () => {
+  assert.equal(isSafeRegex('hello'), true);
+  assert.equal(isSafeRegex('ERR_\\d+'), true);
+  assert.equal(isSafeRegex('[a-z]+'), true);
+  assert.equal(isSafeRegex('foo|bar'), true);
+  assert.equal(isSafeRegex('^start.*end$'), true);
+  assert.equal(isSafeRegex('\\b\\w+\\b'), true);
+});
+
+test('isSafeRegex: rejects consecutive quantifiers', () => {
+  assert.equal(isSafeRegex('a**'), false);
+  assert.equal(isSafeRegex('a++'), false);
+  assert.equal(isSafeRegex('a*+'), false);
+  assert.equal(isSafeRegex('a+?+'), false);
+  assert.equal(isSafeRegex('a??'), false);
+});
+
+test('isSafeRegex: rejects nested quantifiers in groups', () => {
+  assert.equal(isSafeRegex('(a+)+'), false);
+  assert.equal(isSafeRegex('(a*)+'), false);
+  assert.equal(isSafeRegex('(a+)*'), false);
+  assert.equal(isSafeRegex('(a*)*'), false);
+  assert.equal(isSafeRegex('(a+){2,}'), false);
+  assert.equal(isSafeRegex('(x+)?'), false);
+});
+
+test('isSafeRegex: rejects doubly-nested quantified groups', () => {
+  // Inner quantifier not adjacent to the outer group close — missed by the
+  // simple nested-quantifier rule, still catastrophic.
+  assert.equal(isSafeRegex('((a+))+'), false);
+  assert.equal(isSafeRegex('((a+)b)*'), false);
+  assert.equal(isSafeRegex('((a|b)+)+'), false);
+  // Benign nested groups WITHOUT an inner quantifier must still be accepted.
+  assert.equal(isSafeRegex('((a))'), true);
+  assert.equal(isSafeRegex('(ab)(cd)'), true);
+});
+
+test('isSafeRegex: rejects overlapping alternation in quantified groups', () => {
+  assert.equal(isSafeRegex('(a|a)+'), false);
+  assert.equal(isSafeRegex('(\\d|\\w)*'), false);
+  assert.equal(isSafeRegex('(x|y)+'), false);
+});
+
+test('isSafeRegex: rejects nested quantifiers with braces', () => {
+  assert.equal(isSafeRegex('(a{1,100}){1,100}'), false);
+  assert.equal(isSafeRegex('(a{2,})+'), false);
+  assert.equal(isSafeRegex('(a{1,10})*'), false);
+});
+
+test('isSafeRegex: rejects backreferences in quantified groups', () => {
+  assert.equal(isSafeRegex('(a\\1)+'), false);
+  assert.equal(isSafeRegex('(a)\\1'), true);
+});
+
+test('isSafeRegex: rejects patterns exceeding max length', () => {
+  assert.equal(isSafeRegex('a'.repeat(101)), false);
+  assert.equal(isSafeRegex('a'.repeat(100)), true);
+});
+
+test('isSafeRegex: accepts common safe patterns used in real filtering', () => {
+  assert.equal(isSafeRegex('error'), true);
+  assert.equal(isSafeRegex('\\d{4}-\\d{2}-\\d{2}'), true);
+  assert.equal(isSafeRegex('https?://'), true);
+  assert.equal(isSafeRegex('v\\d+\\.\\d+'), true);
+  assert.equal(isSafeRegex('[A-Z]{2,5}'), true);
+});
+
+test('isSafeRegex: rejects long quantifier chains that backtrack without grouping', () => {
+  // Exponential: a?a?a?…a?aaaa… — no parens and no adjacent quantifiers, so it
+  // slips past every structural rule, yet backtracks catastrophically.
+  assert.equal(isSafeRegex('a?'.repeat(30) + 'a'.repeat(20)), false);
+  // Polynomial: a*a*a*…b
+  assert.equal(isSafeRegex('a*'.repeat(20) + 'b'), false);
+  // A modest number of quantifiers is still accepted (escaped metachars, which
+  // are literals, are not counted).
+  assert.equal(isSafeRegex('\\d?\\d?\\d?-\\d+'), true);
+  assert.equal(isSafeRegex('a\\+b\\*c\\?d'), true);
+});
+
+// ============================================================
+// qualifies — Sender Mode Filtering
+// ============================================================
+
+const CURRENT_USER = 'U123456';
+
+test('qualifies: sender=me filters to current user only', () => {
+  const myMsg = { ts: '100.0', user: CURRENT_USER, text: 'Hello' };
+  const otherMsg = { ts: '101.0', user: 'U999999', text: 'Hi there' };
+
+  assert.equal(qualifies(myMsg, CURRENT_USER, 'me', '', false), true);
+  assert.equal(qualifies(otherMsg, CURRENT_USER, 'me', '', false), false);
+});
+
+test('qualifies: sender=all includes all users', () => {
+  const otherMsg = { ts: '101.0', user: 'U999999', text: 'Hi there' };
+  assert.equal(qualifies(otherMsg, CURRENT_USER, 'all', '', false), true);
+});
+
+// ============================================================
+// qualifies — Attachment Filtering
+// ============================================================
+
+test('qualifies: onlyAttachments=true rejects text-only messages', () => {
+  const textOnly = { ts: '100.0', user: CURRENT_USER, text: 'Just text' };
+  assert.equal(qualifies(textOnly, CURRENT_USER, 'all', '', true), false);
+});
+
+test('qualifies: onlyAttachments=true accepts messages with files', () => {
+  const withFile = { ts: '101.0', user: CURRENT_USER, text: 'File attached', files: [{ id: 'F123' }] };
+  assert.equal(qualifies(withFile, CURRENT_USER, 'all', '', true), true);
+});
+
+test('qualifies: onlyAttachments=true accepts messages with attachments', () => {
+  const withAttach = { ts: '102.0', user: CURRENT_USER, text: 'Link', attachments: [{ fallback: 'link' }] };
+  assert.equal(qualifies(withAttach, CURRENT_USER, 'all', '', true), true);
+});
+
+test('qualifies: onlyAttachments=false does not filter by files', () => {
+  const textOnly = { ts: '100.0', user: CURRENT_USER, text: 'Just text' };
+  assert.equal(qualifies(textOnly, CURRENT_USER, 'all', '', false), true);
+});
+
+// ============================================================
+// qualifies — Keyword Filtering
+// ============================================================
+
+test('qualifies: case-insensitive keyword matching', () => {
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'CONFIDENTIAL: Project Launch' };
+
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', 'confidential', false), true);
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', 'CONFIDENTIAL', false), true);
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', 'ConFiDeNtIaL', false), true);
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', 'secret', false), false);
+});
+
+test('qualifies: keyword searches file names and titles', () => {
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'Check this', files: [{ name: 'report.pdf', title: 'Q4 Report' }] };
+
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', 'report.pdf', false), true);
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', 'Q4 Report', false), true);
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', 'spreadsheet', false), false);
+});
+
+test('qualifies: empty text filter matches everything', () => {
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'Anything' };
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', '', false), true);
+});
+
+// ============================================================
+// qualifies — Regex Pattern Filtering
+// ============================================================
+
+test('qualifies: valid regex pattern matching', () => {
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'Error code: ERR_404_NOT_FOUND' };
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', '/ERR_\\d+/', false), true);
+});
+
+test('qualifies: regex that does not match returns false', () => {
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'All good here' };
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', '/ERR_\\d+/', false), false);
+});
+
+test('qualifies: invalid regex falls back to literal match', () => {
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'Something with [bad regex' };
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', '/[bad regex/', false), true);
+});
+
+test('qualifies: single-slash strings are NOT treated as regex', () => {
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'path/to/file' };
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', '/', false), true);
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', '/x', false), false);
+});
+
+// ============================================================
+// qualifies — ReDoS Protection
+// ============================================================
+
+test('qualifies: ReDoS patterns are blocked and execute quickly', () => {
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaa!' };
+
+  const dangerousPatterns = ['/(a+)+/', '/(a*)*/', '/(a+)*/', '/(a|a)+/'];
+
+  for (const pattern of dangerousPatterns) {
+    const startTime = Date.now();
+    qualifies(msg, CURRENT_USER, 'all', pattern, false);
+    const duration = Date.now() - startTime;
+    assert.ok(duration < 100, `Pattern ${pattern} took ${duration}ms — expected <100ms`);
+  }
+});
+
+test('qualifies: oversized regex pattern falls back to literal match', () => {
+  const longPattern = '/' + 'a'.repeat(101) + '/';
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'a'.repeat(101) };
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', longPattern, false), true);
+});
+
+test('qualifies: quantifier-chain ReDoS pattern is blocked and executes quickly', () => {
+  // Without the quantifier-count guard, this pattern hangs the regex engine on a
+  // run of "a"s. It must be rejected as unsafe and fall back to a literal match.
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'a'.repeat(40) + '!' };
+  const pattern = '/' + 'a?'.repeat(25) + 'a'.repeat(25) + '/'; // <=100 inner chars
+  const start = Date.now();
+  qualifies(msg, CURRENT_USER, 'all', pattern, false);
+  assert.ok(Date.now() - start < 100, 'quantifier-chain regex must not backtrack');
+});
+
+// ============================================================
+// qualifies — Subtype / Attachment interaction (regression for the
+// "Only Delete Attachments misses caption-less uploads" bug)
+// ============================================================
+
+test('qualifies: subtype + no text is filtered out in normal modes', () => {
+  const subtypeMsg = { ts: '100.0', user: CURRENT_USER, subtype: 'channel_join' };
+  assert.equal(qualifies(subtypeMsg, CURRENT_USER, 'all', '', false), false);
+});
+
+test('qualifies: subtype AND text are kept', () => {
+  const subtypeMsg = { ts: '100.0', user: CURRENT_USER, subtype: 'me_message', text: 'is away' };
+  assert.equal(qualifies(subtypeMsg, CURRENT_USER, 'all', '', false), true);
+});
+
+test('qualifies: caption-less file upload (subtype, no text) is kept in ALL modes', () => {
+  const upload = { ts: '100.0', user: CURRENT_USER, subtype: 'file_share', files: [{ id: 'F1' }] };
+  // A file the user uploaded is their own content, so it must be deletable
+  // whether or not "Only Delete Attachments" is on — a full clean should never
+  // silently leave bare uploads behind. Only true system messages (subtype, no
+  // text, AND no files/attachments) are dropped.
+  assert.equal(qualifies(upload, CURRENT_USER, 'all', '', true), true);
+  assert.equal(qualifies(upload, CURRENT_USER, 'all', '', false), true);
+});
+
+test('qualifies: messages with null/undefined text are handled', () => {
+  assert.equal(qualifies({ ts: '100.0', user: CURRENT_USER, text: null }, CURRENT_USER, 'all', '', false), true);
+  assert.equal(qualifies({ ts: '100.0', user: CURRENT_USER }, CURRENT_USER, 'all', '', false), true);
+});
+
+test('qualifies: empty files array', () => {
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'Hello', files: [] };
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', '', true), false);
+  assert.equal(qualifies(msg, CURRENT_USER, 'all', '', false), true);
+});
+
+test('qualifies: combined filters — sender + keyword + attachments', () => {
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'Report data', files: [{ id: 'F1', name: 'data.csv' }] };
+  assert.equal(qualifies(msg, CURRENT_USER, 'me', 'report', true), true);
+  assert.equal(qualifies(msg, 'U_OTHER', 'me', 'report', true), false);
+  assert.equal(qualifies(msg, CURRENT_USER, 'me', 'budget', true), false);
+});
+
+// ============================================================
+// decideItemAction — trim (preserve text) vs full delete
+// (regression coverage for the attachment-mode data-loss fix)
+// ============================================================
+
+test('decideItemAction: not cleaning attachments -> always delete', () => {
+  assert.equal(decideItemAction({ text: 'hi', files: [{ id: 'F1' }] }, false), 'delete');
+  assert.equal(decideItemAction({ text: 'hi' }, false), 'delete');
+});
+
+test('decideItemAction: attachment mode + files + text -> trim (keep text)', () => {
+  assert.equal(decideItemAction({ text: 'caption', files: [{ id: 'F1' }] }, true), 'trim');
+});
+
+test('decideItemAction: attachment mode + attachments-only + text -> trim', () => {
+  // Link-unfurl style attachments (no file IDs) must still be trimmable.
+  assert.equal(decideItemAction({ text: 'see link', hasAttachments: true }, true), 'trim');
+  assert.equal(decideItemAction({ text: 'see link', attachments: [{ fallback: 'x' }] }, true), 'trim');
+});
+
+test('decideItemAction: attachment mode + files but NO text -> delete', () => {
+  // Nothing to preserve, so the whole message goes.
+  assert.equal(decideItemAction({ files: [{ id: 'F1' }] }, true), 'delete');
+  assert.equal(decideItemAction({ text: '   ', files: [{ id: 'F1' }] }, true), 'delete');
+});
+
+test('decideItemAction: attachment mode + no attachments/files -> skip (never delete)', () => {
+  // In "Only Delete Attachments" mode a message with nothing to clean must be
+  // skipped, not destroyed — e.g. when the toggle is turned on after a broad scan.
+  assert.equal(decideItemAction({ text: 'plain' }, true), 'skip');
+  assert.equal(decideItemAction({ text: 'plain', files: [] }, true), 'skip');
+  assert.equal(decideItemAction({ files: [] }, true), 'skip');
+});
+
+// ============================================================
+// fileShareCount — global-file-deletion safety gate
+// ============================================================
+// files.delete purges a file from EVERY conversation it was shared into. The queue
+// engine hard-deletes a file only when it lives in exactly one place; this helper
+// is how it counts shares from a files.info `file` object.
+
+test('fileShareCount: no shares field -> 0 (nothing to collaterally lose)', () => {
+  assert.equal(fileShareCount({}), 0);
+  assert.equal(fileShareCount({ shares: {} }), 0);
+  assert.equal(fileShareCount(null), 0);
+  assert.equal(fileShareCount(undefined), 0);
+});
+
+test('fileShareCount: single share in one channel -> 1 (safe to hard-delete)', () => {
+  const file = { shares: { public: { C1: [{ ts: '1.1' }] } } };
+  assert.equal(fileShareCount(file), 1);
+});
+
+test('fileShareCount: shared in multiple channels -> counts every share', () => {
+  // Shared in two public channels and one private channel = 3 places.
+  const file = {
+    shares: {
+      public: { C1: [{ ts: '1.1' }], C2: [{ ts: '2.1' }] },
+      private: { G9: [{ ts: '9.1' }] }
+    }
+  };
+  assert.equal(fileShareCount(file), 3);
+  assert.ok(fileShareCount(file) > 1, 'must be flagged as shared-elsewhere');
+});
+
+test('fileShareCount: same file posted twice in ONE channel -> 2 (still shared)', () => {
+  const file = { shares: { public: { C1: [{ ts: '1.1' }, { ts: '1.2' }] } } };
+  assert.equal(fileShareCount(file), 2);
+});
+
+test('fileShareCount: tolerates malformed/empty share arrays', () => {
+  const file = { shares: { public: { C1: [] }, private: { G1: null } } };
+  assert.equal(fileShareCount(file), 0);
+});
+
+// ============================================================
+// stringToColor — Deterministic Color Assignment
+// ============================================================
+
+test('stringToColor: returns default color for null/empty input', () => {
+  assert.equal(stringToColor(null), "#8B5CF6");
+  assert.equal(stringToColor(""), "#8B5CF6");
+  assert.equal(stringToColor(undefined), "#8B5CF6");
+});
+
+test('stringToColor: returns consistent color for same input', () => {
+  assert.equal(stringToColor("U123456"), stringToColor("U123456"));
+});
+
+test('stringToColor: returns a color from the predefined palette', () => {
+  const palette = [
+    "#8B5CF6", "#EC4899", "#3B82F6", "#10B981", "#F59E0B",
+    "#EF4444", "#06B6D4", "#14B8A6", "#84CC16", "#A855F7"
+  ];
+  assert.ok(palette.includes(stringToColor("TestUser123")));
+});
+
+// ============================================================
+// isSlackHostname — Origin validation (verifies the SECURE behavior,
+// i.e. exact-hostname matching that rejects subdomain spoofing)
+// ============================================================
+
+test('isSlackHostname: accepts any genuine slack.com subdomain over HTTPS', () => {
+  assert.equal(isSlackHostname("https://app.slack.com/client/T1234/C5678"), true);
+  assert.equal(isSlackHostname("https://app.slack.com/"), true);
+  assert.equal(isSlackHostname("https://sackmate.slack.com/"), true);   // workspace subdomain
+  assert.equal(isSlackHostname("https://fake-app.slack.com/"), true);   // still a slack-controlled subdomain
+});
+
+test('isSlackHostname: rejects spoofed, wrong-scheme, and unrelated origins', () => {
+  assert.equal(isSlackHostname("https://app.slack.com.attacker.com/"), false); // suffix spoof
+  assert.equal(isSlackHostname("https://slack.com.evil.com/"), false);
+  assert.equal(isSlackHostname("https://evilslack.com/"), false);             // no dot before slack.com
+  assert.equal(isSlackHostname("https://evil.com/app.slack.com"), false);
+  assert.equal(isSlackHostname("http://app.slack.com/"), false);              // not HTTPS
+  assert.equal(isSlackHostname("https://slack.com/"), false);                 // bare domain (client is on a subdomain)
+  assert.equal(isSlackHostname("not a url"), false);
+  assert.equal(isSlackHostname(""), false);
+});

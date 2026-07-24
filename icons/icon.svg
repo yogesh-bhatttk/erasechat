@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bubble" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8B5CF6" />
+      <stop offset="100%" stop-color="#EC4899" />
+    </linearGradient>
+    <linearGradient id="tile" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E1B3A" />
+      <stop offset="100%" stop-color="#0F172A" />
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="42%" r="55%">
+      <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.45" />
+      <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <!-- Tile -->
+  <rect width="512" height="512" rx="112" fill="url(#tile)" />
+  <rect width="512" height="512" rx="112" fill="url(#glow)" />
+
+  <!-- Speech bubble (solid gradient, readable at small sizes) -->
+  <g>
+    <rect x="86" y="104" width="340" height="232" rx="56" fill="url(#bubble)" />
+    <path d="M150 300 L118 402 L236 322 Z" fill="url(#bubble)" />
+  </g>
+
+  <!-- Broom sweeping across the bubble -->
+  <g transform="rotate(34 256 232) translate(6 -6)">
+    <!-- handle -->
+    <rect x="245" y="96" width="24" height="150" rx="12" fill="#F8FAFC" />
+    <!-- binding -->
+    <rect x="234" y="240" width="46" height="26" rx="9" fill="#CBD5E1" />
+    <!-- bristle fan -->
+    <path d="M234 266 H280 L312 372 Q257 386 202 372 Z" fill="#F8FAFC" />
+    <!-- bristle separators -->
+    <g stroke="#94A3B8" stroke-width="7" stroke-linecap="round">
+      <line x1="245" y1="272" x2="233" y2="368" />
+      <line x1="257" y1="272" x2="257" y2="372" />
+      <line x1="269" y1="272" x2="281" y2="368" />
+    </g>
+  </g>
+
+  <!-- Sparkles (the 'clean' cue) -->
+  <g fill="#FFFFFF">
+    <path d="M368 150 l10 24 24 10 -24 10 -10 24 -10 -24 -24 -10 24 -10 Z" />
+  </g>
+  <g fill="#F9A8D4">
+    <path d="M150 168 l7 16 16 7 -16 7 -7 16 -7 -16 -16 -7 16 -7 Z" />
+  </g>
+  <circle cx="410" cy="330" r="12" fill="#F9A8D4" />
+  <circle cx="132" cy="392" r="9" fill="#FFFFFF" opacity="0.9" />
+</svg>
