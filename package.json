@@ -1,12 +1,15 @@
 {
-  "name": "slackclean-premium",
+  "name": "bulk-clean-for-slack",
   "version": "1.0.0",
   "private": true,
   "description": "Bulk delete and clean your Slack messages with advanced filters, threads, and safety controls.",
+  "author": "Yogesh Bhatt <yogeshb@prosperix.com>",
+  "license": "MIT",
   "scripts": {
     "test": "node --test tests/unit.test.js",
     "test:unit": "node --test tests/unit.test.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build": "bash scripts/build.sh"
   },
   "devDependencies": {
     "@playwright/test": "^1.44.0"
