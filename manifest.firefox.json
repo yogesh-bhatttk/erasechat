@@ -4,6 +4,15 @@
   "version": "1.0.0",
   "default_locale": "en",
   "description": "__MSG_extensionDescription__",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{a1b2c3d4-e5f6-7890-abcd-ef1234567890}",
+      "strict_min_version": "115.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
   "permissions": [
     "storage",
     "scripting",
@@ -16,9 +25,11 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'"
   },
-  "minimum_chrome_version": "109",
   "background": {
-    "service_worker": "background.js"
+    "scripts": [
+      "shared-filters.js",
+      "background.js"
+    ]
   },
   "icons": {
     "16": "icons/icon16.png",
@@ -68,4 +79,3 @@
     }
   ]
 }
-
