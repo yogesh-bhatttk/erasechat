@@ -1,4 +1,4 @@
-// SlackClean Premium - Content Script Logic Engine (Fortified Production Edition)
+// Bulk Clean for Slack - Content Script Logic Engine (Fortified Production Edition)
 if (!window.slackCleanInitialized) {
   window.slackCleanInitialized = true;
 
@@ -19,6 +19,15 @@ if (!window.slackCleanInitialized) {
     // navigated to another conversation — so we pin the queue to its origin channel
     // and refuse to dispatch it against a different one (drift/data-loss guard).
     let queueChannelId = null;
+    // The channel a scan's results actually belong to (the channel the scan RAN in),
+    // and the channel the dashboard currently intends to target. `activeChannel` is
+    // only reassigned AFTER an await in loadActiveChannel, so during a channel switch
+    // it lags; `intendedChannelId` flips synchronously the instant a switch starts.
+    // Together they close the race where a scan started in channel A finishes just as
+    // the user switches to channel B: the stale results are discarded (they don't
+    // match the intended target) instead of being shown/armed against B.
+    let scanResultsChannelId = null;
+    let intendedChannelId = null;
     // Guards the one-time "Bulk Clean Finished" completion alert against a
     // redundant final JOB_UPDATE re-firing it. Reset when a new job starts.
     let jobFinalized = false;
@@ -38,7 +47,13 @@ if (!window.slackCleanInitialized) {
     const URL_POLL_INTERVAL_MS = 1000;
     const MIN_THROTTLE_DELAY_MS = 1000;
     const LARGE_DELETE_THRESHOLD = 100;
-    const CIRCLE_CIRCUMFERENCE = 251.2;
+    // Circumference of the progress ring (r=40): 2πr. Exact value (was hardcoded 251.2).
+    const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * 40;
+    // Client-side safety net for a scan whose background response never arrives (e.g.
+    // the service worker is suspended mid-scan). Without it the scan button and inputs
+    // stay disabled on "Scanning..." forever. Generous, since a throttled scan is slow;
+    // an abandoned scan is read-only, so a false timeout just means the user re-scans.
+    const SCAN_TIMEOUT_MS = 120000;
     // users.list is Slack Tier 2 (~20 req/min). 5 pages × 1000 = up to 5,000
     // member names cached at init — a balance between coverage and startup latency.
     const MAX_USER_CACHE_PAGES = 5;
@@ -215,8 +230,17 @@ if (!window.slackCleanInitialized) {
           if (legacyMatch) channelSeg = legacyMatch[1];
         }
 
+        // Resolve the workspace. If the URL names a team we have NO credentials for
+        // (stale link, removed from workspace, cache skew), do NOT silently fall back
+        // to a different workspace — that would issue scans/deletes with the wrong
+        // team's token. Refuse instead (caller shows "not connected"). Only a URL with
+        // no team segment at all (legacy /messages/ routes) falls back to the sole/first
+        // workspace, which is the correct behavior there.
         let activeTeamId = teamSeg;
-        if (!activeTeamId || !teams[activeTeamId]) {
+        if (activeTeamId && !teams[activeTeamId]) {
+          return null;
+        }
+        if (!activeTeamId) {
           activeTeamId = Object.keys(teams)[0];
         }
 
@@ -372,6 +396,9 @@ if (!window.slackCleanInitialized) {
 
     // Fetch metadata of the active target conversation
     async function loadActiveChannel(channelId) {
+      // Record the intended target SYNCHRONOUSLY (before the await below reassigns
+      // activeChannel), so a scan callback that lands mid-load can tell it's stale.
+      intendedChannelId = channelId;
       logConsole(`Fetching details for active channel ID: ${channelId}...`, "info");
       
       const domName = getChannelNameFromDOM();
@@ -428,6 +455,7 @@ if (!window.slackCleanInitialized) {
       // the previous target and must never be executed against the new one.
       deleteQueue = [];
       queueChannelId = null;
+      scanResultsChannelId = null;
       const container = shadowRoot.getElementById("sc-results-list");
       if (container) {
         const nm = document.createElement("div");
@@ -447,6 +475,9 @@ if (!window.slackCleanInitialized) {
     // Returns loadActiveChannel's promise so callers can act only AFTER
     // activeChannel is actually updated (it's assigned past an await).
     function switchTargetChannel(channelId) {
+      // A new target means any prior completion is no longer "the current job" — reset
+      // the finalize guard so a completion broadcast for this new target isn't swallowed.
+      jobFinalized = false;
       resetScanResultsUI();
       return loadActiveChannel(channelId);
     }
@@ -460,6 +491,8 @@ if (!window.slackCleanInitialized) {
     // job stays pinned to its origin team; see handleUrlChange). Returns a promise
     // that settles once the new workspace's target conversation is loaded.
     function switchWorkspace(info) {
+      // New workspace target — clear the finalize guard (see switchTargetChannel).
+      jobFinalized = false;
       activeTeam = info.team;
 
       // Refresh the background token cache for the newly-active workspace.
@@ -598,8 +631,8 @@ if (!window.slackCleanInitialized) {
                   <path d="M300 120 L340 160" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round" />
                 </svg>
                 <div class="brand-title">
-                  <h2>SlackClean</h2>
-                  <span class="premium-badge" data-i18n="premiumBadge">PREMIUM</span>
+                  <h2>Bulk Clean</h2>
+                  <span class="premium-badge" data-i18n="brandTag">for Slack</span>
                 </div>
               </div>
               <div class="header-right">
@@ -761,7 +794,7 @@ if (!window.slackCleanInitialized) {
                     <div class="progress-ring-wrapper sc-ring-80">
                       <svg width="80" height="80" viewBox="0 0 100 100" class="sc-progress-svg">
                         <circle cx="50" cy="50" r="40" stroke="rgba(255,255,255,0.05)" stroke-width="8" fill="transparent" />
-                        <circle id="sc-progress-circle" cx="50" cy="50" r="40" stroke="url(#logo-glow-injected)" stroke-width="8" fill="transparent" stroke-dasharray="251.2" stroke-dashoffset="251.2" stroke-linecap="round" />
+                        <circle id="sc-progress-circle" cx="50" cy="50" r="40" stroke="url(#logo-glow-injected)" stroke-width="8" fill="transparent" stroke-dasharray="251.33" stroke-dashoffset="251.33" stroke-linecap="round" />
                       </svg>
                       <div id="sc-progress-ring-text">0%</div>
                     </div>
@@ -797,7 +830,7 @@ if (!window.slackCleanInitialized) {
                       </div>
                     </div>
                     <div class="console-terminal" id="sc-console-log" aria-live="polite" role="log">
-                      <div class="console-line info">SlackClean Premium initialized in Safe (Single-Channel) Mode.</div>
+                      <div class="console-line info">Bulk Clean for Slack initialized in Safe (Single-Channel) Mode.</div>
                     </div>
                   </div>
                 </div>
@@ -811,11 +844,11 @@ if (!window.slackCleanInitialized) {
               <div class="minimized-ring-wrapper">
                 <svg width="36" height="36" viewBox="0 0 100 100">
                   <circle cx="50" cy="50" r="40" stroke="rgba(255,255,255,0.05)" stroke-width="8" fill="transparent" />
-                  <circle id="sc-min-progress-circle" cx="50" cy="50" r="40" stroke="url(#logo-glow-injected)" stroke-width="8" fill="transparent" stroke-dasharray="251.2" stroke-dashoffset="251.2" stroke-linecap="round" />
+                  <circle id="sc-min-progress-circle" cx="50" cy="50" r="40" stroke="url(#logo-glow-injected)" stroke-width="8" fill="transparent" stroke-dasharray="251.33" stroke-dashoffset="251.33" stroke-linecap="round" />
                 </svg>
               </div>
               <div class="minimized-info">
-                <h5 id="sc-min-status-title">SlackClean</h5>
+                <h5 id="sc-min-status-title">Bulk Clean</h5>
                 <span id="sc-min-status-text">Idle</span>
               </div>
               <button class="btn-maximize" id="sc-btn-maximize" data-i18n-title="dashMaximize" title="Expand Dashboard" data-i18n-aria="dashMaximize" aria-label="Expand dashboard overlay">
@@ -1018,7 +1051,10 @@ if (!window.slackCleanInitialized) {
             throttleDelay = state.throttleDelay || 1000;
 
             if (isRunning && !isPaused) {
-              // Active job running: sync UI directly without prompting
+              // Active job running: sync UI directly without prompting. Clear the
+              // finalize guard so THIS job's completion broadcast still fires the
+              // "finished" alert even if a previous job on this tab already finalized.
+              jobFinalized = false;
               toggleInputs(true);
               updateProgressUI();
               syncButtonStates();
@@ -1247,6 +1283,16 @@ if (!window.slackCleanInitialized) {
                   teamId: activeTeam.id,
                   channelId: activeChannel.id
                 }, () => {
+                  if (chrome.runtime.lastError) {
+                    // The cancel didn't reach the worker — the job may STILL be running.
+                    // Don't claim it stopped or hide the dashboard; tell the user to retry.
+                    logConsole("Could not reach the background worker to stop the job. It may still be running — reload Slack and try again.", "error");
+                    showCustomAlert(
+                      "Could Not Stop",
+                      "The stop request didn't reach the background worker, so the clean may still be running. Reload the Slack page and try again."
+                    );
+                    return;
+                  }
                   stopOperations();
                   hideDashboard();
                 });
@@ -1309,6 +1355,17 @@ if (!window.slackCleanInitialized) {
                 teamId: activeTeam.id,
                 channelId: activeChannel.id
               }, () => {
+                if (chrome.runtime.lastError) {
+                  // Cancel didn't reach the worker — the job may still be deleting.
+                  // Keep the running UI so the user can retry rather than being told
+                  // it stopped when it may not have.
+                  logConsole("Could not reach the background worker to cancel. The job may still be running — reload Slack and try again.", "error");
+                  showCustomAlert(
+                    "Could Not Cancel",
+                    "The cancel request didn't reach the background worker, so the clean may still be running. Reload the Slack page and try again."
+                  );
+                  return;
+                }
                 logConsole("Bulk deletion canceled by user.", "warn");
                 stopOperations("Canceled");
               });
@@ -1350,7 +1407,7 @@ if (!window.slackCleanInitialized) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `slackclean_log_${activeChannel ? activeChannel.name : "export"}_${Date.now()}.txt`;
+        a.download = `bulkclean_log_${activeChannel ? activeChannel.name : "export"}_${Date.now()}.txt`;
         a.click();
         URL.revokeObjectURL(url);
       });
@@ -1380,7 +1437,7 @@ if (!window.slackCleanInitialized) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `slackclean_messages_${activeChannel ? activeChannel.name : "export"}_${Date.now()}.csv`;
+        a.download = `bulkclean_messages_${activeChannel ? activeChannel.name : "export"}_${Date.now()}.csv`;
         a.click();
         URL.revokeObjectURL(url);
 
@@ -1545,6 +1602,25 @@ if (!window.slackCleanInitialized) {
       scanResults = [];
       logConsole("Querying Slack APIs in background...", "info");
 
+      // Guard the scan against a response that never arrives (SW suspended mid-scan).
+      // `scanSettled` ensures the timeout and the real callback don't both run.
+      let scanSettled = false;
+      const restoreScanUI = () => {
+        scanBtn.disabled = false;
+        scanBtn.innerText = t("dashScan", "Scan Messages");
+        toggleInputs(false);
+      };
+      const scanTimeout = setTimeout(() => {
+        if (scanSettled) return;
+        scanSettled = true;
+        restoreScanUI();
+        logConsole("Scan timed out — the background worker did not respond (it may have been suspended). Please try again.", "error");
+        showCustomAlert(
+          "Scan Timed Out",
+          "The scan didn't complete in time — the background service worker may have been suspended. Please run the scan again."
+        );
+      }, SCAN_TIMEOUT_MS);
+
       chrome.runtime.sendMessage({
         type: "RUN_SCAN",
         teamId: activeTeam.id,
@@ -1557,23 +1633,35 @@ if (!window.slackCleanInitialized) {
         onlyAttachments,
         userId: activeTeam.userId
       }, (response) => {
-        scanBtn.disabled = false;
-        scanBtn.innerText = t("dashScan", "Scan Messages");
-        toggleInputs(false);
-        
+        // The timeout may have already restored the UI and given up on this scan.
+        if (scanSettled) return;
+        scanSettled = true;
+        clearTimeout(scanTimeout);
+        restoreScanUI();
+
         if (chrome.runtime.lastError) {
           logConsole(`Scan API call failed: ${chrome.runtime.lastError.message}`, "error");
           return;
         }
 
-        // Channel Race Protection: verify channel hasn't changed during scan
-        if (activeChannel && activeChannel.id !== targetChannelId) {
+        // Channel Race Protection: discard stale results if the user navigated away
+        // during the scan. Check BOTH activeChannel AND intendedChannelId — activeChannel
+        // is reassigned only after an await in loadActiveChannel, so during a switch it
+        // still holds the OLD channel and would wrongly pass this guard; intendedChannelId
+        // flips synchronously the instant the switch is detected, closing that race
+        // (a scan started in A finishing while switching to B is now correctly dropped).
+        if ((activeChannel && activeChannel.id !== targetChannelId) ||
+            (intendedChannelId && intendedChannelId !== targetChannelId)) {
           logConsole("Channel changed during active scan. Discarding stale scan results.", "warn");
           return;
         }
 
         if (response && response.ok) {
           scanResults = response.results || [];
+          // Tag the results with the channel they were scanned in, so the delete path
+          // can refuse to dispatch them against a different target (belt-and-suspenders
+          // alongside the guard above and the queue's queueChannelId pin).
+          scanResultsChannelId = targetChannelId;
           // Two distinct truncation reasons — surface both honestly:
           //  - capped:        hit the 5,000 matched-results ceiling
           //  - moreAvailable: hit the page-scan limit while older messages remained
@@ -1851,10 +1939,15 @@ if (!window.slackCleanInitialized) {
 
     // Start queue execution delegated to background
     function startDeletionProcess() {
-      // Drift guard: the queue was built and confirmed for `queueChannelId`. If the
-      // active conversation changed while the confirmation modal was open, abort —
-      // never dispatch one channel's queue against another (see resetScanResultsUI).
-      if (!activeChannel || !queueChannelId || activeChannel.id !== queueChannelId) {
+      // Drift guard: the queue was built and confirmed for `queueChannelId`, and its
+      // items came from a scan of `scanResultsChannelId`. Abort unless BOTH still match
+      // the currently-active conversation — this catches (a) a channel switch while the
+      // confirmation modal was open (queueChannelId mismatch) and (b) a scan that ran
+      // in a different channel than the one now targeted (scanResultsChannelId mismatch,
+      // the async-lag race). Never dispatch one channel's queue against another.
+      if (!activeChannel || !queueChannelId ||
+          activeChannel.id !== queueChannelId ||
+          scanResultsChannelId !== activeChannel.id) {
         logConsole("Target conversation changed before deletion started — operation aborted for safety. Re-scan the current channel.", "error");
         showCustomAlert(
           "Deletion Aborted",
@@ -1979,7 +2072,7 @@ if (!window.slackCleanInitialized) {
       const minProgressText = shadowRoot.getElementById("sc-min-status-text");
       if (minProgressText) minProgressText.innerText = t("dashIdle", "Idle");
       const minTitle = shadowRoot.getElementById("sc-min-status-title");
-      if (minTitle) minTitle.innerText = "SlackClean";
+      if (minTitle) minTitle.innerText = "Bulk Clean";
     }
 
     // Input toggles during deletes
