@@ -1,4 +1,4 @@
-# SlackClean Premium — Store Listing Copy
+# Bulk Clean for Slack — Store Listing Copy
 
 Ready-to-paste copy for the Chrome Web Store and Firefox Add-ons (AMO). Character
 limits are noted next to each field. All claims below match the extension's actual
@@ -7,7 +7,7 @@ behavior (see `PRIVACY_POLICY.md` and `CHANGELOG.md`).
 ---
 
 ## Name
-`SlackClean Premium`
+`Bulk Clean for Slack`
 
 ## Category
 Productivity / Workflow & Planning
@@ -33,9 +33,9 @@ _Chrome: max 132 chars · Firefox summary: max 250 chars_
 ## Detailed description
 _Chrome: max 16,000 chars_
 
-**Tired of scrolling back years to clean up your Slack? SlackClean Premium clears your own messages in bulk — with the filters and safety controls to do it right.**
+**Tired of scrolling back years to clean up your Slack? Bulk Clean for Slack clears your own messages in bulk — with the filters and safety controls to do it right.**
 
-SlackClean Premium adds a powerful cleanup dashboard to the Slack web app. Open any channel, private group, or direct message, pick your filters, preview exactly what will be removed, and delete in bulk — all from your browser.
+Bulk Clean for Slack adds a powerful cleanup dashboard to the Slack web app. Open any channel, private group, or direct message, pick your filters, preview exactly what will be removed, and delete in bulk — all from your browser.
 
 **🎯 Precise filters**
 - Target **your own messages** in the current conversation
@@ -67,7 +67,7 @@ SlackClean Premium adds a powerful cleanup dashboard to the Slack web app. Open 
 
 ---
 
-**Please note:** SlackClean Premium is an **independent tool and is not affiliated with, endorsed by, or sponsored by Slack**. It acts on your behalf using your existing Slack session. **Deletions are permanent and cannot be undone** — always preview (and export a backup) before you delete. Deleting messages you don't have permission to remove may be restricted by your workspace.
+**Please note:** Bulk Clean for Slack is an **independent tool and is not affiliated with, endorsed by, or sponsored by Slack**. It acts on your behalf using your existing Slack session. **Deletions are permanent and cannot be undone** — always preview (and export a backup) before you delete. Deleting messages you don't have permission to remove may be restricted by your workspace.
 
 ---
 
@@ -85,7 +85,7 @@ _Order matches `store-assets/screenshots/`._
 ## Single-purpose description
 _Required by the Chrome Web Store._
 
-> SlackClean Premium has a single purpose: to help users bulk-delete and clean their own messages in the Slack web client (app.slack.com and workspace subdomains). Everything the extension does — scanning conversations, previewing matches, and deleting messages — serves that one purpose.
+> Bulk Clean for Slack has a single purpose: to help users bulk-delete and clean their own messages in the Slack web client (app.slack.com and workspace subdomains). Everything the extension does — scanning conversations, previewing matches, and deleting messages — serves that one purpose.
 
 ---
 
@@ -106,6 +106,44 @@ _Required by the Chrome Web Store. Keep concise and factual._
 
 ---
 
-## Packaging reminder
-Exclude from the store ZIP: `tests/`, `package.json`, `playwright.config.js`,
-`CHANGELOG.md`, `store-assets/`, and `.agents/`.
+## Chrome Web Store — Data use disclosures
+_Answers for the "Privacy practices" tab. All true for this extension._
+
+**Single purpose** — see the "Single-purpose description" section above.
+
+**Data collected / used** — check only what applies; do **not** check any category that
+implies transmission to the developer:
+- The extension **does not collect or transmit any user data** to the developer or any
+  third party. All processing is local; the only network calls go directly to Slack's
+  API at the user's direction.
+- If the dashboard forces a category selection, the honest mapping is: the extension
+  *handles* "Website content" (your Slack messages) **only locally, to delete them** —
+  it is never sent anywhere except Slack's own API.
+
+**Required certifications** (all can be checked "yes"):
+- I do **not** sell or transfer user data to third parties (outside approved use cases).
+- I do **not** use or transfer user data for purposes unrelated to the item's single purpose.
+- I do **not** use or transfer user data to determine creditworthiness or for lending.
+
+**Remote code:** No — all code is bundled in the package; nothing is fetched or `eval`'d.
+
+**Privacy policy URL:** _(host `PRIVACY_POLICY.md` / `privacy.html` at a public HTTPS URL
+and paste it here — required.)_
+
+**Permission justifications:** see the section above (paste verbatim).
+
+## Firefox / AMO notes
+- Submit the **Firefox** zip (built from `manifest.firefox.json`). The listing's data
+  practices mirror the above; the manifest already declares
+  `data_collection_permissions: { required: ["none"] }`.
+- Source is unminified and readable, so no separate source-code upload is required.
+
+## Packaging
+Run `npm run build` to produce the two store-ready zips in `dist/`:
+- `bulk-clean-for-slack-chrome-<version>.zip` (uses `manifest.json`)
+- `bulk-clean-for-slack-firefox-<version>.zip` (uses `manifest.firefox.json`)
+
+The build script ships only runtime files (+ `privacy.html`, `LICENSE`) and excludes
+`tests/`, `package.json`, `playwright.config.js`, `CHANGELOG.md`, `store-assets/`,
+`.agents/`, and the non-target manifest. See `scripts/build.sh` and
+`store-assets/SUBMISSION_CHECKLIST.md`.

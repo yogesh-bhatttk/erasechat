@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E1B3A" />
+      <stop offset="100%" stop-color="#0F172A" />
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="24%" cy="42%" r="60%">
+      <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.30" />
+      <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="wordAccent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#A78BFA" />
+      <stop offset="100%" stop-color="#F472B6" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="440" height="280" fill="url(#bg)" />
+  <rect width="440" height="280" fill="url(#bgGlow)" />
+
+  <!-- Logo mark (reused from icons/icon.svg), scaled into a 112x112 box -->
+  <svg x="24" y="84" width="112" height="112" viewBox="0 0 512 512">
+    <defs>
+      <linearGradient id="bubble" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#8B5CF6" />
+        <stop offset="100%" stop-color="#EC4899" />
+      </linearGradient>
+      <linearGradient id="tile" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#241F47" />
+        <stop offset="100%" stop-color="#12172B" />
+      </linearGradient>
+    </defs>
+    <rect width="512" height="512" rx="112" fill="url(#tile)" />
+    <g>
+      <rect x="86" y="104" width="340" height="232" rx="56" fill="url(#bubble)" />
+      <path d="M150 300 L118 402 L236 322 Z" fill="url(#bubble)" />
+    </g>
+    <g transform="rotate(34 256 232) translate(6 -6)">
+      <rect x="245" y="96" width="24" height="150" rx="12" fill="#F8FAFC" />
+      <rect x="234" y="240" width="46" height="26" rx="9" fill="#CBD5E1" />
+      <path d="M234 266 H280 L312 372 Q257 386 202 372 Z" fill="#F8FAFC" />
+      <g stroke="#94A3B8" stroke-width="7" stroke-linecap="round">
+        <line x1="245" y1="272" x2="233" y2="368" />
+        <line x1="257" y1="272" x2="257" y2="372" />
+        <line x1="269" y1="272" x2="281" y2="368" />
+      </g>
+    </g>
+    <g fill="#FFFFFF"><path d="M368 150 l10 24 24 10 -24 10 -10 24 -10 -24 -24 -10 24 -10 Z" /></g>
+    <g fill="#F9A8D4"><path d="M150 168 l7 16 16 7 -16 7 -7 16 -7 -16 -16 -7 16 -7 Z" /></g>
+    <circle cx="410" cy="330" r="12" fill="#F9A8D4" />
+    <circle cx="132" cy="392" r="9" fill="#FFFFFF" opacity="0.9" />
+  </svg>
+
+  <!-- Wordmark -->
+  <g font-family="'DejaVu Sans','Liberation Sans','Helvetica Neue',Arial,sans-serif">
+    <text x="152" y="118" font-size="33" font-weight="700" fill="#F8FAFC">Bulk Clean</text>
+    <text x="152" y="157" font-size="33" font-weight="700" fill="url(#wordAccent)">for Slack</text>
+    <text x="153" y="190" font-size="13" font-weight="400" fill="#94A3B8">Delete your messages in bulk — safely.</text>
+    <text x="153" y="215" font-size="11.5" font-weight="600" fill="#8B5CF6" letter-spacing="1.3">SCAN · PREVIEW · DELETE</text>
+  </g>
+</svg>
