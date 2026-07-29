@@ -1,9 +1,13 @@
-// SlackClean Premium - Background Service Worker
+// Bulk Clean for Slack - Background Service Worker
 
 // Load shared filtering/safety logic (single source of truth).
-// Chrome MV3 service worker: importScripts is available.
-// Firefox MV3 event page: shared-filters.js is loaded first via background.scripts,
-// so importScripts is unavailable here and must be skipped.
+// Chrome/Chromium MV3 (manifest.json): the background is a service worker, where
+// importScripts IS available, so we load shared-filters.js here.
+// Firefox MV3 (manifest.firefox.json): the background is an event page declared as
+// `background.scripts: ["shared-filters.js", "background.js"]`, so shared-filters.js
+// is already loaded before this file runs and importScripts is undefined — the guard
+// below skips it. Chromium MV3 rejects `background.scripts`, which is why the two
+// browsers ship different manifests (see the packaging note in CHANGELOG.md).
 if (typeof importScripts === "function") {
   importScripts("shared-filters.js");
 }
@@ -29,6 +33,9 @@ const MAX_RATELIMIT_RETRIES = 20;
 // (chrome.alarms clamps to a ~30s floor, which is useless for per-message pacing).
 // Longer waits (rate-limit backoff) use alarms so they survive SW termination.
 const SETTIMEOUT_MAX_MS = 25000;
+// Hard ceiling on a single Slack API request. Longer than any healthy call, short
+// enough that a stalled request can't pin the queue's reentrancy lock indefinitely.
+const FETCH_TIMEOUT_MS = 30000;
 const WATCHDOG_ALARM = "sc_watchdog";
 const WATCHDOG_PERIOD_MIN = 0.5; // 30s: the platform minimum; used only for crash recovery
 const STALL_GRACE_MS = 20000;    // a job is "stalled" (SW died) only if this far past due
@@ -102,8 +109,25 @@ chrome.runtime.onStartup.addListener(async () => {
   maybeClearWatchdog();
 });
 
-chrome.runtime.onInstalled.addListener((details) => {
-  recoverAllJobs();
+chrome.runtime.onInstalled.addListener(async (details) => {
+  await recoverAllJobs();
+
+  // Extension update/reload safety (mirrors onStartup): an update tears down the SW
+  // and clears chrome.storage.session, so the browser-restart-safe `sc_run_` flag is
+  // gone and isAutoResumeAllowed() is now false. A job recovered as isRunning would
+  // therefore never advance (every resume path is gated on that flag) yet still show
+  // "running" and keep the 30s watchdog alive forever. Force any running job to paused
+  // so it lands in the same recoverable, user-confirmed state as a browser restart.
+  for (const [key, job] of Object.entries(activeJobs)) {
+    if (job.isRunning && !job.isPaused) {
+      job.isRunning = false;
+      job.isPaused = true;
+      clearScheduled(key);
+      markRunning(key, false);
+      await saveJobState(key, job, true);
+    }
+  }
+  maybeClearWatchdog();
 
   // Set first-run flag for onboarding
   if (details.reason === "install") {
@@ -200,6 +224,14 @@ async function slackAPICall(token, endpoint, params = {}) {
     bodyParams.append(k, String(v));
   }
 
+  // Abort a black-holed request instead of hanging forever. Without this, a stalled
+  // fetch never resolves, so executeQueue never returns, its `finally` never releases
+  // the processingKeys lock, and the watchdog keeps skipping the job (it treats a
+  // locked key as "already processing") — wedging that job until the SW is torn down.
+  // An abort surfaces as network_error, which the queue already retries transiently.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
   try {
     const response = await fetch(`https://slack.com/api/${endpoint}`, {
       method: "POST",
@@ -210,7 +242,8 @@ async function slackAPICall(token, endpoint, params = {}) {
       headers: {
         "Content-Type": "application/x-www-form-urlencoded"
       },
-      body: bodyParams
+      body: bodyParams,
+      signal: controller.signal
     });
 
     if (response.status === 429) {
@@ -223,6 +256,8 @@ async function slackAPICall(token, endpoint, params = {}) {
   } catch (err) {
     console.error(`SlackClean BG: API Error on ${endpoint}`, err);
     return { ok: false, error: "network_error", message: err.message };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -558,8 +593,15 @@ async function runScanInBg(token, req) {
   // Numeric bounds for the manual thread-reply time filter below. Coerce defensively:
   // a missing/empty `latest` must mean "no upper bound" (Infinity), not "" — because
   // `replyTsNum > ""` coerces to `> 0` and would drop every reply. Likewise oldest -> 0.
-  const oldestNum = (oldest === undefined || oldest === null || oldest === "") ? 0 : parseFloat(oldest);
-  const latestNum = (latest === undefined || latest === null || latest === "") ? Infinity : parseFloat(latest);
+  // Coerce defensively. A missing/empty bound means "no bound" (0 / Infinity). A
+  // genuinely non-numeric bound (parseFloat -> NaN) must ALSO fall back to no-bound,
+  // not stay NaN: every comparison with NaN is false, which would drop all roots
+  // (rootInWindow false) yet keep ALL thread replies (the `< NaN || > NaN` guard never
+  // fires) — an inconsistent, partial selection. Normalize NaN to the open bound.
+  let oldestNum = (oldest === undefined || oldest === null || oldest === "") ? 0 : parseFloat(oldest);
+  let latestNum = (latest === undefined || latest === null || latest === "") ? Infinity : parseFloat(latest);
+  if (Number.isNaN(oldestNum)) oldestNum = 0;
+  if (Number.isNaN(latestNum)) latestNum = Infinity;
 
   // Thread replies live inside their PARENT message, reachable only by expanding
   // that parent. conversations.history only returns messages whose own ts is within
@@ -701,6 +743,10 @@ function itemAction(item) {
 // after invoking this (the same item is retried after the backoff, or the job is
 // paused). `job._rateLimitRetries` is reset once an item finally resolves.
 function handleRateLimitBackoff(job, key, pauseTime, context) {
+  // If the job was cancelled/replaced while an API call was in flight, do nothing —
+  // otherwise the exceeded-retries branch below would saveJobState() and resurrect a
+  // job the user just cancelled (its companion queue is already gone → a ghost record).
+  if (activeJobs[key] !== job) return;
   job._rateLimitRetries = (job._rateLimitRetries || 0) + 1;
   if (job._rateLimitRetries > MAX_RATELIMIT_RETRIES) {
     sendLogMessage(job, `[Rate Limited] Slack is still throttling after ${MAX_RATELIMIT_RETRIES} retries. Pausing — reopen the dashboard to resume once throttling clears.`, "error");
@@ -752,12 +798,17 @@ async function executeQueue(key) {
       } catch (e) { /* session storage unavailable */ }
 
       if (!job.token) {
-        sendLogMessage(job, "[Fatal] Session token lost after service worker restart. Please re-open the dashboard to reconnect.", "error");
+        // PAUSE (don't discard): preserve the queue + progress so re-opening the
+        // dashboard (which re-sends the fresh session token via SET_SESSION) lets the
+        // user resume exactly where it stopped. Deleting the job here would throw away
+        // all remaining work and contradict the "re-open to reconnect" guidance.
+        sendLogMessage(job, "[Paused] Session token lost after a service-worker restart. Re-open the dashboard to reconnect, then resume.", "error");
         job.isRunning = false;
-        broadcastJobUpdate(job);
+        job.isPaused = true;
+        clearScheduled(key);
         markRunning(key, false);
-        clearJobState(key);
-        delete activeJobs[key];
+        await saveJobState(key, job, true);
+        broadcastJobUpdate(job);
         maybeClearWatchdog();
         return;
       }
@@ -796,6 +847,12 @@ async function executeQueue(key) {
         for (const file of files) {
           if (!file || !file.id) continue;
 
+          // Cancel/replace mid-loop: the main cancellation guard sits AFTER this loop,
+          // so without a check here a Cancel issued while we were awaiting files.info
+          // would still let files.delete run and purge a file for a job the user just
+          // cancelled. Stop before issuing any further destructive calls.
+          if (activeJobs[key] !== job) return;
+
           // SAFETY: files.delete purges a file from Slack ENTIRELY — every channel
           // and DM it was shared into, not just this message. Before hard-deleting,
           // look up its live share count; if it lives in more than one place, leave
@@ -828,6 +885,9 @@ async function executeQueue(key) {
             continue;
           }
 
+          // Re-check after the files.info await above: the job may have been cancelled
+          // or replaced while we were inspecting shares. Never delete a file for it.
+          if (activeJobs[key] !== job) return;
           const fileRes = await slackAPICall(job.token, "files.delete", { file: file.id });
           if (fileRes.ok || fileRes.error === "file_deleted" ||
               fileRes.error === "file_not_found" || fileRes.error === "already_deleted") {
@@ -875,10 +935,12 @@ async function executeQueue(key) {
       }
     }
 
-    // The job may have been CANCELLED (activeJobs entry deleted) while we were
-    // awaiting the API call above. If so, stop here — don't record stats, advance
-    // the index, reschedule, or re-persist a job the user just cancelled.
-    if (!activeJobs[key]) return;
+    // The job may have been CANCELLED (activeJobs entry deleted) OR REPLACED by a
+    // fresh START_DELETION for the same key while we were awaiting the API call above.
+    // Compare object identity, not mere presence: if the key now holds a different
+    // job object, this stale execution must not record stats, advance the index,
+    // reschedule, or (via the finalize block) clear the brand-new job's state.
+    if (activeJobs[key] !== job) return;
 
     if (response.error === "rate_limited") {
       // Do NOT advance deleteIndex: retry the same item after the backoff (or pause
@@ -888,21 +950,29 @@ async function executeQueue(key) {
     }
 
     if (response.error === "token_revoked" || response.error === "not_authed" || response.error === "account_inactive") {
-      sendLogMessage(job, `[Fatal Error] Slack Session Invalidation: ${response.error}. Halting queue.`, "error");
+      // Session invalidated. PAUSE and preserve the queue/progress rather than
+      // discarding it: after the user re-authenticates to Slack and re-opens the
+      // dashboard (re-sending a valid token), the job can resume from where it halted.
+      sendLogMessage(job, `[Paused] Slack session invalid (${response.error}). Re-log in to Slack, re-open the dashboard, then resume.`, "error");
       job.isRunning = false;
-      broadcastJobUpdate(job);
+      job.isPaused = true;
+      clearScheduled(key);
       markRunning(key, false);
-      clearJobState(key);
-      delete activeJobs[key];
+      await saveJobState(key, job, true);
+      broadcastJobUpdate(job);
       maybeClearWatchdog();
       return;
     }
 
-    // Transient failure (network blip, or a JS exception in the fetch path):
-    // retry the SAME item a few times with a short backoff before giving up, so
-    // a momentary hiccup doesn't permanently skip messages the user asked to
-    // delete. The counter is reset once the item is finally resolved (below).
-    if (response.error === "network_error" || response.error === "catch_error") {
+    // Transient failure (network blip, a JS exception in the fetch path, or an
+    // attachment-mode item whose file op failed transiently): retry the SAME item a
+    // few times with a short backoff before giving up, so a momentary hiccup doesn't
+    // permanently skip messages/attachments the user asked to remove. `file_delete_failed`
+    // is included because in attachment mode a single files.info/files.delete network
+    // blip aborts the item (correctly, to never orphan a file) — but that abort must
+    // be RETRIED like any other transient error, not counted as a permanent failure on
+    // the first blip. The counter is reset once the item is finally resolved (below).
+    if (response.error === "network_error" || response.error === "catch_error" || response.error === "file_delete_failed") {
       job._transientRetries = (job._transientRetries || 0) + 1;
       if (job._transientRetries <= MAX_TRANSIENT_RETRIES) {
         sendLogMessage(job, `[Network] Transient error at ${msg.time} (attempt ${job._transientRetries}/${MAX_TRANSIENT_RETRIES}). Retrying...`, "warn");
