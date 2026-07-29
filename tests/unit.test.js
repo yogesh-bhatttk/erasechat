@@ -1,4 +1,4 @@
-// SlackClean Premium - Node.js Unit Test Suite
+// Bulk Clean for Slack - Node.js Unit Test Suite
 // Runs with zero dependencies:  node --test tests/unit.test.js
 //
 // These tests import the ACTUAL production logic from shared-filters.js — the same
@@ -224,6 +224,61 @@ test('qualifies: quantifier-chain ReDoS pattern is blocked and executes quickly'
   const start = Date.now();
   qualifies(msg, CURRENT_USER, 'all', pattern, false);
   assert.ok(Date.now() - start < 100, 'quantifier-chain regex must not backtrack');
+});
+
+test('isSafeRegex: rejects sequential UNBOUNDED quantifiers (polynomial ReDoS under the count cap)', () => {
+  // 3-10 sequential unbounded quantifiers slip past every structural rule and the
+  // count cap (<=10) yet backtrack polynomially — degree = number of stars. Reject.
+  assert.equal(isSafeRegex('a*a*a*b'), false);       // cubic
+  assert.equal(isSafeRegex('a*a*a*a*b'), false);     // quartic
+  assert.equal(isSafeRegex('a*a*a*a*a*a*b'), false); // was ~739ms on 40 chars
+  assert.equal(isSafeRegex('a*'.repeat(10) + 'b'), false); // degree-10, was a hang
+  assert.equal(isSafeRegex('\\d+\\d+\\d+x'), false); // same family, different atom
+  // Two unbounded quantifiers separated by a REQUIRED literal are safe and common.
+  assert.equal(isSafeRegex('v\\d+\\.\\d+'), true);
+  assert.equal(isSafeRegex('ERR_\\d+'), true);
+  assert.equal(isSafeRegex('^start.*end$'), true);
+});
+
+test('qualifies: sequential-unbounded ReDoS pattern is blocked and executes quickly', () => {
+  // The concrete case that hung the scan: 9-10 stars on a run of "a" with no "b".
+  const msg = { ts: '100.0', user: CURRENT_USER, text: 'a'.repeat(60) + '!' };
+  const pattern = '/' + 'a*'.repeat(9) + 'b/';
+  const start = Date.now();
+  const q = qualifies(msg, CURRENT_USER, 'all', pattern, false);
+  assert.ok(Date.now() - start < 100, 'sequential-unbounded regex must not backtrack');
+  // Rejected as unsafe -> literal fallback for "a*a*...b", which the text lacks.
+  assert.equal(q, false);
+});
+
+test('qualifies: empty-string-matching regex selects NOTHING (never the whole channel)', () => {
+  const unrelated = { ts: '1', user: 'U_OTHER', text: 'totally unrelated message' };
+  // These all match "" -> would otherwise qualify every message (mass over-delete).
+  for (const pat of ['/a?/', '/x*/', '/^/', '/.*/', '/(secret)?/', '/\\d*/']) {
+    assert.equal(qualifies(unrelated, CURRENT_USER, 'all', pat, false), false, `pattern ${pat} must not select everything`);
+  }
+  // A non-degenerate regex still matches normally.
+  assert.equal(qualifies({ ts: '1', user: 'U_OTHER', text: 'ERR_500' }, CURRENT_USER, 'all', '/ERR_\\d+/', false), true);
+});
+
+test('qualifies: system messages that CARRY TEXT are still dropped (channel_join etc.)', () => {
+  // Slack join/leave/topic messages have text ("<@U> has joined the channel").
+  const join = { ts: '1', user: CURRENT_USER, subtype: 'channel_join', text: '<@U123456> has joined the channel' };
+  const topic = { ts: '2', user: CURRENT_USER, subtype: 'channel_topic', text: 'set the channel topic: Q4 planning' };
+  assert.equal(qualifies(join, CURRENT_USER, 'me', '', false), false);
+  assert.equal(qualifies(topic, CURRENT_USER, 'me', '', false), false);
+  // A text filter must not be able to select a system message either.
+  assert.equal(qualifies(join, CURRENT_USER, 'me', 'joined', false), false);
+  // Real content-bearing subtypes are still kept.
+  assert.equal(qualifies({ ts: '3', user: CURRENT_USER, subtype: 'me_message', text: 'waves' }, CURRENT_USER, 'me', '', false), true);
+  assert.equal(qualifies({ ts: '4', user: CURRENT_USER, subtype: 'file_share', files: [{ id: 'F1' }] }, CURRENT_USER, 'me', '', false), true);
+});
+
+test('qualifies: "me" mode with undefined userId fails CLOSED (no user-less over-delete)', () => {
+  const botMsg = { ts: '1', subtype: 'bot_message', bot_id: 'B1', text: 'deploy finished' };
+  assert.equal(qualifies(botMsg, undefined, 'me', '', false), false);
+  // A real user message with a defined userId still qualifies.
+  assert.equal(qualifies({ ts: '2', user: CURRENT_USER, text: 'hi' }, CURRENT_USER, 'me', '', false), true);
 });
 
 // ============================================================

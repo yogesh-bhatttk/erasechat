@@ -1,7 +1,9 @@
-// SlackClean Premium - Shared filtering & safety logic (SINGLE SOURCE OF TRUTH)
+// Bulk Clean for Slack - Shared filtering & safety logic (SINGLE SOURCE OF TRUTH)
 //
 // Loaded by:
-//   - background.js  (Chrome: via importScripts; Firefox: via background.scripts array)
+//   - background.js  (Chrome/Chromium via manifest.json: importScripts in the service
+//                     worker; Firefox via manifest.firefox.json: first entry in the
+//                     background.scripts array, so it runs before background.js)
 //   - tests/*.js     (Node: via require)
 //
 // Do NOT fork this logic. The content script deliberately does NOT reimplement it —
@@ -11,6 +13,33 @@ const MAX_REGEX_PATTERN_LENGTH = 100;
 // A real keyword/regex filter rarely uses more than a handful of quantifiers;
 // dozens are a hallmark of a backtracking foot-gun (see the chain check below).
 const MAX_QUANTIFIERS = 10;
+// Unbounded quantifiers (*, +, open-ended {n,}) are the ones that cause polynomial /
+// catastrophic backtracking when several can match the SAME input. Each extra one
+// raises the backtracking degree: `a*a*a*b` on a long run of "a" is cubic and freezes
+// the single-threaded worker even though it has no groups, no adjacent quantifiers,
+// and stays under MAX_QUANTIFIERS — so it slips past every structural rule above.
+// A legitimate filter almost never chains more than two (e.g. `\d+\.\d+`), so cap them
+// hard; two is the most that stays merely quadratic (and is further bounded below).
+const MAX_UNBOUNDED_QUANTIFIERS = 2;
+// Final backstop: the length of text a (safe, ≤2-unbounded) regex is actually run
+// against. Slack allows very long messages; capping keeps even a quadratic pattern on
+// a pathological repeated run well under a second. Chosen far above any real message,
+// so ordinary matching is unaffected (over-long input under-matches, the safe way).
+const MAX_REGEX_INPUT = 20000;
+
+// System / no-op message subtypes that are never the user's own deletable content.
+// Dropped by subtype regardless of text: Slack's join/leave/topic/purpose/name/archive
+// messages DO carry a `text` ("<@U> has joined the channel"), so a text-presence proxy
+// leaks them into a "delete all my messages" run. Content-bearing subtypes
+// (me_message, thread_broadcast, bot_message, file_share, …) are deliberately excluded
+// so genuine user content — including caption-less file uploads — stays deletable.
+const SYSTEM_MESSAGE_SUBTYPES = new Set([
+  "channel_join", "channel_leave", "channel_topic", "channel_purpose", "channel_name",
+  "channel_archive", "channel_unarchive",
+  "group_join", "group_leave", "group_topic", "group_purpose", "group_name",
+  "group_archive", "group_unarchive",
+  "pinned_item", "unpinned_item", "bot_add", "bot_remove", "app_conversation_join"
+]);
 
 // Comprehensive ReDoS safety checker.
 function isSafeRegex(pattern) {
@@ -48,12 +77,29 @@ function isSafeRegex(pattern) {
   const quantifiers = (pattern.match(/(?<!\\)[*+?{]/g) || []).length;
   if (quantifiers > MAX_QUANTIFIERS) return false;
 
+  // Unbounded-quantifier chain guard (see MAX_UNBOUNDED_QUANTIFIERS). Count *, +, and
+  // open-ended {n,} braces; escaped metacharacters (\*, \+) are literals and don't
+  // count. This catches the polynomial `a*a*a*…b` / `\d+\d+\d+…` family that the count
+  // cap above lets through (10 stars is degree-10 catastrophic, not safe).
+  const unbounded = (pattern.match(/(?<!\\)[*+]/g) || []).length
+                  + (pattern.match(/(?<!\\)\{\d*,\}/g) || []).length;
+  if (unbounded > MAX_UNBOUNDED_QUANTIFIERS) return false;
+
   return true;
 }
 
 // ReDoS-shielded qualification checker used by the background scan engine.
 function qualifies(msg, userId, senderMode, textFilter, onlyAttachments) {
-  if (senderMode === "me" && msg.user !== userId) {
+  // "me" mode must be able to identify the current user. If userId is missing
+  // (upstream resolution failure), fail CLOSED — otherwise `undefined !== undefined`
+  // lets a user-less message (bot/integration/system) slip through as "mine".
+  if (senderMode === "me" && (!userId || msg.user !== userId)) {
+    return false;
+  }
+
+  // Explicit system-message subtypes are never deletable user content — drop them up
+  // front so neither a text filter nor the attachment toggle can select one.
+  if (msg.subtype && SYSTEM_MESSAGE_SUBTYPES.has(msg.subtype)) {
     return false;
   }
 
@@ -87,7 +133,17 @@ function qualifies(msg, userId, senderMode, textFilter, onlyAttachments) {
       } else {
         try {
           const regex = new RegExp(pattern, "i");
-          if (!regex.test(msgText)) return false;
+          // A regex that matches the empty string matches EVERY message — almost
+          // always a mistyped filter (a stray trailing `*`/`?`, a lone `^`/`$`, `.*`,
+          // an all-optional group). For a permanent-delete tool, silently selecting
+          // the entire channel is the worst failure mode, so treat a degenerate
+          // empty-matching pattern as selecting NOTHING: the user gets 0 results and
+          // fixes the filter instead of nuking everything.
+          if (regex.test("")) return false;
+          // Bound the input a safe regex actually runs against (see MAX_REGEX_INPUT) —
+          // a final backstop so even a ≤2-unbounded (quadratic) pattern on a very long
+          // repeated run can't stall the worker.
+          if (!regex.test(msgText.slice(0, MAX_REGEX_INPUT))) return false;
         } catch (e) {
           if (!msgText.includes(pattern.toLowerCase())) return false;
         }
@@ -97,12 +153,11 @@ function qualifies(msg, userId, senderMode, textFilter, onlyAttachments) {
     }
   }
 
-  // Drop system/no-op subtype messages (channel_join, channel_leave, etc.) —
-  // those carry a subtype, no text, AND no files/attachments. A caption-less
-  // file upload also has a subtype ("file_share") and no text, but it IS the
-  // user's own content and must be deletable in EVERY mode (a full "delete my
-  // messages" run should not silently leave the user's bare uploads behind),
-  // so genuine attachment carriers are kept regardless of the attachments toggle.
+  // Fallback for any OTHER (unlisted) subtype: drop it only when it carries no text
+  // AND no files/attachments — generic system noise. Known system subtypes were
+  // already dropped above; a caption-less file upload ("file_share") is kept here
+  // because it has files, so a full "delete my messages" run never silently leaves
+  // the user's bare uploads behind.
   if (msg.subtype && !msg.text && !(hasFiles || hasAttach)) {
     return false;
   }
