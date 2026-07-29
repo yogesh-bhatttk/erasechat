@@ -1,4 +1,4 @@
-// SlackClean Premium - Playwright E2E Test Suite
+// Bulk Clean for Slack - Playwright E2E Test Suite
 
 const { test, expect, chromium } = require('@playwright/test');
 const path = require('path');
@@ -32,7 +32,7 @@ test('should load popup page and render offline state by default', async () => {
   await expect(offlineState).not.toHaveClass(/hidden/);
   
   const title = await page.locator('h1').innerText();
-  expect(title).toBe('SlackClean');
+  expect(title).toBe('Bulk Clean');
 
   // Verify presence of redirect action button
   const gotoBtn = page.locator('#btn-goto-slack');

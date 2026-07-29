@@ -1,4 +1,4 @@
-// SlackClean Premium - Playwright E2E: first-run onboarding flow
+// Bulk Clean for Slack - Playwright E2E: first-run onboarding flow
 //
 // Exercises real extension behavior (popup JS + chrome.storage.local) without
 // needing a live Slack session. Requires: npx playwright install

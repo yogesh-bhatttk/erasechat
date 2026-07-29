@@ -1,14 +1,14 @@
-# SlackClean Premium — Privacy Policy
+# Bulk Clean for Slack — Privacy Policy
 
 **Last Updated:** July 22, 2026
 
 ## Overview
 
-SlackClean Premium is a browser extension that helps users bulk-delete their own Slack messages. This privacy policy describes what data the extension accesses, how it is used, and how it is stored.
+Bulk Clean for Slack is a browser extension that helps users bulk-delete their own Slack messages. This privacy policy describes what data the extension accesses, how it is used, and how it is stored.
 
 ## Data Collection
 
-SlackClean Premium does **NOT** collect, transmit, sell, or share any user data with third parties. All data processing happens entirely within your browser on your local device.
+Bulk Clean for Slack does **NOT** collect, transmit, sell, or share any user data with third parties. All data processing happens entirely within your browser on your local device.
 
 ### Data the Extension Accesses
 
@@ -28,7 +28,7 @@ SlackClean Premium does **NOT** collect, transmit, sell, or share any user data 
 
 ## How Data is Used
 
-All data accessed by SlackClean Premium is used exclusively for its core functionality:
+All data accessed by Bulk Clean for Slack is used exclusively for its core functionality:
 
 1. **Session token** — Used to authenticate Slack API calls (`conversations.history`, `chat.delete`, `files.delete`, `users.list`, `conversations.info`) on your behalf.
 2. **Message metadata** — Used to track which messages have been processed during a bulk deletion operation, enabling pause/resume/recovery.
@@ -43,7 +43,7 @@ All data accessed by SlackClean Premium is used exclusively for its core functio
 
 ## Data Sharing
 
-SlackClean Premium does **not**:
+Bulk Clean for Slack does **not**:
 - Transmit any data to third-party servers
 - Include any analytics, telemetry, or tracking code
 - Use advertising networks or data brokers
@@ -75,7 +75,7 @@ SlackClean Premium does **not**:
 
 ## Children's Privacy
 
-SlackClean Premium is not directed at children under 13 and does not knowingly collect personal information from children.
+Bulk Clean for Slack is not directed at children under 13 and does not knowingly collect personal information from children.
 
 ## Changes to This Policy
 

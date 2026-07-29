@@ -1,4 +1,4 @@
-# Audit Prompt — SlackClean Premium (browser extension)
+# Audit Prompt — Bulk Clean for Slack (browser extension)
 
 Copy everything below the line into a fresh Claude Code / agent session running in this
 repository. It is written to be pasted as-is.
@@ -7,7 +7,7 @@ repository. It is written to be pasted as-is.
 
 ## Role & goal
 
-You are auditing **SlackClean Premium**, a Manifest V3 browser extension (Chrome + Firefox)
+You are auditing **Bulk Clean for Slack**, a Manifest V3 browser extension (Chrome + Firefox)
 that bulk-deletes and cleans a user's Slack messages using the Slack web API. Because this
 tool **permanently deletes user data**, correctness and safety matter more than anything
 else. Your #1 job is: **find everything that could break, silently misbehave, delete the
