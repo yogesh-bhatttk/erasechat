@@ -106,7 +106,7 @@ function pollWorkspaceInfo(tabId, workspaceTitle, launchBtn, attemptsLeft) {
     if (response && response.workspaceName) {
       workspaceTitle.innerText = response.workspaceName;
     } else {
-      workspaceTitle.innerText = "Slack Client Loaded";
+      workspaceTitle.innerText = t("popupClientLoaded", "Slack Client Loaded");
     }
     setupLaunchButton(tabId, launchBtn);
   });

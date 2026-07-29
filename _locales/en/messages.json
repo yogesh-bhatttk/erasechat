@@ -1,6 +1,6 @@
 {
   "extensionName": {
-    "message": "SlackClean Premium",
+    "message": "Bulk Clean for Slack",
     "description": "The name of the extension"
   },
   "extensionDescription": {
@@ -8,11 +8,11 @@
     "description": "Description of the extension"
   },
   "actionTitle": {
-    "message": "Open SlackClean Premium Dashboard",
+    "message": "Open Bulk Clean for Slack Dashboard",
     "description": "Tooltip for the extension action button"
   },
 
-  "premiumBadge": { "message": "PREMIUM", "description": "Premium tier badge" },
+  "brandTag": { "message": "for Slack", "description": "Brand tag shown next to the name (\"<name> for Slack\")" },
   "privacyPolicy": { "message": "Privacy Policy", "description": "Privacy policy link" },
 
   "popupStatusDetected": { "message": "Slack Web Client Detected", "description": "Popup: Slack tab detected" },
@@ -23,7 +23,7 @@
   "popupOpenDashboardAria": { "message": "Open Clean Dashboard modal overlay", "description": "Popup: launch button aria label" },
   "popupStatusOffline": { "message": "Slack Client Offline", "description": "Popup: not on a Slack tab" },
   "popupOpenToBegin": { "message": "Open Slack to Begin", "description": "Popup: offline heading" },
-  "popupOpenToBeginBody": { "message": "To use SlackClean Premium, you must open Slack in your browser and log into your workspace.", "description": "Popup: offline body" },
+  "popupOpenToBeginBody": { "message": "To use Bulk Clean for Slack, you must open Slack in your browser and log into your workspace.", "description": "Popup: offline body" },
   "popupGotoSlack": { "message": "Open app.slack.com", "description": "Popup: open Slack button" },
   "popupGotoSlackAria": { "message": "Navigate to app.slack.com web client", "description": "Popup: open Slack button aria label" },
   "popupConnecting": { "message": "Connecting...", "description": "Popup: connecting state" },
@@ -33,7 +33,7 @@
   "popupConnectionLost": { "message": "Connection lost. Please reload the page.", "description": "Popup: connection lost alert" },
   "footerLocalOnly": { "message": "Local-Only Processing", "description": "Footer tagline" },
 
-  "onboardingTitle": { "message": "👋 Welcome to SlackClean Premium!", "description": "Onboarding heading" },
+  "onboardingTitle": { "message": "👋 Welcome to Bulk Clean for Slack!", "description": "Onboarding heading" },
   "onboardingIntro": { "message": "Bulk delete your Slack messages with advanced filters, thread support, and safety controls.", "description": "Onboarding intro" },
   "onboardingBullet1": { "message": "🔒 All processing happens locally in your browser", "description": "Onboarding bullet" },
   "onboardingBullet2": { "message": "📋 Scan & preview messages before deleting", "description": "Onboarding bullet" },

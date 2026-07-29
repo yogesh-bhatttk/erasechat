@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bulk Clean for Slack — Privacy Policy</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e1b3a;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --border: rgba(148, 163, 184, 0.18);
+      --purple: #8b5cf6;
+      --pink: #ec4899;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      font-size: 15px;
+    }
+    .wrap { max-width: 820px; margin: 0 auto; padding: 32px 24px 64px; }
+    header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 20px;
+      margin-bottom: 28px;
+    }
+    h1 {
+      font-size: 24px;
+      margin: 0 0 6px;
+      background: linear-gradient(135deg, var(--purple) 0%, var(--pink) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .updated { color: var(--muted); font-size: 13px; }
+    h2 { font-size: 18px; margin: 32px 0 10px; color: #fff; }
+    h3 { font-size: 15px; margin: 20px 0 8px; color: var(--text); }
+    p, li { color: var(--text); }
+    a { color: var(--purple); }
+    strong { color: #fff; }
+    ul { padding-left: 20px; }
+    li { margin: 4px 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 14px;
+      display: block;
+      overflow-x: auto;
+    }
+    th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: rgba(139, 92, 246, 0.12); color: #fff; }
+    .note {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--purple);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 20px 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Bulk Clean for Slack — Privacy Policy</h1>
+      <div class="updated">Last Updated: July 22, 2026</div>
+    </header>
+
+    <div class="note">
+      <strong>In short:</strong> Bulk Clean for Slack does <strong>not</strong> collect,
+      transmit, sell, or share any user data. All processing happens locally in your
+      browser. The only network calls go directly to Slack's own API on your behalf.
+    </div>
+
+    <h2>Overview</h2>
+    <p>Bulk Clean for Slack is a browser extension that helps users bulk-delete their own
+      Slack messages. This policy describes what data the extension accesses, how it is
+      used, and how it is stored.</p>
+
+    <h2>Data the extension accesses</h2>
+    <table>
+      <thead>
+        <tr><th>Data type</th><th>Purpose</th><th>Storage</th><th>Retention</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Slack session token</strong></td><td>Authenticate API calls to delete your messages</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
+        <tr><td><strong>Workspace name, URL, user ID</strong></td><td>Show connection info in the dashboard</td><td>Browser memory (runtime)</td><td>Cleared when the tab closes</td></tr>
+        <tr><td><strong>Member display names</strong></td><td>Show readable names in scan results</td><td>Local storage (<code>chrome.storage.local</code>)</td><td>24-hour cache, auto-expires</td></tr>
+        <tr><td><strong>Message metadata</strong> (timestamps, author IDs, file IDs, and — only for "preserve text" edits — the message text)</td><td>Track deletion progress; enable pause/resume/recovery</td><td>Local storage (<code>chrome.storage.local</code>)</td><td>Cleared when the job completes or is cancelled</td></tr>
+        <tr><td><strong>Current channel ID and name</strong></td><td>Scope operations to the active conversation</td><td>Browser memory (runtime)</td><td>Cleared when the tab closes</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Data the extension does NOT access</h3>
+    <ul>
+      <li>Message content is generally <strong>not stored to disk</strong>. The one
+        exception: "Only Delete Attachments (preserve text)" persists the edited
+        message's text to local storage for the duration of that operation so it can be
+        restored if the browser interrupts the job; it is deleted when the operation
+        completes or is cancelled. All other message text stays in browser memory only.</li>
+      <li>No browsing history, cookies, bookmarks, or other browser data.</li>
+      <li>No personal information beyond your Slack user ID and workspace membership.</li>
+    </ul>
+
+    <h2>How data is used</h2>
+    <ul>
+      <li><strong>Session token</strong> — authenticate Slack API calls
+        (<code>conversations.history</code>, <code>chat.delete</code>,
+        <code>files.delete</code>, <code>users.list</code>,
+        <code>conversations.info</code>) on your behalf.</li>
+      <li><strong>Message metadata</strong> — track which messages have been processed,
+        enabling pause/resume/recovery.</li>
+      <li><strong>User cache</strong> — display readable usernames instead of Slack IDs.</li>
+    </ul>
+
+    <h2>Data storage &amp; sharing</h2>
+    <ul>
+      <li><strong>No data is transmitted to external servers.</strong> All API calls go
+        directly from your browser to Slack's official endpoints
+        (<code>https://slack.com/api/</code>).</li>
+      <li><strong>Session tokens are never written to disk</strong> — they live only in
+        <code>chrome.storage.session</code> (memory-only, cleared on browser close).</li>
+      <li><strong>No analytics, telemetry, tracking, advertising, or data brokers.</strong>
+        Nothing is shared with any entity other than Slack's own API, at your direction.</li>
+    </ul>
+
+    <h2>User control</h2>
+    <ul>
+      <li>Pause, resume, or cancel any deletion at any time; closing the dashboard stops operations.</li>
+      <li>Uninstalling the extension clears all stored data.</li>
+      <li>Deletions require explicit confirmation, with a typed <strong>DELETE</strong> step for large batches (&gt;100 messages).</li>
+    </ul>
+
+    <h2>Security</h2>
+    <ul>
+      <li>Session tokens are memory-only and never persisted to disk.</li>
+      <li>The dashboard renders inside a Shadow DOM, isolated from the host page.</li>
+      <li>Message sender origins are validated (<code>*.slack.com</code> only) before processing.</li>
+      <li>User text filters are guarded against regex denial-of-service (ReDoS).</li>
+    </ul>
+
+    <h2>Children's privacy</h2>
+    <p>Bulk Clean for Slack is not directed at children under 13 and does not knowingly
+      collect personal information from children.</p>
+
+    <h2>Changes &amp; contact</h2>
+    <p>This policy may be updated from time to time; changes are reflected in the
+      "Last Updated" date above. Questions? Contact the developer through the extension's
+      store listing.</p>
+
+    <footer>
+      Bulk Clean for Slack is an independent tool and is not affiliated with, endorsed by,
+      or sponsored by Slack. Slack is a trademark of Salesforce, Inc.
+    </footer>
+  </div>
+</body>
+</html>

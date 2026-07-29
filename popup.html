@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SlackClean Premium</title>
+  <title>Bulk Clean for Slack</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -47,8 +47,8 @@
           <circle cx="132" cy="392" r="9" fill="#FFFFFF" opacity="0.9" />
         </svg>
         <div class="brand">
-          <h1>SlackClean</h1>
-          <span class="badge" data-i18n="premiumBadge">PREMIUM</span>
+          <h1>Bulk Clean</h1>
+          <span class="badge" data-i18n="brandTag">for Slack</span>
         </div>
       </div>
     </header>
@@ -85,7 +85,7 @@
 
         <div class="redirect-info">
           <h3 data-i18n="popupOpenToBegin">Open Slack to Begin</h3>
-          <p data-i18n="popupOpenToBeginBody">To use SlackClean Premium, you must open Slack in your browser and log into your workspace.</p>
+          <p data-i18n="popupOpenToBeginBody">To use Bulk Clean for Slack, you must open Slack in your browser and log into your workspace.</p>
         </div>
 
         <button id="btn-goto-slack" class="btn btn-secondary" data-i18n-aria="popupGotoSlackAria" aria-label="Navigate to app.slack.com web client">
@@ -101,7 +101,7 @@
 
     <!-- First-Run Onboarding (SC-UX-01) -->
     <div id="onboarding-card" class="onboarding-card hidden">
-      <h3 data-i18n="onboardingTitle">👋 Welcome to SlackClean Premium!</h3>
+      <h3 data-i18n="onboardingTitle">👋 Welcome to Bulk Clean for Slack!</h3>
       <p data-i18n="onboardingIntro">Bulk delete your Slack messages with advanced filters, thread support, and safety controls.</p>
       <ul>
         <li data-i18n="onboardingBullet1">🔒 All processing happens locally in your browser</li>
@@ -109,12 +109,12 @@
         <li data-i18n="onboardingBullet3">⏸️ Pause, resume, or cancel anytime</li>
         <li data-i18n="onboardingBullet4">📥 Export messages as CSV backup</li>
       </ul>
-      <p class="onboarding-privacy"><span data-i18n="onboardingPrivacy">This is an independent tool, not affiliated with or endorsed by Slack. It uses your existing Slack login session to delete messages on your behalf; deletions are permanent. No data is sent to external servers.</span> <a href="PRIVACY_POLICY.md" id="privacy-link" data-i18n="privacyPolicy">Privacy Policy</a></p>
+      <p class="onboarding-privacy"><span data-i18n="onboardingPrivacy">This is an independent tool, not affiliated with or endorsed by Slack. It uses your existing Slack login session to delete messages on your behalf; deletions are permanent. No data is sent to external servers.</span> <a href="privacy.html" id="privacy-link" target="_blank" rel="noopener" data-i18n="privacyPolicy">Privacy Policy</a></p>
       <button id="btn-dismiss-onboarding" class="btn btn-primary" style="margin-top:8px; padding:8px 16px; font-size:12px;" data-i18n="onboardingDismiss">Got It — Let's Go!</button>
     </div>
 
     <footer class="footer">
-      <p><span data-i18n="footerLocalOnly">Local-Only Processing</span> • <a href="PRIVACY_POLICY.md" style="color:#8B5CF6; text-decoration:none;" data-i18n="privacyPolicy">Privacy Policy</a></p>
+      <p><span data-i18n="footerLocalOnly">Local-Only Processing</span> • <a href="privacy.html" target="_blank" rel="noopener" style="color:#8B5CF6; text-decoration:none;" data-i18n="privacyPolicy">Privacy Policy</a></p>
     </footer>
   </div>
   <script src="popup.js"></script>
