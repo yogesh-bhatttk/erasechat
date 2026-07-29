@@ -1,5 +1,118 @@
 # Changelog
 
+## Unreleased — Release prep: rename + store packaging
+
+Prepared the extension for Chrome Web Store and Firefox AMO submission.
+
+- **Renamed to "Bulk Clean for Slack"** (was "SlackClean Premium"). Leading with "Slack"
+  and using "Premium" (for a free MIT tool) were rejection/trademark risks; the new name
+  follows Slack's sanctioned "X for Slack" form. Applied across both manifests, `_locales`,
+  the dashboard/popup UI (header, badge → "for Slack", onboarding, titles, export
+  filenames), README, PRIVACY_POLICY, SECURITY, STORE_LISTING, `package.json`, the build
+  script, and tests. Internal identifiers (storage keys, DOM ids) were left unchanged.
+- **Project docs added:** `LICENSE` (MIT © 2026 Yogesh Bhatt), `README.md`, `SECURITY.md`,
+  `TERMS.md`, `CONTRIBUTING.md`.
+- **In-extension privacy page** `privacy.html` (styled, CSP-safe) — the popup links to it
+  instead of the raw `.md`; it ships in the package.
+- **Build pipeline:** `scripts/build.sh` (`npm run build`) produces store-ready
+  `dist/bulk-clean-for-slack-{chrome,firefox}-<version>.zip` with the correct manifest
+  per target and only runtime files. `dist/` is gitignored.
+- **Store submission aids:** `store-assets/SUBMISSION_CHECKLIST.md`, Chrome data-use
+  disclosure answers + Firefox notes in `STORE_LISTING.md`, and a 440×280 promo tile
+  (`store-assets/promo/`).
+- **Validated:** Chrome packs a valid `.crx`; `addons-linter` reports **0 errors** on the
+  Firefox zip. **52/52** unit tests green.
+- ⚠️ **Follow-ups (outside code):** re-capture store screenshots (current ones show the old
+  branding), host the privacy policy at a public URL, and verify a real delete on live
+  Slack before submitting. See `store-assets/SUBMISSION_CHECKLIST.md`.
+
+## Unreleased — Fifth functional pass (ReDoS, over-select, drift, Firefox, lifecycle)
+
+Fifth audit pass (four parallel deep-traces + runnable repros). Fixes below.
+
+### High — filter safety (`shared-filters.js`)
+
+- **ReDoS guard defeated — a user regex could freeze the whole scan.** The last-line
+  quantifier-COUNT cap (`MAX_QUANTIFIERS = 10`) let sequential unbounded quantifiers
+  through: `a*a*a*…b` has no groups and no adjacent quantifiers, so it slipped every
+  structural rule, yet backtracks polynomially (degree = number of stars). Measured:
+  6 stars = 739 ms and 7 stars = 4.2 s on a 40-char run; 10 stars = a multi-minute
+  hang. Added `MAX_UNBOUNDED_QUANTIFIERS = 2` (counts `*`, `+`, open `{n,}`), which
+  rejects the chain while still accepting legitimate `\d+\.\d+`-style filters; plus a
+  `MAX_REGEX_INPUT` cap on the text a safe regex actually runs against as a backstop.
+- **A regex that matches the empty string silently selected the ENTIRE channel.**
+  `/a?/`, `/x*/`, `/^/`, `/.*/`, `/(secret)?/` all made `qualifies()` return true for
+  every message → mass over-selection from a mistyped filter. A degenerate
+  empty-matching pattern now selects **nothing** (the user sees 0 results and fixes it)
+  instead of everything.
+- **System messages that carry text were not dropped.** `channel_join` / `channel_leave`
+  / `channel_topic` etc. all have `text` ("<@U> has joined"), so the `!msg.text` drop
+  proxy leaked them into a "delete all my messages" run (inflating the fail tally, and
+  over-deleting any subtype Slack lets you delete). Now dropped by an explicit
+  `SYSTEM_MESSAGE_SUBTYPES` allowlist regardless of text; content-bearing subtypes
+  (`me_message`, `thread_broadcast`, `file_share`, …) are preserved.
+- **"me" mode failed OPEN when the user id was missing.** `undefined !== undefined`
+  let a user-less bot/integration message qualify as "mine"; now fails closed.
+
+### High — channel drift (`content.js`)
+
+- **A channel switch DURING a scan defeated the drift guard.** `activeChannel` is
+  reassigned only after an await, so a scan started in channel A that finished as the
+  user switched to B passed the "channel changed" check (it still saw A) and showed
+  A's results armed against B — dispatching a delete for B with A's timestamps, which
+  reported false "success" while A was left uncleaned. Results are now tagged with the
+  channel they were scanned in (`scanResultsChannelId`) and the guard also checks a
+  synchronously-updated `intendedChannelId`; `startDeletionProcess` refuses to dispatch
+  unless both still match the active channel.
+
+### Medium — lifecycle & robustness (`background.js`, `content.js`)
+
+- **Extension update stranded a running job + span the watchdog forever.** `onInstalled`
+  now force-pauses running jobs like `onStartup` (session storage — and the resume
+  gate — is cleared on update), so the job doesn't show "running" while never advancing.
+- **Attachment mode failed an item permanently on one file-op blip.** A transient
+  `files.info`/`files.delete` error now retries like any other transient error instead
+  of counting as an immediate permanent failure.
+- **A dropped scan response hung the UI on "Scanning…" forever.** Added a client-side
+  scan timeout that restores the UI and prompts a retry (an abandoned scan is read-only).
+- **Token-loss / session-invalidation discarded all progress.** Both fatal auth paths
+  now **pause** (preserving queue + progress) instead of deleting the job, matching the
+  "re-open to reconnect, then resume" guidance.
+- **Cancel/Close were fire-and-forget.** Both now check `chrome.runtime.lastError` and
+  tell the user to retry (rather than claiming the job stopped) if the message didn't
+  reach the worker.
+- **A stale/replaced job could destroy or resurrect a new one.** `executeQueue`'s
+  cancellation guard now compares job object identity (not mere key presence); the file
+  sub-loop re-checks before each destructive call; `handleRateLimitBackoff` no longer
+  re-persists a cancelled job.
+- **A black-holed request could pin the queue lock.** Added a `fetch` AbortController
+  timeout (surfaces as a retryable `network_error`).
+- **Wrong-workspace resolution.** `getActiveTeamInfo` now returns null (rather than
+  silently using the first workspace) when the URL names a team we have no token for.
+- **Non-numeric date bounds** are normalized to the open bound (was NaN → inconsistent
+  partial selection). `CIRCLE_CIRCUMFERENCE` uses the exact `2πr`. `popup.js` uses the
+  existing i18n key for its fallback workspace label.
+
+### Cross-browser — Firefox (`manifest.json`, new `manifest.firefox.json`)
+
+- **The extension was entirely non-functional on Firefox.** `manifest.json` advertised
+  Firefox (gecko, min 115) but declared a `service_worker` background — unsupported on
+  Firefox stable — with no `background.scripts`, so `shared-filters.js` never loaded and
+  every message handler threw. Split into two manifests: **`manifest.json` (Chromium,
+  `service_worker` + `importScripts`)** and **`manifest.firefox.json` (Firefox, event
+  page with `background.scripts: ["shared-filters.js", "background.js"]` + gecko)**. The
+  misleading in-code comments are corrected. The Firefox manifest also declares
+  `browser_specific_settings.gecko.data_collection_permissions: { required: ["none"] }`
+  (no data collected — required by AMO for new submissions).
+  **Packaging:** Chrome build → use `manifest.json`, exclude `manifest.firefox.json`.
+  Firefox (AMO) build → copy `manifest.firefox.json` to `manifest.json`, exclude the
+  Chrome `manifest.json`.
+
+`npm test` → **52/52** (5 new regression tests). Manifests validated: Chrome packs a
+valid `.crx` with no manifest error (`google-chrome --pack-extension`); `addons-linter`
+(Firefox/AMO) reports **0 errors** on the Firefox build (only benign notices that the
+data-collection key activates on Firefox 140+ while we still support 115+ ESR).
+
 ## Unreleased — Data-loss scope, workspace switching & scan completeness
 
 Fourth functional pass. Focused audit of the delete/keep decision, scan↔delete
