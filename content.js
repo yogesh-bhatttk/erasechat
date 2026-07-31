@@ -283,7 +283,7 @@ if (!window.slackCleanInitialized) {
           teamId: activeTeam.id,
           token: activeTeam.token
         }, () => {
-          const err = chrome.runtime.lastError;
+          void chrome.runtime.lastError; // suppress unchecked-error warning
           resolve();
         });
       });
@@ -350,8 +350,8 @@ if (!window.slackCleanInitialized) {
     async function loadUserCache() {
       if (!activeTeam) return;
       const cacheKey = `sc_user_cache_${activeTeam.id}`;
-      const TTL = 24 * 60 * 60 * 1000; // 24 hours
-      
+      const TTL = USER_CACHE_TTL_MS;
+
       try {
         const cached = await chrome.storage.local.get(cacheKey);
         if (cached && cached[cacheKey]) {
@@ -987,8 +987,8 @@ if (!window.slackCleanInitialized) {
       line.innerText = `[${new Date().toLocaleTimeString()}] ${prefixedMsg}`;
       ui.consoleLog.appendChild(line);
 
-      // Prune oldest lines if node count exceeds 200
-      while (ui.consoleLog.children.length > 200) {
+      // Prune oldest lines once the node count exceeds the cap
+      while (ui.consoleLog.children.length > CONSOLE_LOG_MAX_LINES) {
         ui.consoleLog.removeChild(ui.consoleLog.firstElementChild);
       }
 
@@ -1168,7 +1168,7 @@ if (!window.slackCleanInitialized) {
           lastUrl = window.location.href;
           handleUrlChange(oldUrl, lastUrl);
         }
-      }, 1000); // 1-second interval creates virtually 0% CPU consumption compared to MutationObserver subtree tracking
+      }, URL_POLL_INTERVAL_MS); // polling costs virtually 0% CPU next to MutationObserver subtree tracking
     }
 
     // Auto-pauses on channel switching drift detection to prevent accidental data destruction
@@ -1730,9 +1730,9 @@ if (!window.slackCleanInitialized) {
       container.innerHTML = "";
 
       let currentIdx = 0;
-      const chunkSize = 50;
+      const chunkSize = RENDER_CHUNK_SIZE;
 
-      // Render cards in requestAnimationFrame chunks of 50 to maintain 60 FPS
+      // Render cards in requestAnimationFrame chunks to maintain 60 FPS
       function renderChunk() {
         // A newer scan started — abandon this stale loop.
         if (gen !== renderGeneration) return;

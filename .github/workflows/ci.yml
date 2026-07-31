@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only token: this workflow only builds and tests, it never writes to the repo.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22 = current LTS. The floor is 20.19 (see package.json engines); the test
+          # runner's glob support and ESLint 10 both need a recent 20.x at minimum.
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (correctness rules)
+        run: npm run lint
+
+      - name: Unit + packaging tests
+        run: npm test
+
+      # --with-deps also installs xvfb on Ubuntu runners, which the headful step needs.
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # Browser extensions cannot be loaded by a headless browser, so the e2e specs
+      # launch a headful Chromium — which needs a virtual display on CI. Fall back to a
+      # direct run if xvfb is somehow unavailable, so a missing display utility surfaces
+      # as a real test failure rather than a confusing "command not found".
+      - name: End-to-end tests (loads the unpacked extension)
+        run: |
+          if command -v xvfb-run >/dev/null 2>&1; then
+            xvfb-run --auto-servernum npm run test:e2e
+          else
+            echo "::warning::xvfb-run not found; running e2e without a virtual display"
+            npm run test:e2e
+          fi
+
+      - name: Build both store packages
+        run: npm run build
+
+      # Catches manifest properties AMO rejects before a submission burns a review cycle.
+      - name: Validate Firefox package (addons-linter)
+        run: npm run validate:firefox
+
+      - name: Upload store packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: store-packages
+          path: dist/*.zip
+          if-no-files-found: error

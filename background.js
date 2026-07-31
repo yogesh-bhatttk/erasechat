@@ -14,6 +14,15 @@ if (typeof importScripts === "function") {
 
 const MAX_SCAN_PAGES = 20;
 const MAX_SCAN_RESULTS = 5000;
+// Per-thread reply pagination cap. conversations.replies is cursor-paginated with
+// no inherent bound, so a single pathological thread (tens of thousands of replies)
+// could otherwise spin API calls indefinitely inside the scan — burning the team's
+// rate limit and outliving the content script's own scan timeout, which leaves the
+// worker still paginating after the user has been told the scan failed. 10 pages ×
+// 200 replies covers any realistic thread; hitting the cap sets the same honest
+// "not everything was examined" flag the history page cap uses.
+const MAX_THREAD_PAGES = 10;
+const THREAD_PAGE_LIMIT = 200;
 const DEFAULT_THROTTLE_DELAY = 1000;
 const STORAGE_BATCH_INTERVAL = 10;
 // Transient (network/exception) errors on a single item are retried this many
@@ -135,14 +144,24 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   }
 });
 
-// Save critical state before service worker termination
-chrome.runtime.onSuspend.addListener(() => {
-  for (const [key, job] of Object.entries(activeJobs)) {
-    if (job.isRunning) {
-      saveJobState(key, job, true);
+// Save critical state before service worker termination.
+//
+// runtime.onSuspend is Chrome-only — Firefox has never implemented it. Reading
+// `.addListener` off an undefined event throws a TypeError at load time, which in
+// Firefox would abort this whole script BEFORE the onMessage router below is
+// registered, leaving the extension completely inert (no scans, no deletes, and a
+// popup that only ever reports "Setup Required"). Feature-detect instead of
+// assuming. Nothing is lost on Firefox: every state transition already persists
+// eagerly via saveJobState, so this listener is a best-effort extra flush.
+if (chrome.runtime.onSuspend && typeof chrome.runtime.onSuspend.addListener === "function") {
+  chrome.runtime.onSuspend.addListener(() => {
+    for (const [key, job] of Object.entries(activeJobs)) {
+      if (job.isRunning) {
+        saveJobState(key, job, true);
+      }
     }
-  }
-});
+  });
+}
 
 async function recoverAllJobs() {
   try {
@@ -626,6 +645,10 @@ async function runScanInBg(token, req) {
   const maxPages = MAX_SCAN_PAGES;
   let continueScan = true;
   let capped = false;
+  // Set when a thread was deeper than MAX_THREAD_PAGES, so replies in it went
+  // unexamined. Folded into `moreAvailable` below — the UI already warns honestly
+  // that older/deeper messages were NOT scanned.
+  let threadsTruncated = false;
 
   while (continueScan) {
     const res = await slackAPICallWithRetry(token, "conversations.history", {
@@ -670,11 +693,13 @@ async function runScanInBg(token, req) {
       if (includeThreads && msg.thread_ts && msg.thread_ts === msg.ts) {
         let threadCursor = "";
         let threadHasMore = true;
+        let threadPages = 0;
 
         while (threadHasMore) {
           const threadRes = await slackAPICallWithRetry(token, "conversations.replies", {
             channel: channelId,
             ts: msg.thread_ts,
+            limit: THREAD_PAGE_LIMIT,
             cursor: threadCursor
           });
 
@@ -706,7 +731,15 @@ async function runScanInBg(token, req) {
               }
             }
             threadCursor = threadRes.response_metadata?.next_cursor || "";
+            threadPages++;
             threadHasMore = !!threadCursor;
+            if (threadHasMore && threadPages >= MAX_THREAD_PAGES) {
+              // Deeper than we will page. Stop and remember that this thread was
+              // only partially examined, so the UI can say so rather than implying
+              // full coverage.
+              threadsTruncated = true;
+              threadHasMore = false;
+            }
           } else {
             break;
           }
@@ -721,9 +754,10 @@ async function runScanInBg(token, req) {
     }
   }
 
-  // moreAvailable === true means we stopped at the page cap while Slack still
-  // had older messages we never examined (honest truncation signal for the UI).
-  const moreAvailable = !!cursor && pageCount >= maxPages;
+  // moreAvailable === true means we stopped at a page cap while Slack still had
+  // messages we never examined — either older history (the history page cap) or
+  // deeper thread replies (MAX_THREAD_PAGES). Honest truncation signal for the UI.
+  const moreAvailable = (!!cursor && pageCount >= maxPages) || threadsTruncated;
   return { results, capped, moreAvailable };
 }
 

@@ -89,7 +89,11 @@ ships two manifests with identical everything else:
 | `content.css` | Dashboard styles (Shadow-DOM isolated) |
 | `_locales/en/messages.json` | i18n strings (`__MSG_*__` / `chrome.i18n`) |
 | `icons/`, `fonts/` | Assets |
-| `tests/` | `node --test` unit tests + Playwright e2e |
+| `tests/unit.test.js` | Filter/decision logic (`node --test`, zero-dependency) |
+| `tests/background.test.js` | Background worker loaded into a `vm` with a mocked `chrome` API: cross-browser load safety + the real scan engine against a stubbed Slack API |
+| `tests/packaging.test.js` | Release gate: manifest/version/permission/CSP/locale/build-asset invariants |
+| `tests/*.spec.js` | Playwright e2e (loads the unpacked extension) |
+| `eslint.config.mjs` | Correctness-only lint rules (`no-undef` first — no bundler catches a typo'd global here) |
 
 > Do **not** fork the logic in `shared-filters.js` into the content script — scanning and
 > the delete/keep decision are deliberately delegated to the background context so there
@@ -98,16 +102,31 @@ ships two manifests with identical everything else:
 ## Development
 
 ```bash
-npm install          # dev-only (Playwright for e2e)
-npm test             # unit tests (node --test, zero-dependency)
-npm run test:e2e     # Playwright end-to-end (requires browsers)
+npm install               # dev-only (ESLint + Playwright); the extension itself
+                          # has no runtime dependencies
+npm run lint              # correctness lint (must be 0 problems)
+npm test                  # unit + packaging tests (node --test, zero-dependency)
+npm run test:e2e          # Playwright e2e (needs: npx playwright install chromium)
+npm run verify            # the full release gate, in order:
+                          # lint -> test -> test:e2e -> build -> validate:firefox
 ```
+
+Browser extensions cannot be loaded by a headless browser, so the e2e specs launch a
+headful Chromium. On a machine with no display, run them under a virtual one:
+
+```bash
+xvfb-run --auto-servernum npm run test:e2e
+```
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same gate on every
+push and pull request and uploads both store packages as artifacts.
 
 ## Build / package for the stores
 
 ```bash
-npm run build        # produces dist/bulk-clean-for-slack-chrome-<version>.zip
-                     #      and dist/bulk-clean-for-slack-firefox-<version>.zip
+npm run build             # produces dist/bulk-clean-for-slack-chrome-<version>.zip
+                          #      and dist/bulk-clean-for-slack-firefox-<version>.zip
+npm run validate:firefox  # addons-linter on the Firefox zip (must be 0 errors)
 ```
 
 The build script assembles a clean package per target: the correct manifest, all runtime

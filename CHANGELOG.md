@@ -1,6 +1,136 @@
 # Changelog
 
-## Unreleased — Release prep: rename + store packaging
+## 1.0.0 — 2026-07-31
+
+First public release, targeting the Chrome Web Store and Firefox AMO.
+
+Bulk-deletes and cleans your own Slack messages in the conversation you have open, with
+filters (sender, date range, text/`/regex/`, attachments-only, thread replies), a
+scan-and-preview step before anything is destroyed, and a resumable background delete
+queue that survives service-worker termination.
+
+Because the tool permanently deletes user data, the safety posture is the headline:
+scan/delete run off one shared decision function (`shared-filters.js`), the queue is
+pinned to the channel it was built against, navigating away auto-pauses, deletes over 100
+messages require typing `DELETE`, and a ReDoS guard keeps a user-supplied regex from
+freezing the worker. The Slack token lives only in `chrome.storage.session` and is never
+written to disk. No data leaves the browser.
+
+Validated at release: lint clean · 73/73 unit + packaging tests · 7/7 Playwright e2e ·
+both store packages build · `addons-linter@10` 0 errors on the Firefox zip · Chrome packs
+a valid `.crx`.
+
+> Not yet verified at release: the live-Slack `credentials: "include"` cookie flow cannot
+> be exercised offline. Confirm a real scan + small delete on a throwaway workspace in both
+> browsers before publishing — see `store-assets/SUBMISSION_CHECKLIST.md`.
+
+The sections below are the development passes that produced 1.0.0, newest first. All of
+them ship in this release.
+
+### Production-readiness pass: cross-browser load safety, store gates, CI
+
+Closed the two defects that would each have blocked or broken a release, bounded the
+last unbounded loop in the scan engine, and put every release gate behind `npm` scripts
+plus CI so the same class of problem fails locally instead of in a review queue.
+
+#### Critical — Firefox build was inert (`background.js`)
+
+- **`chrome.runtime.onSuspend` is Chrome-only and was called unguarded.** Firefox has
+  never implemented it, so `chrome.runtime.onSuspend.addListener(...)` threw a
+  `TypeError` at load — aborting `background.js` *before* the `chrome.runtime.onMessage`
+  router was registered. Every scan, delete, pause and resume goes through that router,
+  so the Firefox extension installed cleanly and then did nothing at all: the popup
+  could only ever report "Setup Required". Now feature-detected. Nothing is lost on
+  Firefox — every state transition already persists eagerly through `saveJobState()`,
+  so the listener was only ever a best-effort extra flush.
+
+#### Store validation — pinned the AMO validator, and why the manifest is unchanged
+
+- **`npm run validate:firefox` now pins `addons-linter@^10`** (the version AMO runs).
+  This matters more than it looks: older `addons-linter@7` treats
+  `browser_specific_settings.gecko.data_collection_permissions` as a **hard error**
+  (`DATA_COLLECTION_PERMISSIONS_PROP_RESERVED`), while v10 requires that exact key and
+  warns when it is **missing** (`MISSING_DATA_COLLECTION_PERMISSIONS`). An unpinned
+  validator therefore gives opposite verdicts on the same zip, and following the wrong one
+  removes a disclosure AMO now expects from new listings. Verified against the real
+  packages: with the key present, v10 reports **0 errors**.
+- **`strict_min_version` stays at `115.0`** and the disclosure stays in the manifest. That
+  combination emits two `KEY_FIREFOX_*_UNSUPPORTED_BY_MIN_VERSION` warnings, which say
+  only that the key is inert before Firefox 140 / Firefox-for-Android 142 — older Firefox
+  ignores unknown manifest keys. The alternative (raising the floor to 140) would drop
+  Firefox 115–139 users to silence a cosmetic warning, and omitting the key entirely is
+  the riskier warning for a new submission. Both trade-offs are now documented in
+  `store-assets/SUBMISSION_CHECKLIST.md` rather than left to be rediscovered.
+- `tests/packaging.test.js` pins the disclosure to `{"required": ["none"]}`, so the
+  manifest can no longer drift away from the "collects nothing" promise in
+  `PRIVACY_POLICY.md`, `privacy.html` and both store listings.
+
+#### Medium — unbounded thread pagination in the scan engine (`background.js`)
+
+- **`conversations.replies` paged with no cap.** The history sweep was bounded by
+  `MAX_SCAN_PAGES`, but the per-thread reply loop followed `next_cursor` indefinitely.
+  One pathological thread could spin API calls without limit — burning the workspace's
+  rate limit and continuing long after the content script's own 120 s scan timeout had
+  already told the user the scan failed. Added `MAX_THREAD_PAGES = 10` ×
+  `THREAD_PAGE_LIMIT = 200` (2,000 replies per thread, far above any real thread), and
+  hitting the cap now sets the existing `moreAvailable` flag, so the UI reports the
+  partial coverage honestly instead of implying the thread was fully examined.
+
+#### Low — code hygiene (`content.js`)
+
+- Four named constants were declared and then ignored in favor of duplicated inline
+  literals (`CONSOLE_LOG_MAX_LINES`, `RENDER_CHUNK_SIZE`, `USER_CACHE_TTL_MS`,
+  `URL_POLL_INTERVAL_MS`) — the pattern where tuning the constant silently changes
+  nothing. Now actually used.
+- Normalized one `chrome.runtime.lastError` read to the `void` idiom used elsewhere.
+
+#### Tests — 52 → 73, and they were verified to fail without the fixes
+
+- **`tests/background.test.js` (new).** Loads `shared-filters.js` + `background.js` into
+  a `vm` context with a mocked `chrome` API, which makes two previously-untestable things
+  testable: (a) **load safety under a Firefox-shaped API surface** — the regression above
+  is now caught by a test rather than by a user, and (b) the **real scan engine**
+  (`runScanInBg`) driven against a stubbed Slack API. Covers the thread-page cap, the
+  history-page cap, truncation reporting, out-of-window thread replies never being
+  queued, `thread_broadcast` deduplication, unset-param omission, and 429/`Retry-After`
+  handling.
+- **`tests/packaging.test.js` (new).** The checks that otherwise only fail in a store
+  review queue: the AMO data-collection disclosure present and set to "none", version
+  parity across both manifests and `package.json`, correct per-browser background wiring
+  and `shared-filters.js` load path, every manifest-referenced file present on disk *and*
+  shipped by `build.sh`, all `__MSG_` placeholders resolvable, minimal permissions,
+  Slack-only host/content-script/resource matches, remote-code-free CSP, and no token
+  written to `storage.local`.
+- Both new suites were validated by reverting each fix and confirming the corresponding
+  test fails, so they are regression guards rather than decoration.
+- `npm test` now runs **all** `tests/*.test.js` (it previously ran only `unit.test.js`,
+  so new suites would have been silently skipped).
+
+#### Tooling
+
+- **Lint gate:** `eslint.config.mjs` + `npm run lint`, scoped to correctness rules only
+  (`no-undef` above all — there is no bundler or type checker to catch a typo'd global in
+  extension code). Style is deliberately not enforced. Currently **clean, zero warnings**.
+- **`npm run verify`** runs the whole release gate: lint → unit/packaging → e2e → build →
+  `addons-linter`. **`npm run validate:firefox`** runs the AMO validator alone.
+- **CI** (`.github/workflows/ci.yml`) runs every gate on push/PR (e2e under `xvfb` since
+  extensions cannot load headless) and uploads both store zips as artifacts.
+- Added `engines.node >= 20.19.0` (the floor ESLint 10 and the test runner's glob support
+  actually require); dev dependencies report **0 vulnerabilities**. The shipped extension
+  still has **no runtime dependencies**.
+
+#### Validation
+
+- `npm run lint` clean · **73/73** unit + packaging tests green · **7/7** Playwright e2e
+  green (including loading the unpacked extension) · both packages build ·
+  `addons-linter@10` reports **0 errors** on the Firefox zip (2 expected
+  `KEY_FIREFOX_*_UNSUPPORTED_BY_MIN_VERSION` warnings, explained above).
+- ⚠️ Still outstanding and **unchanged** by this pass: the `credentials: "include"`
+  cookie flow cannot be exercised offline, so a real scan + small delete on a live
+  throwaway Slack workspace remains a hard pre-submission blocker in both browsers. See
+  `store-assets/SUBMISSION_CHECKLIST.md`.
+
+### Release prep: rename + store packaging
 
 Prepared the extension for Chrome Web Store and Firefox AMO submission.
 
@@ -26,11 +156,11 @@ Prepared the extension for Chrome Web Store and Firefox AMO submission.
   branding), host the privacy policy at a public URL, and verify a real delete on live
   Slack before submitting. See `store-assets/SUBMISSION_CHECKLIST.md`.
 
-## Unreleased — Fifth functional pass (ReDoS, over-select, drift, Firefox, lifecycle)
+### Fifth functional pass (ReDoS, over-select, drift, Firefox, lifecycle)
 
 Fifth audit pass (four parallel deep-traces + runnable repros). Fixes below.
 
-### High — filter safety (`shared-filters.js`)
+#### High — filter safety (`shared-filters.js`)
 
 - **ReDoS guard defeated — a user regex could freeze the whole scan.** The last-line
   quantifier-COUNT cap (`MAX_QUANTIFIERS = 10`) let sequential unbounded quantifiers
@@ -54,7 +184,7 @@ Fifth audit pass (four parallel deep-traces + runnable repros). Fixes below.
 - **"me" mode failed OPEN when the user id was missing.** `undefined !== undefined`
   let a user-less bot/integration message qualify as "mine"; now fails closed.
 
-### High — channel drift (`content.js`)
+#### High — channel drift (`content.js`)
 
 - **A channel switch DURING a scan defeated the drift guard.** `activeChannel` is
   reassigned only after an await, so a scan started in channel A that finished as the
@@ -65,7 +195,7 @@ Fifth audit pass (four parallel deep-traces + runnable repros). Fixes below.
   synchronously-updated `intendedChannelId`; `startDeletionProcess` refuses to dispatch
   unless both still match the active channel.
 
-### Medium — lifecycle & robustness (`background.js`, `content.js`)
+#### Medium — lifecycle & robustness (`background.js`, `content.js`)
 
 - **Extension update stranded a running job + span the watchdog forever.** `onInstalled`
   now force-pauses running jobs like `onStartup` (session storage — and the resume
@@ -93,7 +223,7 @@ Fifth audit pass (four parallel deep-traces + runnable repros). Fixes below.
   partial selection). `CIRCLE_CIRCUMFERENCE` uses the exact `2πr`. `popup.js` uses the
   existing i18n key for its fallback workspace label.
 
-### Cross-browser — Firefox (`manifest.json`, new `manifest.firefox.json`)
+#### Cross-browser — Firefox (`manifest.json`, new `manifest.firefox.json`)
 
 - **The extension was entirely non-functional on Firefox.** `manifest.json` advertised
   Firefox (gecko, min 115) but declared a `service_worker` background — unsupported on
@@ -113,12 +243,12 @@ valid `.crx` with no manifest error (`google-chrome --pack-extension`); `addons-
 (Firefox/AMO) reports **0 errors** on the Firefox build (only benign notices that the
 data-collection key activates on Firefox 140+ while we still support 115+ ESR).
 
-## Unreleased — Data-loss scope, workspace switching & scan completeness
+### Data-loss scope, workspace switching & scan completeness
 
 Fourth functional pass. Focused audit of the delete/keep decision, scan↔delete
 consistency, and job lifecycle, plus the fixes below.
 
-### High — data-loss scope (`shared-filters.js`, `background.js`)
+#### High — data-loss scope (`shared-filters.js`, `background.js`)
 
 - **A clean could delete files that were shared in OTHER conversations, breaking
   the "current chat scope" promise.** `files.delete` purges a file from Slack
@@ -130,7 +260,7 @@ consistency, and job lifecycle, plus the fixes below.
   unverifiable share count is treated conservatively — never hard-deleted. New pure
   `fileShareCount()` in `shared-filters.js`, covered by unit tests.
 
-### Medium — correctness (`background.js`, `content.js`)
+#### Medium — correctness (`background.js`, `content.js`)
 
 - **Switching workspaces in the same tab left the dashboard operating against the
   previous workspace's credentials.** Slack's unified client changes the team in
@@ -155,7 +285,7 @@ consistency, and job lifecycle, plus the fixes below.
   (recoverable)** instead of looping. A shared 429 handler also keeps the dashboard
   countdown in sync with the actual backoff (previously off by 1s). _`background.js`._
 
-### Low — UI / copy (`content.js`, `_locales/en/messages.json`)
+#### Low — UI / copy (`content.js`, `_locales/en/messages.json`)
 
 - **"Only Delete Attachments" copy oversold text preservation.** A caption-less
   attachment/blocks-only message is fully deleted (nothing to preserve); the toggle
@@ -168,7 +298,7 @@ consistency, and job lifecycle, plus the fixes below.
 `npm test` → **47/47** (5 new `fileShareCount` tests). All four JS files
 syntax-checked; `messages.json` valid.
 
-## Unreleased — Deletion completeness & internationalization
+### Deletion completeness & internationalization
 
 Follow-up to the deep audit, expanding what a clean actually removes and making
 the UI translatable.
@@ -199,12 +329,12 @@ the UI translatable.
 `npm test` → **42/42**. All JS syntax-checked; `messages.json` valid; every
 referenced i18n key resolves.
 
-## Unreleased — Deep audit fixes (engine safety, resumption & UI state)
+### Deep audit fixes (engine safety, resumption & UI state)
 
 Third functional pass. Two independent code reviews of the delete engine and the
 content-script UI, cross-checked against the code and unit tests.
 
-### Critical / High — deletion engine (`background.js`)
+#### Critical / High — deletion engine (`background.js`)
 
 - **PAUSE / RESUME / CANCEL silently no-op'd after a service-worker idle-death,
   so a running job could not be stopped and would keep deleting.** These handlers
@@ -237,14 +367,14 @@ content-script UI, cross-checked against the code and unit tests.
   and the "finished" alert never fired. The job now finalizes immediately after
   the last item.
 
-### High — ReDoS (`shared-filters.js`)
+#### High — ReDoS (`shared-filters.js`)
 
 - **`isSafeRegex` admitted catastrophic quantifier chains** (`a?a?…a?aaaa`,
   `a*a*…b`) that have no groups/adjacent quantifiers and slipped past every
   structural rule — hanging the single-threaded service worker. Added a
   quantifier-count cap (escaped metacharacters excluded). New unit tests cover it.
 
-### Medium — content-script UI/state (`content.js`)
+#### Medium — content-script UI/state (`content.js`)
 
 - **Custom date range with a blank bound silently scanned all history.** A missing
   start/end date fell back to `oldest=0`/`latest=now`; the confirm dialog only
@@ -271,7 +401,7 @@ content-script UI, cross-checked against the code and unit tests.
 
 `npm test` → **42/42** (added 2 ReDoS regression tests). All JS syntax-checked.
 
-## Unreleased — Functional audit fixes
+### Functional audit fixes
 
 Data-loss & correctness pass across the scan/delete engine and dashboard.
 
@@ -310,7 +440,7 @@ Data-loss & correctness pass across the scan/delete engine and dashboard.
   omitted instead of being sent as the string `"undefined"`; thread-reply date bounds
   are coerced to numbers with safe defaults. _`content.js`, `background.js`._
 
-## Unreleased — Bug fixes
+### Bug fixes
 
 - **Extension failed to load in Chromium: "'background.scripts' requires manifest
   version of 2 or lower."** MV3 Chromium only accepts `background.service_worker`;
@@ -362,7 +492,7 @@ Data-loss & correctness pass across the scan/delete engine and dashboard.
   built from stale results would run against the newly-selected channel.
   _`content.js` (`initDashboard`, `handleUrlChange`, new `switchTargetChannel`/`resetScanResultsUI`)._
 
-## Unreleased — Re-audit remediation (round 2)
+### Re-audit remediation (round 2)
 
 Fixes for issues found by the second audit, including regressions from round 1.
 
@@ -391,11 +521,11 @@ Fixes for issues found by the second audit, including regressions from round 1.
 
 `npm test` → **39/39**. All JS syntax-checked; `manifest.json`/`package.json` valid.
 
-## Unreleased — Audit remediation
+### Audit remediation
 
 Fixes from the production audit, in priority order. Severity tags map to the audit.
 
-### Critical
+#### Critical
 
 - **C1 — Slack API authentication.** Added `credentials: "include"` to the background
   `fetch` so the first-party `slack.com` `d` session cookie (required alongside the
@@ -432,7 +562,7 @@ Fixes from the production audit, in priority order. Severity tags map to the aud
   restart (the user still confirms). _`background.js` (`markRunning`,
   `isAutoResumeAllowed`)._
 
-### High
+#### High
 
 - **H1 — Honest scan truncation.** The scan reports a `moreAvailable` signal and
   warns "older messages were NOT examined" when the page-depth limit truncates
@@ -450,7 +580,7 @@ Fixes from the production audit, in priority order. Severity tags map to the aud
 - **H5 — CSV formula injection.** Export prefixes cells beginning with `= + - @`
   (and control chars) with `'`. _`content.js` (CSV export)._
 
-### Medium / Low
+#### Medium / Low
 
 - **M1** — `renderScanResults` no longer throws on messages with no `user`.
 - **M4** — moved every injected inline `style=` attribute out of the content-script
@@ -475,7 +605,7 @@ Fixes from the production audit, in priority order. Severity tags map to the aud
   readiness poll (`pollWorkspaceInfo`), fixing flaky connects on slow machines.
   _`popup.js`._
 
-### C4 — partial (transparency)
+#### C4 — partial (transparency)
 
 The extension still reads Slack's private `xoxc-` client token from `localStorage`;
 that mechanism is unchanged and remains a **Terms-of-Service / store-policy decision**
@@ -484,13 +614,13 @@ first-run onboarding now clearly states the tool is independent/not affiliated w
 Slack, uses your existing login session, and that deletions are permanent.
 _`popup.html`._
 
-### Tests
+#### Tests
 
 - Added `tests/onboarding.spec.js` (Playwright E2E) covering the first-run
   onboarding show → dismiss → stays-dismissed flow and the C4 disclosure text.
 - Added 5 `decideItemAction` unit tests. `npm test` → **39/39** dependency-free.
 
-### Packaging note
+#### Packaging note
 
 Exclude `tests/`, `package.json`, `playwright.config.js`, `CHANGELOG.md`, and
 `.agents/` from the store submission zip.
