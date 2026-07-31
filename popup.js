@@ -22,6 +22,38 @@ function localizeI18n(root) {
   } catch (e) { /* i18n unavailable */ }
 }
 
+// The host permissions the manifest declares. Declaring them is not the same as
+// HAVING them: Chrome lets a user set an extension's site access to "On click" or
+// "On specific sites", and Firefox MV3 can leave host permissions awaiting opt-in.
+// In that state nothing works — the content script never auto-injects and the
+// chrome.scripting fallback is rejected too — so the popup checks before it
+// promises the user anything.
+const SLACK_ORIGINS = ["https://*.slack.com/*", "https://slack.com/*"];
+
+// Callback form on purpose: it is the one shape both Chrome and Firefox support on
+// the `chrome.*` namespace, matching the rest of this codebase.
+//
+// Fails OPEN (resolves true) if the check itself cannot run. This is a diagnostic,
+// not a security boundary — the real enforcement is the browser's own permission
+// model — so a browser that cannot answer must never be shown a blocking wall it
+// has no way to dismiss.
+function hasSlackAccess() {
+  return new Promise((resolve) => {
+    try {
+      if (!chrome.permissions || typeof chrome.permissions.contains !== "function") {
+        resolve(true);
+        return;
+      }
+      chrome.permissions.contains({ origins: SLACK_ORIGINS }, (granted) => {
+        void chrome.runtime.lastError;
+        resolve(granted !== false);
+      });
+    } catch (e) {
+      resolve(true);
+    }
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   localizeI18n(document);
 
@@ -32,6 +64,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  hasSlackAccess().then((granted) => {
+    if (!granted) {
+      showPermissionRequiredState();
+      return;
+    }
+    detectSlackTab();
+  });
+});
+
+function detectSlackTab() {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const tab = tabs[0];
     if (!tab || !tab.url) {
@@ -45,7 +87,62 @@ document.addEventListener("DOMContentLoaded", () => {
       showOfflineState();
     }
   });
-});
+}
+
+// Show only the named state container, so the three states can never overlap.
+function showOnlyState(id) {
+  ["slack-active-state", "slack-inactive-state", "permission-required-state"].forEach((stateId) => {
+    const el = document.getElementById(stateId);
+    if (el) el.classList.toggle("hidden", stateId !== id);
+  });
+}
+
+function showPermissionRequiredState() {
+  showOnlyState("permission-required-state");
+
+  const grantBtn = document.getElementById("btn-grant-access");
+  const showManualHint = () => {
+    const hint = document.getElementById("grant-manual-hint");
+    if (hint) hint.classList.remove("hidden");
+  };
+
+  // permissions.request() is not universally implemented — Firefox for Android has no
+  // it at all (addons-linter flags exactly this as ANDROID_INCOMPATIBLE_API). A button
+  // that cannot possibly work is worse than no button, so where the API is missing go
+  // straight to the manual steps instead of offering a dead control.
+  const canRequest = !!(chrome.permissions && typeof chrome.permissions.request === "function");
+  if (!grantBtn || !canRequest) {
+    if (grantBtn) grantBtn.classList.add("hidden");
+    showManualHint();
+    return;
+  }
+
+  // Clone to strip listeners, matching the pattern used by the other state handlers.
+  const freshBtn = grantBtn.cloneNode(true);
+  freshBtn.classList.remove("hidden");
+  grantBtn.parentNode.replaceChild(freshBtn, grantBtn);
+
+  freshBtn.addEventListener("click", () => {
+    // permissions.request() must be called from a user gesture, which this click is.
+    // It can still legitimately fail: the user dismisses the browser's prompt, or the
+    // browser declines to prompt for an already-declared REQUIRED host permission
+    // (Chrome's own runtime-host-permission model reserves that for its UI). Any of
+    // those lands on the manual-steps hint rather than a dead end.
+    try {
+      chrome.permissions.request({ origins: SLACK_ORIGINS }, (granted) => {
+        void chrome.runtime.lastError;
+        if (granted) {
+          // Access is live now, so re-run normal detection in place.
+          detectSlackTab();
+        } else {
+          showManualHint();
+        }
+      });
+    } catch (e) {
+      showManualHint();
+    }
+  });
+}
 
 // True for the Slack web client on any slack.com subdomain (app.slack.com or a
 // workspace subdomain like acme.slack.com). Rejects spoofs and the bare domain.
@@ -58,8 +155,7 @@ function isSlackClientTab(url) {
 }
 
 function showActiveState(tabId) {
-  document.getElementById("slack-inactive-state").classList.add("hidden");
-  document.getElementById("slack-active-state").classList.remove("hidden");
+  showOnlyState("slack-active-state");
 
   const workspaceTitle = document.getElementById("workspace-name");
   const launchBtn = document.getElementById("btn-launch");
@@ -75,9 +171,19 @@ function showActiveState(tabId) {
         files: ["content.js"]
       }, () => {
         if (chrome.runtime.lastError) {
-          workspaceTitle.innerText = t("popupSetupRequired", "Setup Required");
-          const descEl = document.querySelector(".workspace-info .desc");
-          if (descEl) descEl.innerText = t("popupSetupRequiredDesc", "Please reload the Slack page to activate the extension.");
+          // Injection was refused. By far the most common cause is that site access
+          // to slack.com is not actually granted — in which case "reload the page"
+          // is wrong advice that leaves the user stuck forever. Re-check, and route
+          // to the grant flow when that is the real problem.
+          hasSlackAccess().then((granted) => {
+            if (!granted) {
+              showPermissionRequiredState();
+              return;
+            }
+            workspaceTitle.innerText = t("popupSetupRequired", "Setup Required");
+            const descEl = document.querySelector(".workspace-info .desc");
+            if (descEl) descEl.innerText = t("popupSetupRequiredDesc", "Please reload the Slack page to activate the extension.");
+          });
           return;
         }
         
@@ -132,8 +238,7 @@ function setupLaunchButton(tabId, launchBtn) {
 }
 
 function showOfflineState() {
-  document.getElementById("slack-active-state").classList.add("hidden");
-  document.getElementById("slack-inactive-state").classList.remove("hidden");
+  showOnlyState("slack-inactive-state");
 
   const gotoBtn = document.getElementById("btn-goto-slack");
   // Clone to prevent duplicate listeners if showOfflineState is called multiple times

@@ -206,6 +206,17 @@ body {
   line-height: 1.45;
 }
 
+/* Manual fallback shown when the browser will not grant site access from the popup
+   (Chrome reserves that for its own UI; Firefox for Android has no permissions.request
+   at all). Sits outside .redirect-info, so it needs its own type styles. */
+#grant-manual-hint {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
 .redirect-info h3 {
   font-size: 15px;
   font-weight: 700;

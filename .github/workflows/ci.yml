@@ -7,7 +7,8 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Read-only token: this workflow only builds and tests, it never writes to the repo.
+# Read-only by default. The release job below opts itself up to contents:write, so the
+# build-and-test path can never write to the repo even if it is compromised.
 permissions:
   contents: read
 
@@ -65,3 +66,53 @@ jobs:
           name: store-packages
           path: dist/*.zip
           if-no-files-found: error
+
+  # Publishing step: turns a `v*` tag into a GitHub Release carrying the exact zips
+  # that just passed the gate above. It reuses the verified artifact rather than
+  # rebuilding, so what is published is bit-for-bit what was tested.
+  release:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # A tag that disagrees with the manifests would publish zips whose internal
+      # version does not match the release they are attached to — and the stores
+      # reject a re-upload of an already-used version, so this is expensive to undo.
+      # npm test already pins the three version fields to each other; this pins the
+      # tag to them.
+      - name: Verify the tag matches the packaged version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          manifest_version="$(node -p "require('./manifest.json').version")"
+          if [ "$tag_version" != "$manifest_version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} implies version ${tag_version}, but manifest.json says ${manifest_version}. Run 'npm run version:set ${tag_version}' and re-tag."
+            exit 1
+          fi
+          echo "Tag and manifest agree on v${manifest_version}."
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: store-packages
+          path: dist
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -1sh dist/*.zip
+          # --verify-tag refuses to invent a tag if the ref somehow does not exist.
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --verify-tag \
+            --title "Bulk Clean for Slack $GITHUB_REF_NAME" \
+            --notes "Store packages for \`$GITHUB_REF_NAME\`, built from this tag after the full gate passed (lint, unit + packaging tests, Playwright e2e, both builds, addons-linter).
+
+          - \`bulk-clean-for-slack-chrome-*.zip\` — Chrome Web Store (MV3 service worker)
+          - \`bulk-clean-for-slack-firefox-*.zip\` — Firefox AMO (MV3 event page)
+
+          See [CHANGELOG.md](CHANGELOG.md) for what changed, and \`store-assets/SUBMISSION_CHECKLIST.md\` for the submission steps."

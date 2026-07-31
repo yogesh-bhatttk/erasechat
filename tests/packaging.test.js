@@ -116,6 +116,40 @@ test("every __MSG_ placeholder resolves to a locale key", () => {
   }
 });
 
+test("every data-i18n key in the UI resolves to a locale key", () => {
+  // The manifest's __MSG_ placeholders are covered above, but the popup and the
+  // injected dashboard localize at RUNTIME through data-i18n attributes, which no
+  // manifest check can see. A typo'd or renamed key there is invisible until a user
+  // on a localized build sees the raw English fallback (or, for attributes, nothing
+  // at all). Covers popup.html and the dashboard markup inside content.js alike.
+  const sources = {
+    "popup.html": fs.readFileSync(path.join(ROOT, "popup.html"), "utf8"),
+    "content.js": fs.readFileSync(path.join(ROOT, "content.js"), "utf8"),
+    "privacy.html": fs.readFileSync(path.join(ROOT, "privacy.html"), "utf8")
+  };
+
+  let checked = 0;
+  for (const [name, src] of Object.entries(sources)) {
+    for (const m of src.matchAll(/data-i18n(?:-ph|-title|-aria)?=["']([A-Za-z0-9_]+)["']/g)) {
+      assert.ok(messages[m[1]], `${name} references undefined locale key: ${m[1]}`);
+      checked++;
+    }
+  }
+  assert.ok(checked > 0, "expected to find data-i18n attributes to verify");
+});
+
+test("locale keys used via the t() fallback helper exist too", () => {
+  // t("key", "English fallback") is the JS-side counterpart to data-i18n. A missing
+  // key here degrades silently to the fallback, so it never surfaces as a bug in the
+  // default locale — only in translated builds.
+  for (const name of ["popup.js", "content.js"]) {
+    const src = fs.readFileSync(path.join(ROOT, name), "utf8");
+    for (const m of src.matchAll(/\bt\(\s*["']([A-Za-z0-9_]+)["']/g)) {
+      assert.ok(messages[m[1]], `${name} calls t() with an undefined locale key: ${m[1]}`);
+    }
+  }
+});
+
 test("locale file is well formed", () => {
   for (const [key, entry] of Object.entries(messages)) {
     assert.strictEqual(typeof entry, "object", `${key} must be an object`);
@@ -153,6 +187,57 @@ test("extension-page CSP blocks remote code", () => {
     assert.match(csp, /script-src 'self'/);
     assert.match(csp, /object-src 'none'/);
     assert.ok(!/unsafe-eval|unsafe-inline|https?:/.test(csp), `CSP permits remote or unsafe code: ${csp}`);
+  }
+});
+
+test("the release job cannot publish untested or mis-tagged code", () => {
+  // Publishing is the one irreversible step in this repo: both stores refuse a version
+  // number that has already been uploaded, so a release built from unverified code, or
+  // carrying zips whose internal version disagrees with the tag, costs a whole version
+  // to undo. These are the three properties that make that impossible by construction.
+  const ci = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
+
+  const releaseJob = ci.split(/^  release:$/m)[1];
+  assert.ok(releaseJob, "ci.yml must define a `release` job");
+
+  // 1. It runs only after the full gate passed — never in parallel with it.
+  assert.match(releaseJob, /needs:\s*verify/,
+    "the release job must depend on `verify`, so it cannot publish untested code");
+
+  // 2. It runs only for a version tag, never for an ordinary push or PR.
+  assert.match(releaseJob, /if:\s*startsWith\(github\.ref,\s*'refs\/tags\/v'\)/,
+    "the release job must be gated on a v* tag");
+
+  // 3. It refuses a tag that disagrees with the packaged version.
+  assert.match(releaseJob, /manifest_version/,
+    "the release job must compare the tag against the manifest version");
+
+  // Write access is scoped to the release job alone; the build/test path stays read-only
+  // even though it is the job that executes third-party code (npm deps, browsers).
+  const header = ci.split(/^jobs:$/m)[0];
+  assert.match(header, /permissions:\s*\n\s*contents:\s*read/,
+    "workflow-level token must be read-only");
+  assert.match(releaseJob, /permissions:\s*\n\s*contents:\s*write/,
+    "only the release job may escalate to contents: write");
+});
+
+test("the version-bump path referenced by the release guard actually exists", () => {
+  // The release guard tells a failing build to run `npm run version:set <v>`. That
+  // advice has to be real, or the operator is stuck mid-release with a broken tag.
+  assert.ok(fs.existsSync(path.join(ROOT, "scripts/set-version.sh")),
+    "scripts/set-version.sh is missing");
+  assert.match(pkg.scripts["version:set"] || "", /set-version\.sh/,
+    "package.json must expose the bump script as `version:set`");
+
+  const ci = fs.readFileSync(path.join(ROOT, ".github/workflows/ci.yml"), "utf8");
+  assert.match(ci, /npm run version:set/,
+    "the release guard should point at the script that fixes the problem");
+
+  // It must rewrite every file the version-drift test pins, or a bump would pass here
+  // and then fail the gate.
+  const script = fs.readFileSync(path.join(ROOT, "scripts/set-version.sh"), "utf8");
+  for (const file of ["manifest.json", "manifest.firefox.json", "package.json"]) {
+    assert.ok(script.includes(file), `set-version.sh does not update ${file}`);
   }
 });
 

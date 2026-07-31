@@ -16,7 +16,7 @@ messages require typing `DELETE`, and a ReDoS guard keeps a user-supplied regex 
 freezing the worker. The Slack token lives only in `chrome.storage.session` and is never
 written to disk. No data leaves the browser.
 
-Validated at release: lint clean · 73/73 unit + packaging tests · 7/7 Playwright e2e ·
+Validated at release: lint clean · 81/81 unit + packaging tests · 12/12 Playwright e2e ·
 both store packages build · `addons-linter@10` 0 errors on the Firefox zip · Chrome packs
 a valid `.crx`.
 
@@ -26,6 +26,96 @@ a valid `.crx`.
 
 The sections below are the development passes that produced 1.0.0, newest first. All of
 them ship in this release.
+
+### Production-readiness pass: restricted site access, scan pile-up, release plumbing
+
+Three findings from reviewing the shipping build as a product rather than as code: one
+state where the extension appeared installed but could do nothing and said the wrong
+thing about it, one way a user could unknowingly double their own rate-limit pressure,
+and the irreversible step (publishing) having no guard rails.
+
+#### The extension could be installed, inert, and give wrong advice (`popup.js`, `popup.html`)
+
+Declaring a host permission is not the same as having it. Chrome lets a user set an
+extension's *Site access* to "On click" or "On specific sites" — a setting a
+delete-my-messages tool invites — and Firefox MV3 can leave host permissions awaiting
+opt-in. In that state the content script never auto-injects, and the
+`chrome.scripting.executeScript` fallback is refused too.
+
+The popup handled that failure by showing **"Setup Required — Please reload the Slack
+page"**, which never fixes it: reloading cannot grant a permission. The user is told to
+do the one thing guaranteed not to work, with no mention of the actual cause.
+
+- The popup now checks `chrome.permissions.contains()` before it promises anything, and
+  a refused injection re-checks rather than assuming a stale content script.
+- Not-granted routes to a third state that names the cause and offers
+  `chrome.permissions.request()` from the click (a real user gesture). If the browser
+  declines to prompt — Chrome reserves that for its own UI on *required* host
+  permissions — the manual "allow site access" steps appear instead of a dead end.
+- `permissions.request` does not exist at all on Firefox for Android, so it is
+  feature-detected: where it is missing the button is hidden and the manual steps show
+  immediately, rather than offering a control that cannot work. This is the source of
+  the two new (expected, documented) `ANDROID_INCOMPATIBLE_API` linter warnings.
+- Detection deliberately fails **open**. It is a diagnostic, not a security boundary —
+  the browser's permission model is the actual enforcement — so a browser that cannot
+  answer the question must never be shown a wall it has no way to dismiss.
+
+#### A retried scan doubled the API load that made it slow (`background.js`, `content.js`)
+
+A scan is read-only but by far the most API-expensive operation here: up to 20 history
+pages plus a paginated `conversations.replies` sweep per thread, all drawing on one
+workspace rate limit. The dashboard gives up after 2 minutes and told the user to *"run
+the scan again"* — while the worker kept paginating. On a heavily throttled channel (the
+only case slow enough to hit that timeout) the retry started a second full sweep
+concurrently, competing with the first for the very rate limit that caused the timeout.
+
+- `RUN_SCAN` now refuses a duplicate sweep of a conversation already being scanned,
+  answering `scan_in_progress` without issuing a single API call. The guard is
+  per-conversation, so unrelated channels still scan concurrently.
+- It is released **before** the response is sent, and on the failure path as well as the
+  success path — a leaked guard would be worse than no guard, making that conversation
+  permanently unscannable until the worker was torn down.
+- The timeout copy no longer claims the scan stopped, because the timeout does not know
+  that. It says what is actually true (suspended, or still working) and that re-scanning
+  is safe: a scan still running now reports itself instead of piling on.
+- Scan failures other than truncation used to log to a console panel the user may not
+  have open; they now surface as an alert, and include `error` when there is no `message`
+  (previously such failures logged "Unknown error").
+
+#### Publishing had no guard rails (`.github/workflows/ci.yml`, `scripts/set-version.sh`)
+
+Both stores refuse a version number that has already been uploaded, so a bad release
+costs a whole version to undo — yet releasing was entirely manual, with the version
+living in three files that had to be edited in lockstep.
+
+- A `v*` tag now publishes both store zips to a GitHub Release, reusing the artifact the
+  gate already verified rather than rebuilding, so what ships is bit-for-bit what passed.
+- The release job `needs: verify` and refuses a tag that disagrees with the packaged
+  version: a release cannot carry untested or mislabelled packages by construction.
+- Write access is scoped to that job alone. The job that executes third-party code (npm
+  dependencies, browser downloads) stays read-only.
+- `npm run version:set <version>` rewrites both manifests, `package.json` and the
+  lockfile together, validating against Chrome's version rules (segment ≤ 65535, no
+  leading zeros) before touching anything.
+- Dependabot now watches the dev toolchain and the workflow actions. Nothing here ships
+  to users — the extension has no runtime dependencies — so these only affect the gate.
+
+#### Test-gate fixes
+
+- **The background harness could not exercise the message router at all.** Its `vm`
+  sandbox omitted the `URL` global, so `isSlackHostname()` threw internally, its
+  `try/catch` swallowed it, and *every* message was rejected as `unauthorized_origin` —
+  a false negative that would have silently passed off any router test as failing. Fixed
+  by providing the global the worker actually has.
+- Added coverage for the scan guard (concurrent refusal, per-channel independence,
+  release after both success and failure) and the permission gate (fail-open,
+  state exclusivity, the Android no-`request` path, and injection-failure routing).
+- New gates on the parts that used to fail only in a store queue: every `data-i18n*`
+  attribute and `t()` key across the popup, dashboard and privacy page must resolve to a
+  real locale key (runtime localization no manifest check can see), and the release job
+  must keep its `needs: verify`, tag-match and least-privilege properties.
+- Each new gate was mutation-tested — the guard removed, the assertion confirmed to fail
+  — so none of them is decorative.
 
 ### Production-readiness pass: cross-browser load safety, store gates, CI
 

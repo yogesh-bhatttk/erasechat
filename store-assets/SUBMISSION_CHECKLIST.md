@@ -9,6 +9,12 @@ resolved before submitting; **(you)** require your action outside this repo.
       into a throwaway Slack workspace, and run a real scan + a small delete. Confirm
       messages actually delete (the `credentials: "include"` cookie flow is the make-or-break
       path and can't be tested offline). Test on both Chrome and Firefox.
+- [ ] **(you)** **Check the restricted-site-access path once.** In Chrome, set the
+      extension's *Site access* to **On click**, open the popup on a Slack tab, and confirm
+      you get the "Site Access Required" screen with working guidance — not a spinner or
+      "reload the page". This is the state a cautious user installs into, and it is the one
+      failure mode that cannot be reproduced from automation (Chrome exposes no API to
+      revoke a required host permission), which is why it is a manual check.
 - [ ] **(blocker, you)** **Trademark / policy review.** Name is now "Bulk Clean for Slack"
       (compliant "X for Slack" form, not leading with "Slack"). Confirm you're comfortable
       with Slack's brand guidelines and API/ToS, given the extension uses the private
@@ -39,8 +45,8 @@ resolved before submitting; **(you)** require your action outside this repo.
 Or run them individually:
 
 - [ ] `npm run lint` → 0 problems
-- [ ] `npm test` → 73/73 green (unit + packaging gates)
-- [ ] `npm run test:e2e` → 7/7 green (needs `npx playwright install chromium`; extensions
+- [ ] `npm test` → 81/81 green (unit + packaging gates)
+- [ ] `npm run test:e2e` → 12/12 green (needs `npx playwright install chromium`; extensions
       require headful Chromium, so use `xvfb-run` on a headless machine)
 - [ ] `npm run build` → produces `dist/bulk-clean-for-slack-chrome-<v>.zip` and
       `dist/bulk-clean-for-slack-firefox-<v>.zip`
@@ -67,15 +73,22 @@ zips as build artifacts, so a green CI run is equivalent to this section.
 - [ ] Data collection: **"none"** — already declared in the manifest via
       `browser_specific_settings.gecko.data_collection_permissions.required: ["none"]`,
       and pinned there by `npm test`. Confirm the dashboard answers match.
-- [ ] Expect **2 warnings, 0 errors** from `npm run validate:firefox`:
-      `KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION` and
-      `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`. These are expected and safe —
-      they note only that `data_collection_permissions` is inert before Firefox 140 /
-      Firefox-for-Android 142, and older Firefox ignores unknown manifest keys. Warnings
-      do not block a submission.
+- [ ] Expect **4 warnings, 0 errors** from `npm run validate:firefox`. All four are
+      expected and safe; warnings do not block a submission.
+      - `KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION` and
+        `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION` — note only that
+        `data_collection_permissions` is inert before Firefox 140 / Firefox-for-Android
+        142, and older Firefox ignores unknown manifest keys.
+      - `ANDROID_INCOMPATIBLE_API` ×2 (`popup.js`, `permissions.request`) — Firefox for
+        Android has no `permissions.request`. The popup feature-detects it and shows
+        manual "allow site access" instructions instead of a button that cannot work, so
+        the unsupported path is already handled; the linter flags the reference (and even
+        the `typeof` guard) because it cannot see that. Covered by
+        `tests/permissions.spec.js`. Do not "fix" this by deleting the guard — that would
+        restore the dead button it exists to prevent.
       - Keeping `strict_min_version: "115.0"` is a deliberate trade: raising it to `140.0`
-        silences one warning but drops Firefox 115–139 users. Do not "fix" the warning by
-        removing the disclosure — AMO expects it for new listings.
+        silences the first warning but drops Firefox 115–139 users. Do not "fix" the
+        warning by removing the disclosure — AMO expects it for new listings.
       - **Validate with `addons-linter@^10`** (what `npm run validate:firefox` pins).
         Older v7 wrongly reports this key as a hard error, so an unpinned validator can
         give the opposite verdict on the same zip.
@@ -87,5 +100,11 @@ zips as build artifacts, so a green CI run is equivalent to this section.
 - [x] Name changed to "Bulk Clean for Slack" everywhere user-facing
 - [x] `manifest.json` (Chrome) / `manifest.firefox.json` (Firefox) both validate
 - [x] `LICENSE` (MIT), `README.md`, `SECURITY.md`, `TERMS.md`, `CONTRIBUTING.md`
-- [ ] Bump `version` in both manifests + `package.json` for each release
-- [ ] Tag the release and update `CHANGELOG.md` heading from "Unreleased" to the version
+- [ ] Bump the version with `npm run version:set <version>` — it rewrites both manifests,
+      `package.json` and the lockfile together, and validates the number against Chrome's
+      rules first. (`npm test` fails if the three ever drift.)
+- [ ] Update `CHANGELOG.md`: move the "Unreleased" heading to the version and date it
+- [ ] Tag and push: `git tag v<version> && git push --follow-tags`. CI re-runs the full
+      gate, refuses a tag that disagrees with the packaged version, and attaches both
+      store zips to the GitHub Release — so the files you upload to the stores are the
+      exact ones that passed. Uploading to the stores stays manual (steps 4 and 5).

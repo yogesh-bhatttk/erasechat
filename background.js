@@ -58,6 +58,18 @@ const QUEUE_PREFIX = "sc_q_";
 let activeJobs = {}; // key: `slackclean_state_${teamId}_${channelId}` -> job state
 let userTokens = {}; // key: `${teamId}` -> xoxc- token
 
+// Scans currently sweeping Slack, keyed by `${teamId}_${channelId}`. A scan is
+// read-only, but it is by far the most API-expensive operation here: up to
+// MAX_SCAN_PAGES history pages plus a paginated conversations.replies sweep per
+// thread, every call drawing on the same workspace rate limit. The dashboard gives
+// up on a scan after its own client-side timeout and invites the user to try again,
+// while this worker keeps paginating — so without a guard the retry (or an impatient
+// double-click on Scan) starts a SECOND full sweep concurrently, doubling the API
+// load that made the first one slow and pushing the workspace further into 429s.
+// Memory-only on purpose: if the worker is torn down the scan really did stop, so a
+// fresh request should be allowed through.
+const inFlightScans = new Set();
+
 // Reentrancy lock keyed by job key. Module-level (not on the job object) so it
 // survives recoverAllJobs() replacing job objects, and is acquired BEFORE any
 // recovery so two alarm/timeout paths can't double-process or double-recover.
@@ -381,18 +393,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   else if (request.type === "RUN_SCAN") {
-    ensureToken(request.teamId).then(token => {
-      if (!token) {
-        sendResponse({ ok: false, error: "not_authed", message: "Session token not found in background." });
-        return;
+    // Refuse a duplicate concurrent sweep of the same conversation (see inFlightScans).
+    const scanKey = `${request.teamId}_${request.channelId}`;
+    if (inFlightScans.has(scanKey)) {
+      sendResponse({ ok: false, error: "scan_in_progress" });
+      return false;
+    }
+    inFlightScans.add(scanKey);
+
+    (async () => {
+      let result;
+      try {
+        const token = await ensureToken(request.teamId);
+        if (!token) {
+          result = { ok: false, error: "not_authed", message: "Session token not found in background." };
+        } else {
+          const scan = await runScanInBg(token, request);
+          result = {
+            ok: true,
+            results: scan.results,
+            moreAvailable: scan.moreAvailable,
+            capped: scan.capped
+          };
+        }
+      } catch (err) {
+        result = { ok: false, error: "scan_error", message: err.message };
+      } finally {
+        // Release the guard BEFORE answering, not in a trailing .finally(). A caller
+        // may legitimately re-scan the moment it hears back — a truncated result asks
+        // the user to narrow filters and scan again — and must not be refused by a
+        // guard that is only cleared a microtask later. Releasing on the failure path
+        // matters most: a leaked guard would make the channel permanently unscannable
+        // until the worker is torn down.
+        inFlightScans.delete(scanKey);
       }
-      return runScanInBg(token, request).then(scan => sendResponse({
-        ok: true,
-        results: scan.results,
-        moreAvailable: scan.moreAvailable,
-        capped: scan.capped
-      }));
-    }).catch(err => sendResponse({ ok: false, error: "scan_error", message: err.message }));
+      sendResponse(result);
+    })();
     return true; // async response
   }
 

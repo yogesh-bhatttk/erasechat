@@ -1,0 +1,24 @@
+# Keep the toolchain current without hand-watching it.
+#
+# Nothing here ships to users: the extension has no runtime dependencies at all (see
+# package.json — devDependencies only), so these updates only touch the test/lint gate.
+# That makes them safe to take routinely, and CI proves each one before merge.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # ESLint and Playwright move on their own cadences; one PR per tool keeps a
+      # failure attributable instead of bisecting a combined bump.
+      dev-tooling:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

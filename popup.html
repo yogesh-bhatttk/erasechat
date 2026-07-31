@@ -97,6 +97,36 @@
           </svg>
         </button>
       </div>
+
+      <!--
+        State 3: installed, but site access to slack.com is not actually granted.
+        Reachable whenever the browser withholds the declared host permission — Chrome's
+        per-extension "Site access: On click / On specific sites", or a Firefox MV3
+        install where host permissions still need opting into. In that state the content
+        script never auto-injects and the scripting fallback fails too, so without this
+        the popup showed "reload the Slack page", which never fixes it.
+      -->
+      <div id="permission-required-state" class="state-container hidden">
+        <div class="status-card inactive">
+          <span class="warning-dot"></span>
+          <p data-i18n="popupStatusNoAccess">Site Access Required</p>
+        </div>
+
+        <div class="redirect-info">
+          <h3 data-i18n="popupGrantTitle">Allow Access to Slack</h3>
+          <p data-i18n="popupGrantBody">Your browser is currently withholding this extension's access to slack.com, so it cannot read or clean anything. Grant access to continue — no other site is touched.</p>
+        </div>
+
+        <button id="btn-grant-access" class="btn btn-primary" data-i18n-aria="popupGrantAria" aria-label="Grant this extension access to slack.com">
+          <span data-i18n="popupGrantButton">Allow Access to slack.com</span>
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            <polyline points="9 12 11 14 15 10"></polyline>
+          </svg>
+        </button>
+
+        <p id="grant-manual-hint" class="hidden desc" data-i18n="popupGrantManualHint">Your browser did not grant access from here. Open your browser's extensions page, find Bulk Clean for Slack, and set its site access to allow slack.com.</p>
+      </div>
     </main>
 
     <!-- First-Run Onboarding (SC-UX-01) -->

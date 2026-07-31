@@ -26,7 +26,12 @@ const BG_SRC = fs.readFileSync(path.join(ROOT, "background.js"), "utf8");
 // has never implemented — the exact shape that used to crash background.js on load.
 function makeChrome({ flavor = "chrome" } = {}) {
   const registered = { onMessage: 0, onStartup: 0, onInstalled: 0, onSuspend: 0, onAlarm: 0 };
-  const event = (name) => ({ addListener: () => { registered[name]++; } });
+  // Keep the last handler registered for each event so tests can drive the real
+  // message router, not just assert that it registered.
+  const handlers = {};
+  const event = (name) => ({
+    addListener: (fn) => { registered[name]++; handlers[name] = fn; }
+  });
 
   const chrome = {
     runtime: {
@@ -65,13 +70,21 @@ function makeChrome({ flavor = "chrome" } = {}) {
     chrome.runtime.onSuspend = event("onSuspend");
   }
 
-  return { chrome, registered };
+  return { chrome, registered, handlers };
 }
 
 // Load shared-filters.js then background.js into one vm context, as the browser does.
 // Returns the context so tests can call the background's top-level functions directly.
-function loadBackground({ flavor = "chrome", fetchImpl } = {}) {
-  const { chrome, registered } = makeChrome({ flavor });
+function loadBackground({ flavor = "chrome", fetchImpl, sessionTokens } = {}) {
+  const { chrome, registered, handlers } = makeChrome({ flavor });
+
+  // Let a test pre-seed chrome.storage.session with `sc_token_<teamId>` entries, which
+  // is how the worker recovers a token via ensureToken() after an idle-death.
+  if (sessionTokens) {
+    chrome.storage.session.get = async (key) => (
+      key in sessionTokens ? { [key]: sessionTokens[key] } : {}
+    );
+  }
 
   const sandbox = {
     chrome,
@@ -80,6 +93,11 @@ function loadBackground({ flavor = "chrome", fetchImpl } = {}) {
     clearTimeout,
     setInterval,
     clearInterval,
+    // Both are browser globals the worker relies on. URL in particular is what
+    // isSlackHostname() parses sender origins with — omit it and every message is
+    // silently rejected as unauthorized_origin, since the failure is swallowed by
+    // that function's try/catch.
+    URL,
     URLSearchParams,
     AbortController,
     fetch: fetchImpl || (async () => { throw new Error("fetch not stubbed"); })
@@ -97,7 +115,28 @@ function loadBackground({ flavor = "chrome", fetchImpl } = {}) {
   vm.runInContext(SHARED_SRC, context, { filename: "shared-filters.js" });
   vm.runInContext(BG_SRC, context, { filename: "background.js" });
 
-  return { context, sandbox, registered };
+  return { context, sandbox, registered, handlers };
+}
+
+// Drive the real chrome.runtime.onMessage router the way the browser does, from a
+// sender the worker will accept (its own extension pages / a Slack tab).
+function sendMessage(handlers, request, { sender } = {}) {
+  return new Promise((resolve, reject) => {
+    const from = sender || { tab: { url: "https://app.slack.com/client/T1/C1" } };
+    let settled = false;
+    const sendResponse = (res) => {
+      if (settled) return;
+      settled = true;
+      resolve(res);
+    };
+    const keepOpen = handlers.onMessage(request, from, sendResponse);
+    // A handler that answers synchronously returns false; one that returns true has
+    // promised a later sendResponse. If it returns false without answering, that is
+    // itself the bug — surface it instead of hanging the test.
+    if (keepOpen !== true && !settled) {
+      reject(new Error(`handler for ${request.type} returned ${keepOpen} without responding`));
+    }
+  });
 }
 
 // Build a fetch stub that answers Slack Web API calls from a routing table keyed by
@@ -348,6 +387,125 @@ test("slackAPICall: surfaces HTTP 429 as rate_limited with Retry-After honored",
   assert.strictEqual(res.ok, false);
   assert.strictEqual(res.error, "rate_limited");
   assert.strictEqual(res.retryAfter, 42);
+});
+
+// A scan request that the worker will accept: token recoverable from session storage.
+const SCAN_REQUEST = {
+  type: "RUN_SCAN",
+  teamId: "T1",
+  channelId: "C1",
+  oldest: 0,
+  latest: 9999999999,
+  includeThreads: false,
+  filterSender: "all",
+  filterText: "",
+  onlyAttachments: false,
+  userId: "U1"
+};
+
+test("RUN_SCAN: a duplicate scan of the same conversation is refused, not run twice", async () => {
+  // The dashboard abandons a scan after its own client-side timeout and invites a
+  // retry, while the worker keeps paginating. Without this guard the retry starts a
+  // second full sweep concurrently — doubling the API load that made the first slow.
+  let releaseFirstScan;
+  const gate = new Promise((resolve) => { releaseFirstScan = resolve; });
+
+  const stub = makeSlackFetch({
+    "conversations.history": async () => {
+      await gate; // hold the first scan open so the second arrives mid-flight
+      return { ok: true, messages: [{ ts: "1000.000", user: "U1", text: "hi" }], response_metadata: { next_cursor: "" } };
+    }
+  });
+
+  const { handlers } = loadBackground({
+    fetchImpl: stub.fetch,
+    sessionTokens: { sc_token_T1: "xoxc-test" }
+  });
+
+  const first = sendMessage(handlers, SCAN_REQUEST);
+  // Let the first scan get past ensureToken and into fetch before racing it.
+  await new Promise((r) => setTimeout(r, 10));
+  const second = await sendMessage(handlers, SCAN_REQUEST);
+
+  assert.strictEqual(second.ok, false);
+  assert.strictEqual(second.error, "scan_in_progress",
+    "the second scan must be refused while the first is still sweeping");
+
+  releaseFirstScan();
+  const firstResult = await first;
+  assert.strictEqual(firstResult.ok, true, "the original scan still completes normally");
+  assert.strictEqual(stub.calls["conversations.history"], 1,
+    "the refused scan must not have issued any Slack API calls");
+});
+
+test("RUN_SCAN: a different conversation may be scanned concurrently", async () => {
+  // The guard is per-conversation. Two different channels are independent work and
+  // must not block each other.
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+
+  const stub = makeSlackFetch({
+    "conversations.history": async () => {
+      await gate;
+      return { ok: true, messages: [], response_metadata: { next_cursor: "" } };
+    }
+  });
+
+  const { handlers } = loadBackground({
+    fetchImpl: stub.fetch,
+    sessionTokens: { sc_token_T1: "xoxc-test" }
+  });
+
+  const first = sendMessage(handlers, SCAN_REQUEST);
+  await new Promise((r) => setTimeout(r, 10));
+  const second = sendMessage(handlers, { ...SCAN_REQUEST, channelId: "C2" });
+
+  release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.strictEqual(a.ok, true);
+  assert.strictEqual(b.ok, true, "a scan of another channel must not be refused");
+  assert.strictEqual(stub.calls["conversations.history"], 2);
+});
+
+test("RUN_SCAN: the in-flight guard is released so the channel can be re-scanned", async () => {
+  const stub = makeSlackFetch({
+    "conversations.history": () => ({
+      ok: true, messages: [{ ts: "1000.000", user: "U1", text: "hi" }], response_metadata: { next_cursor: "" }
+    })
+  });
+
+  const { handlers } = loadBackground({
+    fetchImpl: stub.fetch,
+    sessionTokens: { sc_token_T1: "xoxc-test" }
+  });
+
+  const first = await sendMessage(handlers, SCAN_REQUEST);
+  assert.strictEqual(first.ok, true);
+
+  // A leaked guard would permanently wedge the channel: every later scan refused.
+  const second = await sendMessage(handlers, SCAN_REQUEST);
+  assert.strictEqual(second.ok, true, "the guard must not leak after a scan completes");
+});
+
+test("RUN_SCAN: the guard is released when the scan FAILS, not just when it succeeds", async () => {
+  // A failing scan that leaked the guard would be worse than no guard: the user's
+  // channel becomes permanently unscannable until the worker is torn down.
+  const stub = makeSlackFetch({
+    "conversations.history": () => ({ ok: false, error: "channel_not_found" })
+  });
+
+  const { handlers } = loadBackground({
+    fetchImpl: stub.fetch,
+    sessionTokens: { sc_token_T1: "xoxc-test" }
+  });
+
+  const first = await sendMessage(handlers, SCAN_REQUEST);
+  assert.strictEqual(first.ok, false);
+  assert.strictEqual(first.error, "scan_error");
+
+  const second = await sendMessage(handlers, SCAN_REQUEST);
+  assert.notStrictEqual(second.error, "scan_in_progress",
+    "a failed scan must release the guard");
 });
 
 test("queueKeyFor: job-progress and queue keys never collide across channels", () => {

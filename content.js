@@ -1614,10 +1614,16 @@ if (!window.slackCleanInitialized) {
         if (scanSettled) return;
         scanSettled = true;
         restoreScanUI();
-        logConsole("Scan timed out — the background worker did not respond (it may have been suspended). Please try again.", "error");
+        // Deliberately does NOT claim the scan stopped: this timeout only means no
+        // response arrived in time. The worker may have been suspended (scan really
+        // is gone) or may still be paginating a heavily-throttled channel. It refuses
+        // a duplicate sweep of the same conversation while one is still running, so
+        // re-scanning is safe either way — it just reports "already running" instead
+        // of doubling the API load.
+        logConsole("No scan result after 2 minutes. The background worker may have been suspended, or may still be working through a throttled channel. Re-run Scan — a scan that is still running will say so rather than starting a second one.", "error");
         showCustomAlert(
-          "Scan Timed Out",
-          "The scan didn't complete in time — the background service worker may have been suspended. Please run the scan again."
+          "Scan Did Not Finish In Time",
+          "No result came back within 2 minutes. The background worker was either suspended or is still working through a heavily rate-limited channel.\n\nRe-run Scan: if one is still in progress you'll be told, and nothing is deleted either way."
         );
       }, SCAN_TIMEOUT_MS);
 
@@ -1687,8 +1693,20 @@ if (!window.slackCleanInitialized) {
               `This channel has more history than a single scan examines, so only its most recent messages were checked (${scanResults.length} matched). Older matching messages exist but were NOT scanned. Use a date range to scan older messages, or delete this batch and scan again.`
             );
           }
+        } else if (response && response.error === "scan_in_progress") {
+          // A previous scan of this same conversation is still sweeping Slack (most
+          // likely the user hit the client-side scan timeout and retried). Say so
+          // plainly rather than reporting it as a failure — the first scan is still
+          // coming, and starting a second would only compete for the rate limit.
+          logConsole("A scan of this conversation is already running. Waiting for it to finish rather than starting a second one.", "warn");
+          showCustomAlert(
+            "Scan Already Running",
+            "A scan of this conversation is still in progress. Starting another would compete for the same Slack rate limit and make both slower, so this request was skipped. Give the first scan a moment to finish."
+          );
         } else {
-          logConsole(`Scan runtime error: ${response ? response.message : "Unknown error"}`, "error");
+          const reason = response ? (response.message || response.error || "Unknown error") : "No response from the background worker";
+          logConsole(`Scan runtime error: ${reason}`, "error");
+          showCustomAlert("Scan Failed", `The scan could not be completed: ${reason}`);
         }
       });
     }

@@ -117,5 +117,24 @@ export default [
       }
     },
     rules: correctnessRules
+  },
+  {
+    // Specs that reach into the popup's own page scope via page.evaluate(). Those
+    // callbacks are serialized and run INSIDE the extension page, so the identifiers
+    // below are popup.js's top-level functions, not Node globals — which is why
+    // no-undef flags them here without this declaration.
+    //
+    // Listing them explicitly (rather than relaxing no-undef for the file) keeps the
+    // rule meaningful for the rest of the spec, and doubles as the record of which
+    // popup functions the e2e suite depends on by name: rename one in popup.js and
+    // this list is where the coupling is written down.
+    files: ["tests/permissions.spec.js"],
+    languageOptions: {
+      globals: {
+        hasSlackAccess: "readonly",
+        showPermissionRequiredState: "readonly",
+        showActiveState: "readonly"
+      }
+    }
   }
 ];

@@ -133,6 +133,26 @@ The build script assembles a clean package per target: the correct manifest, all
 files, `_locales/`, `icons/`, `fonts/`, `PRIVACY_POLICY.md`, and `LICENSE` — and excludes
 tests, tooling, and docs. See [`scripts/build.sh`](scripts/build.sh).
 
+## Cutting a release
+
+```bash
+npm run version:set 1.0.1   # rewrites both manifests + package.json + lockfile
+                            # (validates against Chrome's version rules first)
+# move the CHANGELOG "Unreleased" heading to 1.0.1 and date it
+npm run verify              # the full gate must be green before tagging
+git commit -am "Release v1.0.1"
+git tag v1.0.1 && git push --follow-tags
+```
+
+Pushing a `v*` tag runs the gate again and then publishes both store zips to the GitHub
+Release for that tag. The release job depends on the gate passing and refuses a tag that
+disagrees with the packaged version, so a release can never carry untested or mislabelled
+packages. Both stores reject a re-upload of an already-used version number, which is why
+those two checks exist rather than a convention.
+
+Uploading to the stores is still manual — see
+[`store-assets/SUBMISSION_CHECKLIST.md`](store-assets/SUBMISSION_CHECKLIST.md).
+
 ## Privacy & security
 
 - Privacy policy: [PRIVACY_POLICY.md](PRIVACY_POLICY.md)
