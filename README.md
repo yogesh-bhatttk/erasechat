@@ -104,6 +104,7 @@ ships two manifests with identical everything else:
 ```bash
 npm install               # dev-only (ESLint + Playwright); the extension itself
                           # has no runtime dependencies
+npm run hooks:install     # once per clone: pre-push guard on main (see below)
 npm run lint              # correctness lint (must be 0 problems)
 npm test                  # unit + packaging tests (node --test, zero-dependency)
 npm run test:e2e          # Playwright e2e (needs: npx playwright install chromium)
@@ -120,6 +121,17 @@ xvfb-run --auto-servernum npm run test:e2e
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same gate on every
 push and pull request and uploads both store packages as artifacts.
+
+### Branch protection
+
+`main` has **no server-side protection**: GitHub gates both classic branch protection and
+rulesets behind a paid plan for private repositories. [`.githooks/pre-push`](.githooks/)
+stands in locally — it refuses a force-push or deletion of `main` and runs lint + tests
+before any push to it. Enable it per clone with `npm run hooks:install`.
+
+It is advisory, not enforcement: `git push --no-verify` bypasses it and it cannot police
+another machine. Making the repo public, or upgrading the plan, is what would give `main`
+rules the server actually enforces.
 
 ## Build / package for the stores
 

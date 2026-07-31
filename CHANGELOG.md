@@ -100,6 +100,32 @@ living in three files that had to be edited in lockstep.
 - Dependabot now watches the dev toolchain and the workflow actions. Nothing here ships
   to users — the extension has no runtime dependencies — so these only affect the gate.
 
+#### `main` had no protection, and no way to buy it (`.githooks/pre-push`)
+
+GitHub gates *both* classic branch protection and rulesets behind a paid plan for private
+repositories, so the "your main branch isn't protected" prompt in the UI points at a
+feature this repo cannot enable — there is no setting to change. `main` was therefore one
+mistyped `--force` away from losing history, on the branch the release workflow builds
+from.
+
+A `pre-push` hook now stands in locally, recreating the three rules that matter: no
+force-push to `main` (detected as a non-fast-forward via `merge-base --is-ancestor`, not
+by parsing flags), no deletion of `main`, and no push to `main` unless lint and the test
+suite pass. Where the remote's tip is an object the clone has never seen it blocks and
+asks for a `git fetch` rather than guessing — that is precisely the state in which a push
+silently discards someone else's commits.
+
+Enable per clone with `npm run hooks:install` (`core.hooksPath`, so the hook is
+version-controlled rather than hidden in `.git/hooks`). `SC_PREPUSH_FULL=1 git push` runs
+the entire gate instead of the fast half.
+
+This is **advisory, not enforcement**, and the docs say so plainly: `--no-verify` bypasses
+it, a fresh clone has no hooks until installed, and it cannot police another machine.
+Making the repo public or upgrading the plan remains the only way to get rules the server
+enforces. A packaging test asserts the hook still exists, is still executable (git ignores
+a non-executable hook silently) and still covers all three rules — otherwise it would
+fail open with nothing to indicate `main` had become unguarded.
+
 #### Test-gate fixes
 
 - **The background harness could not exercise the message router at all.** Its `vm`

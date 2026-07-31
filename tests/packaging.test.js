@@ -241,6 +241,33 @@ test("the version-bump path referenced by the release guard actually exists", ()
   }
 });
 
+test("the pre-push guard exists, is executable, and still guards main", () => {
+  // This hook is the only thing standing in for branch protection, which GitHub gates
+  // behind a paid plan for private repos. A hook that lost its exec bit, or quietly
+  // stopped covering one of the three rules, would fail OPEN and silently — nothing
+  // would ever surface that main had become unguarded.
+  const hookPath = path.join(ROOT, ".githooks/pre-push");
+  assert.ok(fs.existsSync(hookPath), ".githooks/pre-push is missing");
+
+  // Git ignores a hook that is not executable, without reporting anything.
+  const mode = fs.statSync(hookPath).mode;
+  assert.ok(mode & 0o111, ".githooks/pre-push is not executable, so git will ignore it");
+
+  const hook = fs.readFileSync(hookPath, "utf8");
+  assert.match(hook, /PROTECTED_BRANCH="main"/, "the hook must guard main");
+  // Rule 1: reject a non-fast-forward (force-push).
+  assert.match(hook, /merge-base --is-ancestor/, "force-push detection was removed");
+  // Rule 2: reject a deletion (all-zero local oid).
+  assert.match(hook, /is_zero "\$local_oid"/, "deletion detection was removed");
+  // Rule 3: run the gate. Both halves must stay wired, or a push to main runs no checks.
+  assert.match(hook, /npm run --silent lint/, "the lint step was removed");
+  assert.match(hook, /npm test/, "the test step was removed");
+
+  // The hook only takes effect via core.hooksPath, so the install path must exist.
+  assert.match(pkg.scripts["hooks:install"] || "", /core\.hooksPath \.githooks/,
+    "package.json must expose `hooks:install` to point git at .githooks");
+});
+
 test("no token is ever written to persistent storage", () => {
   // The privacy policy and both store listings promise the Slack token lives only in
   // chrome.storage.session. A storage.local write of a token would break that promise.

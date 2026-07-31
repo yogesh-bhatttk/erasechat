@@ -19,11 +19,24 @@ else — please keep that lens on any change.
 ## Development setup
 
 ```bash
-npm install          # dev-only (Playwright for e2e)
-npm test             # unit tests (node --test, zero-dependency) — must stay green
-npm run test:e2e     # Playwright end-to-end (requires browsers)
-npm run build        # produce dist/ store zips for Chrome and Firefox
+npm install            # dev-only (Playwright for e2e)
+npm run hooks:install  # enable the pre-push guard on main (see below)
+npm test               # unit tests (node --test, zero-dependency) — must stay green
+npm run test:e2e       # Playwright end-to-end (requires browsers)
+npm run build          # produce dist/ store zips for Chrome and Firefox
 ```
+
+### The pre-push guard
+
+`npm run hooks:install` points `core.hooksPath` at [`.githooks/`](.githooks/), enabling a
+`pre-push` hook that stands in for server-side branch protection — GitHub gates that
+behind a paid plan for private repos, so `main` has none. It refuses a force-push or
+deletion of `main`, and runs lint + tests before any push to it.
+
+Run it once per clone; git deliberately does not transfer hooks when cloning. It is
+advisory only — `git push --no-verify` bypasses it, and it cannot police pushes from
+another machine. Use `SC_PREPUSH_FULL=1 git push` to run the entire gate (e2e, builds,
+addons-linter) instead of the fast half.
 
 Load unpacked for manual testing — see the [README](README.md#install). Chrome uses
 `manifest.json`; Firefox uses `manifest.firefox.json` (copy it to `manifest.json`).

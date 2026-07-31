@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+#
+# pre-push — local stand-in for the branch protection this repo cannot enable.
+#
+# GitHub gates both classic branch protection and rulesets behind a paid plan for
+# PRIVATE repositories, so `main` here has no server-side protection at all. This hook
+# recreates the three rules that matter most, locally:
+#
+#   1. no force-push to main       (protection: "allow force pushes = off")
+#   2. no deletion of main         (protection: "allow deletions = off")
+#   3. no push to main unless the correctness gate passes
+#                                  (protection: "require status checks to pass")
+#
+# HONEST LIMITS — read these before relying on it:
+#   * It is advisory, not enforcement. `git push --no-verify` skips it entirely, and so
+#     does any push from a different clone, another machine, or the GitHub web UI.
+#     Only a paid plan (or a public repo) gives you rules the SERVER enforces.
+#   * It protects this working copy. A fresh clone has no hooks until someone runs
+#     `npm run hooks:install` — hooks are not transferred by clone, by design.
+#
+# It runs the FAST half of the gate (lint + unit/packaging tests, ~2s) so pushing stays
+# usable. CI runs the full gate including e2e, both builds and addons-linter. To run the
+# whole thing locally before a push:  SC_PREPUSH_FULL=1 git push
+#
+# Installed via `git config core.hooksPath .githooks` (see `npm run hooks:install`),
+# which keeps the hook version-controlled instead of hidden in .git/hooks.
+
+set -uo pipefail
+
+PROTECTED_BRANCH="main"
+PROTECTED_REF="refs/heads/${PROTECTED_BRANCH}"
+
+ROOT="$(git rev-parse --show-toplevel)" || exit 1
+cd "$ROOT" || exit 1
+
+say()  { printf '%s\n' "$*" >&2; }
+fail() {
+  say ""
+  say "  ✗ pre-push: $*"
+  say ""
+  exit 1
+}
+
+# An all-zero object id means "no such ref" — on the local side that is a deletion, on
+# the remote side a branch that does not exist yet. Matched as "all zeros" rather than a
+# fixed 40 chars so this keeps working under SHA-256 repositories.
+is_zero() { [[ "$1" =~ ^0+$ ]]; }
+
+pushing_to_protected=0
+
+# git feeds one line per ref being pushed:  <local_ref> <local_oid> <remote_ref> <remote_oid>
+while read -r local_ref local_oid remote_ref remote_oid; do
+  [ -z "${remote_ref:-}" ] && continue
+  [ "$remote_ref" != "$PROTECTED_REF" ] && continue
+
+  # --- Rule 2: deletion -----------------------------------------------------------
+  if is_zero "$local_oid"; then
+    fail "refusing to DELETE ${PROTECTED_BRANCH}.
+
+    This is the branch the release workflow builds from. If you really mean it,
+    delete it through GitHub where the action is logged and recoverable."
+  fi
+
+  # --- Rule 1: force-push / non-fast-forward --------------------------------------
+  if ! is_zero "$remote_oid"; then
+    if ! git cat-file -e "${remote_oid}^{commit}" 2>/dev/null; then
+      fail "cannot verify this push to ${PROTECTED_BRANCH}.
+
+    The remote is at ${remote_oid:0:12}, which this clone has never seen — so there is
+    no way to tell a fast-forward from a history rewrite. Run:
+
+        git fetch origin ${PROTECTED_BRANCH}
+
+    then push again. (Blocking rather than guessing: this is exactly the state in
+    which a push silently discards someone else's commits.)"
+    fi
+
+    if ! git merge-base --is-ancestor "$remote_oid" "$local_oid" 2>/dev/null; then
+      behind_count="$(git rev-list --count "${local_oid}..${remote_oid}" 2>/dev/null || echo '?')"
+      fail "refusing to FORCE-PUSH ${PROTECTED_BRANCH} (non-fast-forward).
+
+    ${behind_count} commit(s) on the remote are not in your history — this push would
+    discard them permanently. Reconcile instead:
+
+        git fetch origin ${PROTECTED_BRANCH}
+        git rebase origin/${PROTECTED_BRANCH}    # or: git merge origin/${PROTECTED_BRANCH}"
+    fi
+  fi
+
+  pushing_to_protected=1
+done
+
+[ "$pushing_to_protected" -eq 0 ] && exit 0
+
+# --- Rule 3: the correctness gate ---------------------------------------------------
+say ""
+say "  pre-push: ${PROTECTED_BRANCH} is guarded — running the gate first."
+
+if [ ! -d node_modules ]; then
+  fail "cannot run the gate: node_modules is missing.
+
+    Run 'npm install' first. (Not skipped silently on purpose — a push to
+    ${PROTECTED_BRANCH} that ran no checks is the thing this hook exists to prevent.)"
+fi
+
+if [ -n "${SC_PREPUSH_FULL:-}" ]; then
+  say "  running the FULL gate (lint, tests, e2e, build, addons-linter)..."
+  npm run --silent verify >/dev/null 2>&1 \
+    || fail "the full gate failed. Run 'npm run verify' to see why."
+  say "  ✓ full gate green — pushing."
+  exit 0
+fi
+
+printf '    lint ....... ' >&2
+npm run --silent lint >/dev/null 2>&1 \
+  || { say "FAILED"; fail "lint failed. Run 'npm run lint' to see the problems."; }
+say "ok"
+
+printf '    tests ...... ' >&2
+if ! test_output="$(npm test 2>&1)"; then
+  say "FAILED"
+  # Surface just the failing test names and the tally, not the whole TAP stream.
+  printf '%s\n' "$test_output" | grep -E "^(not ok|# (pass|fail))" >&2 || true
+  fail "tests failed. Run 'npm test' for the full output."
+fi
+passed="$(printf '%s\n' "$test_output" | grep -oE '^# pass [0-9]+' | head -1 | grep -oE '[0-9]+')"
+total="$(printf '%s\n' "$test_output" | grep -oE '^# tests [0-9]+' | head -1 | grep -oE '[0-9]+')"
+say "${passed:-?}/${total:-?} pass"
+
+say "  ✓ gate green — pushing to ${PROTECTED_BRANCH}."
+say "    (CI still runs the full gate: e2e, both builds, addons-linter.)"
+say ""
+exit 0
