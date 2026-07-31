@@ -17,9 +17,9 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # 22 = current LTS. The floor is 20.19 (see package.json engines); the test
           # runner's glob support and ESLint 10 both need a recent 20.x at minimum.
@@ -60,7 +60,7 @@ jobs:
         run: npm run validate:firefox
 
       - name: Upload store packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: store-packages
           path: dist/*.zip
