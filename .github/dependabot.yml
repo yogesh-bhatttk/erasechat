@@ -22,3 +22,15 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      # upload-artifact and download-artifact MUST move together. The release job
+      # downloads the artifact the verify job uploaded, and GitHub has shipped
+      # breaking changes across artifact majors before (a v4 artifact cannot be read
+      # by v3). Bumping one alone leaves the pair mismatched across majors — and CI
+      # would not catch it, because download-artifact is used only by the tag-gated
+      # release job, so an ordinary PR check goes green either way. Grouping them
+      # means a version skew never reaches main as a "passing" PR.
+      artifact-actions:
+        patterns:
+          - "actions/upload-artifact"
+          - "actions/download-artifact"
