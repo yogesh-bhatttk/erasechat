@@ -61,6 +61,35 @@ test("Firefox manifest declares the AMO data-collection disclosure as 'none'", (
   assert.ok(gecko.strict_min_version, "Firefox build needs strict_min_version");
 });
 
+test("strict_min_version is high enough for every manifest key and API used", () => {
+  // Each capability below landed in a specific Firefox version. Declaring support for
+  // anything older is a promise the build cannot keep, and addons-linter says so on
+  // every submission (KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION, ANDROID_INCOMPATIBLE_API).
+  //
+  // 140 is also the current ESR: Firefox 115 ESR reached end-of-life in March 2026, so
+  // claiming 115 meant advertising support on a browser that no longer receives security
+  // patches — a bad promise for a tool that handles a live Slack session token.
+  const MIN_FOR_DATA_COLLECTION_PERMISSIONS = 140;
+  const declared = parseFloat(firefoxManifest.browser_specific_settings.gecko.strict_min_version);
+
+  assert.ok(declared >= MIN_FOR_DATA_COLLECTION_PERMISSIONS,
+    `strict_min_version ${declared} is below ${MIN_FOR_DATA_COLLECTION_PERMISSIONS}, which is where ` +
+    "browser_specific_settings.gecko.data_collection_permissions became supported. " +
+    "Lowering it re-introduces the AMO validator warnings.");
+
+  // The popup calls chrome.permissions.request(), which Firefox for Android does not
+  // implement. It is feature-detected (see showPermissionRequiredState), and the add-on
+  // deliberately does NOT declare gecko_android: the dashboard is a fixed 880x760
+  // multi-panel modal with no viewport breakpoints, so claiming Android support would
+  // ship a knowingly-unusable UI purely to silence a linter warning.
+  assert.ok(!firefoxManifest.browser_specific_settings.gecko_android,
+    "gecko_android must stay undeclared until the dashboard has a mobile layout");
+
+  const popup = fs.readFileSync(path.join(ROOT, "popup.js"), "utf8");
+  assert.match(popup, /typeof chrome\.permissions\.request === "function"/,
+    "permissions.request must stay feature-detected for browsers that lack it");
+});
+
 test("the Firefox add-on id is a real UUID, not a template placeholder", () => {
   // AMO enforces global uniqueness of the gecko id and rejects an upload with
   // "Duplicate add-on ID found." Template/tutorial UUIDs like

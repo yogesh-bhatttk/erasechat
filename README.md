@@ -75,7 +75,7 @@ ships two manifests with identical everything else:
 | File | Target | Background |
 |---|---|---|
 | [`manifest.json`](manifest.json) | Chrome / Chromium | `service_worker: background.js` (loads `shared-filters.js` via `importScripts`) |
-| [`manifest.firefox.json`](manifest.firefox.json) | Firefox 115+ | `scripts: ["shared-filters.js", "background.js"]` + `gecko` settings |
+| [`manifest.firefox.json`](manifest.firefox.json) | Firefox 140+ | `scripts: ["shared-filters.js", "background.js"]` + `gecko` settings |
 
 ## Project layout
 

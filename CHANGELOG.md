@@ -16,7 +16,7 @@ messages require typing `DELETE`, and a ReDoS guard keeps a user-supplied regex 
 freezing the worker. The Slack token lives only in `chrome.storage.session` and is never
 written to disk. No data leaves the browser.
 
-Validated at release: lint clean · 81/81 unit + packaging tests · 12/12 Playwright e2e ·
+Validated at release: lint clean · 84/84 unit + packaging tests · 12/12 Playwright e2e ·
 both store packages build · `addons-linter@10` 0 errors on the Firefox zip · Chrome packs
 a valid `.crx`.
 
@@ -54,8 +54,10 @@ do the one thing guaranteed not to work, with no mention of the actual cause.
   permissions — the manual "allow site access" steps appear instead of a dead end.
 - `permissions.request` does not exist at all on Firefox for Android, so it is
   feature-detected: where it is missing the button is hidden and the manual steps show
-  immediately, rather than offering a control that cannot work. This is the source of
-  the two new (expected, documented) `ANDROID_INCOMPATIBLE_API` linter warnings.
+  immediately, rather than offering a control that cannot work. (This briefly produced
+  two `ANDROID_INCOMPATIBLE_API` validator warnings; raising `strict_min_version` to
+  `140.0` — see below — cleared both, and the detection stays because it is correct
+  behavior regardless of what the linter can see.)
 - Detection deliberately fails **open**. It is a diagnostic, not a security boundary —
   the browser's permission model is the actual enforcement — so a browser that cannot
   answer the question must never be shown a wall it has no way to dismiss.
@@ -125,6 +127,48 @@ Making the repo public or upgrading the plan remains the only way to get rules t
 enforces. A packaging test asserts the hook still exists, is still executable (git ignores
 a non-executable hook silently) and still covers all three rules — otherwise it would
 fail open with nothing to indicate `main` had become unguarded.
+
+#### AMO validator warnings: 4 → 1, and a stale support promise (`manifest.firefox.json`)
+
+`strict_min_version` was `115.0`, below the floor for two things the build actually uses.
+That produced four validator warnings, but the warnings were the symptom — the real
+problem was a support claim the package could not honor.
+
+Raised to `140.0`, which clears three of the four (both `ANDROID_INCOMPATIBLE_API` for
+`permissions.request`, and the desktop `KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION`).
+
+This reverses the earlier note that keeping `115.0` was the better trade. That reasoning
+was written when 140 was new; it has since gone stale. **Firefox 115 ESR reached
+end-of-life in March 2026 and 140 is now the current ESR**, so `115.0` was advertising
+support on a browser that no longer receives security patches — a poor promise for a tool
+that handles a live Slack session token. Raising the floor now costs almost nothing and
+matches the live ESR baseline.
+
+The last warning (`KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`) is left **deliberately
+unfixed**. Reaching zero requires declaring `gecko_android`, which would claim Firefox for
+Android support — and the dashboard is a fixed 880×760 multi-panel modal whose only
+`@media` rules are `prefers-color-scheme` and `prefers-reduced-motion`. With no viewport
+breakpoints it is unusable on a phone, so declaring Android support would ship a
+knowingly-broken experience to buy a green checkmark. Verified by building four manifest
+variants and linting each rather than reasoning about which key does what.
+
+A test now pins all three properties — the version floor, the absence of `gecko_android`,
+and the `permissions.request` feature detection — so none can regress quietly. Each was
+mutation-tested.
+
+#### The release gate was flaky under load (`playwright.config.js`)
+
+Three e2e specs failed during a verify run, then all twelve passed unchanged moments
+later. The cause was contention, not code: every extension spec launches a *headful*
+Chromium via `launchPersistentContext`, and Playwright's default worker count (cores/2)
+is tuned for headless pages, so under load the browsers starved each other.
+
+A gate that fails for reasons unrelated to the code is worse than a slow one — it trains
+you to re-run until green, which is how a real failure eventually gets waved through on a
+tool that permanently deletes data. Pinned to `workers: 2` (suite still runs in ~7s),
+with one retry on CI only so an infrastructure hiccup does not block a release while a
+local flake still has to be looked at. `forbidOnly` on CI stops a stray `test.only` from
+silently shrinking the gate to one test while still reporting green.
 
 #### Test-gate fixes
 

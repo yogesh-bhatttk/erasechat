@@ -45,7 +45,7 @@ resolved before submitting; **(you)** require your action outside this repo.
 Or run them individually:
 
 - [ ] `npm run lint` → 0 problems
-- [ ] `npm test` → 81/81 green (unit + packaging gates)
+- [ ] `npm test` → 84/84 green (unit + packaging gates)
 - [ ] `npm run test:e2e` → 12/12 green (needs `npx playwright install chromium`; extensions
       require headful Chromium, so use `xvfb-run` on a headless machine)
 - [ ] `npm run build` → produces `dist/bulk-clean-for-slack-chrome-<v>.zip` and
@@ -73,22 +73,24 @@ zips as build artifacts, so a green CI run is equivalent to this section.
 - [ ] Data collection: **"none"** — already declared in the manifest via
       `browser_specific_settings.gecko.data_collection_permissions.required: ["none"]`,
       and pinned there by `npm test`. Confirm the dashboard answers match.
-- [ ] Expect **4 warnings, 0 errors** from `npm run validate:firefox`. All four are
-      expected and safe; warnings do not block a submission.
-      - `KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION` and
-        `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION` — note only that
-        `data_collection_permissions` is inert before Firefox 140 / Firefox-for-Android
-        142, and older Firefox ignores unknown manifest keys.
-      - `ANDROID_INCOMPATIBLE_API` ×2 (`popup.js`, `permissions.request`) — Firefox for
-        Android has no `permissions.request`. The popup feature-detects it and shows
-        manual "allow site access" instructions instead of a button that cannot work, so
-        the unsupported path is already handled; the linter flags the reference (and even
-        the `typeof` guard) because it cannot see that. Covered by
-        `tests/permissions.spec.js`. Do not "fix" this by deleting the guard — that would
-        restore the dead button it exists to prevent.
-      - Keeping `strict_min_version: "115.0"` is a deliberate trade: raising it to `140.0`
-        silences the first warning but drops Firefox 115–139 users. Do not "fix" the
-        warning by removing the disclosure — AMO expects it for new listings.
+- [ ] Expect **1 warning, 0 errors** from `npm run validate:firefox`:
+      `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`. Expected and safe; warnings do
+      not block a submission.
+      - It notes only that `data_collection_permissions` is inert on Firefox for Android
+        before 142. The add-on does not ship to Android at all (see below), so the key
+        being inert there has no effect. Older Firefox ignores unknown manifest keys.
+      - **Do not silence it by declaring `gecko_android`.** That would reach 0 warnings
+        by claiming Android support the UI cannot honor: the dashboard is a fixed
+        880×760 multi-panel modal with no viewport breakpoints, so it is unusable on a
+        phone. Shipping a knowingly-broken experience to buy a green checkmark is a bad
+        trade. Pinned by `npm test`.
+      - **Do not lower `strict_min_version` below `140.0`.** 140 is the floor for
+        `data_collection_permissions`, and it is also the current ESR — Firefox 115 ESR
+        reached end-of-life in March 2026, so claiming 115 advertised support on a
+        browser that no longer gets security patches, for a tool that handles a live
+        Slack session token. Also pinned by `npm test`.
+      - Do not remove the `data_collection_permissions` disclosure — AMO expects it for
+        new listings.
       - **Validate with `addons-linter@^10`** (what `npm run validate:firefox` pins).
         Older v7 wrongly reports this key as a hard error, so an unpinned validator can
         give the opposite verdict on the same zip.
