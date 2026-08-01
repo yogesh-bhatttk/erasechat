@@ -61,6 +61,36 @@ test("Firefox manifest declares the AMO data-collection disclosure as 'none'", (
   assert.ok(gecko.strict_min_version, "Firefox build needs strict_min_version");
 });
 
+test("the Firefox add-on id is a real UUID, not a template placeholder", () => {
+  // AMO enforces global uniqueness of the gecko id and rejects an upload with
+  // "Duplicate add-on ID found." Template/tutorial UUIDs like
+  // {a1b2c3d4-e5f6-7890-abcd-ef1234567890} are already registered by whoever submitted
+  // first, so shipping one costs a failed review cycle — and the id is permanent once a
+  // listing exists, so it can only be fixed cheaply BEFORE the first successful upload.
+  const id = firefoxManifest.browser_specific_settings.gecko.id;
+
+  // A braced UUID, or the email-style form AMO also accepts.
+  const braced = /^\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}$/i;
+  const emailStyle = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  assert.ok(braced.test(id) || emailStyle.test(id),
+    `gecko.id must be a braced UUID or an email-style id, got: ${id}`);
+
+  if (braced.test(id)) {
+    // Require a genuine random (v4) UUID: version nibble 4, variant nibble 8/9/a/b.
+    // Hand-typed and sequential placeholders essentially never satisfy both.
+    assert.match(id, /^\{[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\}$/i,
+      `gecko.id looks hand-made rather than a random v4 UUID: ${id}. Generate one with: node -e "console.log(require('crypto').randomUUID())"`);
+
+    // Reject visibly patterned ids (ascending hex runs, repeated digits) that would
+    // pass the v4 shape by luck but are obviously copied from a template.
+    const hex = id.replace(/[{}-]/g, "").toLowerCase();
+    assert.ok(!/0123456789|abcdef|1234567890/.test(hex),
+      `gecko.id contains a sequential run, so it is almost certainly a placeholder: ${id}`);
+    assert.ok(new Set(hex).size > 8,
+      `gecko.id uses too few distinct characters to be random: ${id}`);
+  }
+});
+
 test("background wiring matches each browser's supported form", () => {
   // Chromium MV3 rejects background.scripts; Firefox MV3 rejects service_worker.
   assert.ok(chromeManifest.background.service_worker, "Chrome needs a service_worker");
