@@ -68,6 +68,31 @@ zips as build artifacts, so a green CI run is equivalent to this section.
 
 ## 5. Firefox Add-ons (AMO) **(you)**
 
+> ### ⚠️ Never delete an add-on on AMO to "start clean"
+>
+> Deleting an add-on **permanently blocks its add-on ID** — Mozilla blocklists the GUID to
+> prevent hostile takeover of a published identifier. The ID can never be submitted again
+> by anyone, including you. Re-uploading the same package then fails forever with
+> **"Duplicate add-on ID found."**
+>
+> Recovering a burned ID means emailing `amo-admins@mozilla.org` from the owning account
+> and waiting on a human. Generating a fresh UUID is faster, but each round trip burns
+> another one.
+>
+> **The rule:** once an upload validates, an add-on record exists. To change the package
+> after that, bump the version (`npm run version:set 1.0.1`) and upload a **new version**
+> to the existing listing — via *My Add-ons → the listing → Upload New Version*. Never
+> delete and re-submit. AMO also rejects re-uploading a version number it has already
+> seen, which is why the bump is required.
+>
+> Corollary: **get the package fully validated before the first upload.**
+> `npm run verify` must be clean (it now reports 0 errors / 0 warnings / 0 notices) so
+> the first upload is also the last one.
+>
+> IDs already burned on this account, for the record — do not reuse:
+> - `{a1b2c3d4-e5f6-7890-abcd-ef1234567890}` (the original template placeholder)
+> - `{2f1a47b2-e534-4428-8b9d-02c65f01bcad}` (uploaded, then deleted)
+
 - [ ] Developer account (free)
 - [ ] Upload the Firefox zip
 - [ ] Data collection: **"none"** — already declared in the manifest via

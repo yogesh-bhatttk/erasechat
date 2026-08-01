@@ -126,6 +126,19 @@ test("the Firefox add-on id is a real UUID, not a template placeholder", () => {
     assert.ok(new Set(hex).size > 8,
       `gecko.id uses too few distinct characters to be random: ${id}`);
   }
+
+  // IDs already burned on AMO. Deleting an add-on permanently blocklists its GUID
+  // (Mozilla does this to stop hostile takeover of a published identifier), so these can
+  // never be submitted again by anyone — reusing one fails with "Duplicate add-on ID
+  // found" forever. Restoring an old id from git history would silently re-break the
+  // submission, so they are pinned here rather than left as folklore.
+  const BURNED_IDS = [
+    "{a1b2c3d4-e5f6-7890-abcd-ef1234567890}", // original template placeholder
+    "{2f1a47b2-e534-4428-8b9d-02c65f01bcad}"  // uploaded to AMO, then deleted
+  ];
+  assert.ok(!BURNED_IDS.includes(id.toLowerCase()),
+    `gecko.id ${id} was deleted on AMO and is permanently blocklisted. ` +
+    "Generate a new one: node -e \"console.log(require('crypto').randomUUID())\"");
 });
 
 test("background wiring matches each browser's supported form", () => {
