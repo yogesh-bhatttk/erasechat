@@ -73,24 +73,28 @@ zips as build artifacts, so a green CI run is equivalent to this section.
 - [ ] Data collection: **"none"** — already declared in the manifest via
       `browser_specific_settings.gecko.data_collection_permissions.required: ["none"]`,
       and pinned there by `npm test`. Confirm the dashboard answers match.
-- [ ] Expect **1 warning, 0 errors** from `npm run validate:firefox`:
-      `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`. Expected and safe; warnings do
-      not block a submission.
-      - It notes only that `data_collection_permissions` is inert on Firefox for Android
-        before 142. The add-on does not ship to Android at all (see below), so the key
-        being inert there has no effect. Older Firefox ignores unknown manifest keys.
-      - **Do not silence it by declaring `gecko_android`.** That would reach 0 warnings
-        by claiming Android support the UI cannot honor: the dashboard is a fixed
-        880×760 multi-panel modal with no viewport breakpoints, so it is unusable on a
-        phone. Shipping a knowingly-broken experience to buy a green checkmark is a bad
-        trade. Pinned by `npm test`.
-      - **Do not lower `strict_min_version` below `140.0`.** 140 is the floor for
-        `data_collection_permissions`, and it is also the current ESR — Firefox 115 ESR
-        reached end-of-life in March 2026, so claiming 115 advertised support on a
-        browser that no longer gets security patches, for a tool that handles a live
-        Slack session token. Also pinned by `npm test`.
+- [ ] Expect **0 errors, 0 warnings, 0 notices** from `npm run validate:firefox`.
+      A clean report is the current baseline — anything at all appearing here is a
+      regression worth reading, not noise to scroll past.
+      - **Do not lower `strict_min_version` below `142.0`.** `data_collection_permissions`
+        landed on desktop in 140 but on Firefox for Android in **142**, and because
+        `gecko_android` is absent the validator derives the Android floor from this same
+        value. 142 is what produces a clean report (verified by linting 140/141/142
+        builds — only 142 is clean). Pinned by `npm test`.
+      - **Known cost of that choice:** 142 excludes Firefox 140–141, and **140 is the
+        current ESR** (115 ESR died in March 2026). Users pinned to ESR 140 — typically
+        enterprise deployments — cannot install this build. This was accepted deliberately
+        to reach a clean validator report. If you would rather have those users back,
+        set `140.0` and accept one `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`
+        warning; warnings never block a submission.
+      - **Do not reach 0 warnings by declaring `gecko_android` instead.** That key is
+        exactly how AMO decides an add-on is Android-compatible — without it, AMO does
+        not list the add-on on Android at all. Declaring it would put a fixed 880×760
+        multi-panel modal with no viewport breakpoints in front of phone users. Pinned
+        by `npm test`.
       - Do not remove the `data_collection_permissions` disclosure — AMO expects it for
-        new listings.
+        new listings, and removing it just swaps the warning for
+        `MISSING_DATA_COLLECTION_PERMISSIONS` (verified).
       - **Validate with `addons-linter@^10`** (what `npm run validate:firefox` pins).
         Older v7 wrongly reports this key as a hard error, so an unpinned validator can
         give the opposite verdict on the same zip.

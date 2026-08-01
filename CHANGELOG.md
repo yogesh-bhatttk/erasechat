@@ -17,8 +17,8 @@ freezing the worker. The Slack token lives only in `chrome.storage.session` and 
 written to disk. No data leaves the browser.
 
 Validated at release: lint clean · 84/84 unit + packaging tests · 12/12 Playwright e2e ·
-both store packages build · `addons-linter@10` 0 errors on the Firefox zip · Chrome packs
-a valid `.crx`.
+both store packages build · `addons-linter@10` fully clean on the Firefox zip (0 errors,
+0 warnings, 0 notices) · Chrome packs a valid `.crx`.
 
 > Not yet verified at release: the live-Slack `credentials: "include"` cookie flow cannot
 > be exercised offline. Confirm a real scan + small delete on a throwaway workspace in both
@@ -56,7 +56,7 @@ do the one thing guaranteed not to work, with no mention of the actual cause.
   feature-detected: where it is missing the button is hidden and the manual steps show
   immediately, rather than offering a control that cannot work. (This briefly produced
   two `ANDROID_INCOMPATIBLE_API` validator warnings; raising `strict_min_version` to
-  `140.0` — see below — cleared both, and the detection stays because it is correct
+  `142.0` — see below — cleared both, and the detection stays because it is correct
   behavior regardless of what the linter can see.)
 - Detection deliberately fails **open**. It is a diagnostic, not a security boundary —
   the browser's permission model is the actual enforcement — so a browser that cannot
@@ -134,8 +134,16 @@ fail open with nothing to indicate `main` had become unguarded.
 That produced four validator warnings, but the warnings were the symptom — the real
 problem was a support claim the package could not honor.
 
-Raised to `140.0`, which clears three of the four (both `ANDROID_INCOMPATIBLE_API` for
-`permissions.request`, and the desktop `KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION`).
+Raised to `142.0`, which clears **all four** and leaves the validator completely clean:
+0 errors, 0 warnings, 0 notices.
+
+Getting there took measuring rather than reasoning. Six manifest variants were built and
+linted: `115` (4 warnings), `115 + gecko_android` (3), `140` (1), `141` (1), `142` (0),
+and `140` with the disclosure removed (1 — it merely swaps in
+`MISSING_DATA_COLLECTION_PERMISSIONS`, so that is a dead end). The deciding detail is that
+`data_collection_permissions` landed on desktop in 140 but on Firefox for **Android** in
+142, and with `gecko_android` absent the validator derives the Android floor from the same
+`strict_min_version` — so 142 is the first clean value.
 
 This reverses the earlier note that keeping `115.0` was the better trade. That reasoning
 was written when 140 was new; it has since gone stale. **Firefox 115 ESR reached
@@ -144,17 +152,26 @@ support on a browser that no longer receives security patches — a poor promise
 that handles a live Slack session token. Raising the floor now costs almost nothing and
 matches the live ESR baseline.
 
-The last warning (`KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`) is left **deliberately
-unfixed**. Reaching zero requires declaring `gecko_android`, which would claim Firefox for
-Android support — and the dashboard is a fixed 880×760 multi-panel modal whose only
-`@media` rules are `prefers-color-scheme` and `prefers-reduced-motion`. With no viewport
-breakpoints it is unusable on a phone, so declaring Android support would ship a
-knowingly-broken experience to buy a green checkmark. Verified by building four manifest
-variants and linting each rather than reasoning about which key does what.
+**This has a real cost, recorded here so it is a decision and not an accident:** 142
+excludes Firefox 140–141, and 140 is the current ESR. Users pinned to ESR 140 — typically
+enterprise deployments, plausibly a chunk of the audience for a workplace tool — cannot
+install this build. Reverting to `140.0` buys them back at the price of one warning, and
+warnings never block a submission.
 
-A test now pins all three properties — the version floor, the absence of `gecko_android`,
-and the `permissions.request` feature detection — so none can regress quietly. Each was
-mutation-tested.
+The other route to zero — declaring `gecko_android` — was **rejected**. Mozilla's docs are
+explicit that this key is how AMO decides Android compatibility: *"If you don't, AMO
+assumes that the extension is not compatible with Android and does not list it as
+available on Android."* Declaring it would put the dashboard in front of phone users, and
+the dashboard is a fixed 880×760 multi-panel modal whose only `@media` rules are
+`prefers-color-scheme` and `prefers-reduced-motion` — no viewport breakpoints at all. The
+version bump costs some users an install; `gecko_android` would have shipped a
+knowingly-broken UI. Between the two ways to silence a validator, the one that never
+hands anyone something broken wins.
+
+A test pins all three properties — the version floor, the absence of `gecko_android`, and
+the `permissions.request` feature detection — with the trade-off written into the test's
+own comment so the next person to "optimise" the minimum version sees what it costs. Each
+was mutation-tested.
 
 #### The release gate was flaky under load (`playwright.config.js`)
 

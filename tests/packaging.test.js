@@ -62,20 +62,28 @@ test("Firefox manifest declares the AMO data-collection disclosure as 'none'", (
 });
 
 test("strict_min_version is high enough for every manifest key and API used", () => {
-  // Each capability below landed in a specific Firefox version. Declaring support for
-  // anything older is a promise the build cannot keep, and addons-linter says so on
-  // every submission (KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION, ANDROID_INCOMPATIBLE_API).
+  // Each capability below landed in a specific Firefox version, and declaring support
+  // for anything older is a promise the build cannot keep — addons-linter reports it on
+  // every submission (KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION, ANDROID_INCOMPATIBLE_API,
+  // KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION).
   //
-  // 140 is also the current ESR: Firefox 115 ESR reached end-of-life in March 2026, so
-  // claiming 115 meant advertising support on a browser that no longer receives security
-  // patches — a bad promise for a tool that handles a live Slack session token.
-  const MIN_FOR_DATA_COLLECTION_PERMISSIONS = 140;
+  // 142 rather than 140: data_collection_permissions landed on DESKTOP in 140 but on
+  // Firefox for Android in 142. Because gecko_android is deliberately absent (below),
+  // addons-linter derives the Android floor from this same value — so 142 is what it
+  // takes to validate with zero warnings. Verified by linting 140/141/142 builds: only
+  // 142 comes back clean.
+  //
+  // The cost is deliberate and worth restating before anyone "optimises" it: 142 excludes
+  // Firefox 140–141, and 140 is the current ESR (115 ESR died in March 2026). Enterprise
+  // users pinned to ESR 140 cannot install this build. That was accepted to reach a clean
+  // validator report; reverting to 140 trades one warning back for those users.
+  const MIN_FOR_ANDROID_DATA_COLLECTION_PERMISSIONS = 142;
   const declared = parseFloat(firefoxManifest.browser_specific_settings.gecko.strict_min_version);
 
-  assert.ok(declared >= MIN_FOR_DATA_COLLECTION_PERMISSIONS,
-    `strict_min_version ${declared} is below ${MIN_FOR_DATA_COLLECTION_PERMISSIONS}, which is where ` +
-    "browser_specific_settings.gecko.data_collection_permissions became supported. " +
-    "Lowering it re-introduces the AMO validator warnings.");
+  assert.ok(declared >= MIN_FOR_ANDROID_DATA_COLLECTION_PERMISSIONS,
+    `strict_min_version ${declared} is below ${MIN_FOR_ANDROID_DATA_COLLECTION_PERMISSIONS}, which is where ` +
+    "Firefox for Android gained browser_specific_settings.gecko.data_collection_permissions. " +
+    "Lowering it re-introduces KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION.");
 
   // The popup calls chrome.permissions.request(), which Firefox for Android does not
   // implement. It is feature-detected (see showPermissionRequiredState), and the add-on
