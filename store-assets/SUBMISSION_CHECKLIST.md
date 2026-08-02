@@ -59,11 +59,20 @@ zips as build artifacts, so a green CI run is equivalent to this section.
 
 ## 4. Chrome Web Store **(you)**
 
-- [ ] Developer account (one-time $5 fee)
-- [ ] Upload the Chrome zip
-- [ ] Fill "Privacy practices": single purpose, permission justifications, data-use
-      certifications, remote-code = No (all prepared in `STORE_LISTING.md`)
-- [ ] Add privacy policy URL, category (Productivity), screenshots, description
+> Every field value is prepared, tab by tab, in
+> [`CWS_SUBMISSION_FIELDS.md`](./CWS_SUBMISSION_FIELDS.md) — use that, not
+> `STORE_LISTING.md`, which predates the current feature set and whose Markdown copy would
+> paste literal asterisks into a description field that renders as plain text.
+
+- [ ] Developer account (one-time $5 fee, 2-Step Verification required, contact email verified)
+- [ ] Upload `dist/bulk-clean-for-slack-chrome-<v>.zip` — the **chrome** zip, not the firefox one
+- [ ] Store listing: name, summary, plain-text description, category (Workflow & Planning),
+      5 screenshots, 440×280 promo tile, homepage + support URLs
+- [ ] Privacy practices: single purpose, four permission justifications, remote-code = No,
+      all data-type boxes unchecked, three certifications checked
+- [ ] Privacy policy URL — the repo is public, so
+      `https://github.com/yogesh-bhatttk/bulk-clean-for-slack/blob/main/PRIVACY_POLICY.md`
+      works today (Chrome will not accept pasted text the way AMO does)
 - [ ] Submit for review
 
 ## 5. Firefox Add-ons (AMO) **(you)**
