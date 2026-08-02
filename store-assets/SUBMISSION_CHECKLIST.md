@@ -23,19 +23,32 @@ resolved before submitting; **(you)** require your action outside this repo.
 
 ## 1. Assets (in this repo)
 
-- [x] Icons 16/32/48/128 — `icons/`
+- [x] Icons 16/32/48/128 — `icons/`. `icon128.png` doubles as the Chrome **store icon**,
+      which is a separate dashboard upload, not read from the package.
+- [x] Listing icon 512×512 — `store-assets/promo/listing-icon-512.png` (AMO; Chrome has no
+      512 slot)
 - [x] Screenshots 1280×800 ×5 — `store-assets/screenshots/` (rebranded to
       "Bulk Clean for Slack"). Regenerate anytime with
       `node store-assets/screenshots/src/gen.js` + the render loop documented in that file.
-- [x] Promo tile 440×280 — `store-assets/promo/promo-tile-440x280.png` (Chrome small tile; optional)
-- [x] Listing copy — `store-assets/STORE_LISTING.md` (name, descriptions, captions,
-      single-purpose, permission justifications, data-use answers)
+- [x] Small promo tile 440×280 — `store-assets/promo/promo-tile-440x280.png`
+- [x] Marquee 1400×560 — `store-assets/promo/marquee-1400x560.png`, built from
+      `marquee.svg` (regeneration command in `CWS_SUBMISSION_FIELDS.md`)
+- [x] All screenshots and promo tiles are 24-bit PNG with **no alpha**, which is what the
+      Chrome upload slots require. Re-check this after regenerating any of them.
+- [x] Listing copy — shared claims and captions in `store-assets/STORE_LISTING.md`;
+      per-store field values in `CWS_SUBMISSION_FIELDS.md` and `AMO_SUBMISSION_FIELDS.md`
 
-## 2. Privacy policy hosting **(you)**
+## 2. Privacy policy hosting — **resolved**
 
-- [ ] Host `PRIVACY_POLICY.md` (or the rendered `privacy.html`) at a public HTTPS URL.
-- [ ] Paste that URL into both store dashboards (required by Chrome when data is handled).
-- [ ] (Optional) The in-extension popup already links to the bundled `privacy.html`.
+- [x] Hosted at a public HTTPS URL. The repo went public, so the file's own GitHub URL
+      satisfies Chrome's requirement with no new infrastructure:
+      `https://github.com/yogesh-bhatttk/bulk-clean-for-slack/blob/main/PRIVACY_POLICY.md`
+      (verified HTTP 200).
+- [x] AMO accepts pasted policy text and does not need a URL at all.
+- [ ] (Optional upgrade) Serve it as a real page instead of a file view by enabling GitHub
+      Pages on `main` → `https://yogesh-bhatttk.github.io/bulk-clean-for-slack/privacy.html`.
+      `privacy.html` is self-contained, so it works as-is.
+- [x] The in-extension popup already links to the bundled `privacy.html`.
 
 ## 3. Build
 

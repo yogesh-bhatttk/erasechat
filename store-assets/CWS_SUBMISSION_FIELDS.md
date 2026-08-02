@@ -19,26 +19,35 @@ and omits regex filtering).
       Not the firefox one; it carries `browser_specific_settings`, which Chrome flags.
       Rebuild with `npm run build` if the source changed since 2026-08-02.
 
-There is **no reviewer-notes field** on the Chrome dashboard — nothing equivalent to AMO's
-"Notes for Reviewer". Everything a reviewer needs to not be alarmed by the session-token
-read has to live in the **permission justifications** below, which is why the host-permission
-one is long.
+Chrome's equivalent of AMO's "Notes for Reviewer" is **Access → Test instructions** in the
+left nav — a separate tab from Store listing and Privacy. §2.5 below has the text. The
+host-permission justification still carries the endpoint-by-endpoint detail, because that
+is what appears next to the permission itself during review.
 
 ---
 
 ## 1. Store listing tab
 
-### Item name
-_max 75 chars · currently 20_
-```
-Bulk Clean for Slack
-```
+### Item name and Summary — **not editable in the dashboard**
 
-### Summary
-_max 132 chars · currently 124. This is the one-liner in search results._
+Both are read **from the package** and shown greyed out. They come from
+`_locales/en/messages.json`:
+
+| Dashboard field | Source key | Current value |
+|---|---|---|
+| Title | `extensionName` | `Bulk Clean for Slack` (20 / 75) |
+| Summary | `extensionDescription` | `Bulk delete and clean your Slack messages in channels and DMs with advanced filters, threads, and safety controls.` (114 / 132) |
+
+The summary is the one-liner in search results. Changing it means editing the locale file,
+`npm run build`, and re-uploading the zip — and it changes the Firefox package too, since
+both manifests share the locale. A punchier alternative, if that round trip is ever worth
+making:
+
 ```
 Bulk-delete your own Slack messages by sender, date, keyword, threads & files. Scan, preview, then delete — safely, locally.
 ```
+
+Not worth doing mid-submission. The shipped text is accurate and within limits.
 
 ### Description
 _max 16,000 chars · currently 1,981_
@@ -86,15 +95,15 @@ Bulk Clean for Slack is an independent tool and is not affiliated with, endorsed
 ```
 
 ### Category
+_Single-select, and it is marked "For all languages" — there is no secondary category._
+```
+Workflow & Planning
+```
 
 Chrome's taxonomy is not AMO's and not the "Productivity" wording in `STORE_LISTING.md`
-(that was the pre-2023 name). Pick:
-
-- **Primary: `Workflow & Planning`**
-- If a second category is offered: **`Privacy & Security`**
-
-`Communication` is the tempting alternative — skip it. It is dominated by chat clients and
-meeting tools, and this is a maintenance utility, not a way to talk to people.
+(that was the pre-2023 name). `Communication` is the tempting alternative — skip it. It is
+dominated by chat clients and meeting tools, and this is a maintenance utility, not a way
+to talk to people. `Privacy & Security` is the AMO second choice and has no home here.
 
 ### Language
 ```
@@ -103,8 +112,23 @@ English (United States)
 The package ships only `_locales/en`, so any other choice would promise localizations that
 do not exist.
 
+### Store icon
+_128×128 · a **separate upload**, not read from the package_
+```
+icons/icon128.png
+```
+The same icon the toolbar and `chrome://extensions` show, so the listing matches what a
+user sees after installing. Chrome's image guidelines suggest a 96×96 graphic centred in
+the 128 canvas; this one is a full-bleed rounded square, which is what every modern store
+icon does and what the dashboard accepts.
+
 ### Screenshots
-_1280×800 (verified) · Chrome accepts up to 5 · order matters_
+_1280×800 (verified) · 24-bit PNG, no alpha (verified) · Chrome accepts up to 5 · order matters_
+
+The form offers **two** slots — *Localized screenshots* (under English – en) and *Global
+screenshots*. With only one locale they are interchangeable. Upload the five to **Global**,
+which covers every language including any added later; if the submit check still asks for
+localized ones, upload the identical five there as well.
 
 | # | File | Caption (if captions are offered) |
 |---|---|---|
@@ -116,21 +140,57 @@ _1280×800 (verified) · Chrome accepts up to 5 · order matters_
 
 ### Promotional images
 
-- **Small promo tile 440×280** — `store-assets/promo/promo-tile-440x280.png`. Optional,
-  but an item with no tile can never be featured or appear in a curated collection. Upload it.
-- **Marquee 1400×560** — not produced. Leave blank; it is only used for large editorial
-  placements a 1.0.0 release will not get.
+- **Small promo tile 440×280** — `store-assets/promo/promo-tile-440x280.png` (24-bit, no
+  alpha, verified). Optional, but an item with no tile can never be featured or appear in
+  a curated collection. Upload it.
+- **Marquee 1400×560** — `store-assets/promo/marquee-1400x560.png` (24-bit, no alpha,
+  verified). Built from `marquee.svg`, which reuses the icon mark and the tile's gradients
+  so the three brand assets match. The lockup is centred with wide margins because Chrome
+  crops the marquee at some placements, and it was checked legible downscaled to 440px,
+  which is roughly how the carousel renders it.
+- **Promo video** — none. Leave both video fields blank.
 
-### URLs
+Regenerate any promo asset after editing its SVG:
+```bash
+python3 -c "
+import cairosvg
+from PIL import Image
+cairosvg.svg2png(url='store-assets/promo/marquee.svg', write_to='/tmp/m.png',
+                 output_width=1400, output_height=560)
+im = Image.open('/tmp/m.png')
+flat = Image.new('RGB', im.size, (15, 23, 42))   # flatten: Chrome rejects alpha here
+flat.paste(im, (0, 0), im)
+flat.save('store-assets/promo/marquee-1400x560.png', optimize=True)
+"
+```
+
+`store-assets/promo/listing-icon-512.png` is the **AMO** listing icon (512×512). Chrome has
+no 512 slot; do not try to force it into one.
+
+### Additional fields
 
 | Field | Value |
 |---|---|
+| Official URL | **None** — see below |
 | Homepage URL | `https://github.com/yogesh-bhatttk/bulk-clean-for-slack` |
 | Support URL | `https://github.com/yogesh-bhatttk/bulk-clean-for-slack/issues` |
+| Mature content | **Off** |
+| Item support | **On** (visible) |
 
-> Both are live — the repo is **public**. (Note: `AMO_SUBMISSION_FIELDS.md` says to leave
-> AMO's support website blank because the repo was private. That is now stale — if the AMO
-> listing is already up, go back and add the issues URL there too.)
+Both URLs are live — the repo is **public**. (Note: `AMO_SUBMISSION_FIELDS.md` used to say
+to leave AMO's support website blank because the repo was private. That is now corrected —
+if the AMO listing is already up, go back and add the issues URL there too.)
+
+**Official URL** is a dropdown, not a text field: it only offers domains already verified
+as yours in Google Search Console, and `github.com` can never be one of them. Leave it
+**None**. It is only worth revisiting if this ever gets its own domain — at which point
+setting it earns the listing a verified-owner link. Nothing about it blocks submission.
+
+**Mature content** stays off. The extension deletes messages; nothing in it is sexual,
+violent, or drug-related. Toggling this on would restrict the audience for no reason.
+
+**Item support** should be visible — you filled in a support URL, and hiding the support
+tab buries the only channel a user has for reporting a bug.
 
 ---
 
@@ -142,6 +202,12 @@ Bulk Clean for Slack has a single purpose: to help users bulk-delete and clean t
 ```
 
 ### Permission justifications
+
+> **Every justification box is capped at 1,000 characters**, the dashboard silently
+> truncates a longer paste rather than warning you, and it appears to count a line break as
+> two characters — a 993-char paste was still rejected. Budget to ~950 at most. Measured
+> lengths: single purpose 288, storage 438, scripting 336, alarms 243, remote code 510,
+> host permission 909. Re-count before pasting anything you have edited.
 
 **`storage`**
 ```
@@ -159,20 +225,28 @@ Schedules two things: rate-limit back-offs that honor the Retry-After value Slac
 ```
 
 **Host permission — `https://*.slack.com/*`, `https://slack.com/*`**
+_909 / 1,000. Two earlier drafts did not fit: 1,300 chars (cut off mid-sentence, silently)
+and 993 chars, which the field still rejected — most likely because it counts a line break
+as two characters. This version leaves 91 to spare, so it survives either counting rule._
 ```
-The extension runs only on the Slack web client and calls only Slack's own API. It reads the conversation the user currently has open, finds the user's own matching messages, and deletes them at the user's explicit instruction. No other site is accessed and there is no backend of any kind.
+Runs only on the Slack web client and calls only Slack's own API. It reads the conversation the user has open, finds their own matching messages, and deletes them on their explicit instruction. No other site is contacted; there is no backend, analytics or telemetry.
 
-Endpoints used: conversations.history and conversations.replies (find matching messages), conversations.info (name the open conversation in the UI), users.list (cache display names so the preview shows "Alice" rather than "U01ABC"), chat.delete (delete a message), chat.update (attachments-only mode: strip files but keep the text), files.info and files.delete (remove an attached file — files.info is called first, and the file is left intact if it is shared into any other conversation, so cleaning one channel can never destroy content in another).
+Endpoints: conversations.history and conversations.replies (find messages), conversations.info (name the conversation), users.list (show display names in the preview), chat.delete (delete a message), chat.update (attachments-only mode: strip files, keep text), files.info then files.delete (files.info runs first, and the file is kept if it is shared into another conversation, so cleaning one channel cannot destroy content elsewhere).
 
-Authentication: the extension uses the user's existing Slack web session, reading the session token from the Slack app's own localStorage in the Slack tab. This avoids asking users to create a Slack app and paste a long-lived API token, which would be both a worse experience and a worse security posture. The token stays in chrome.storage.session (memory-only, cleared on browser close), is never written to disk, and is never sent anywhere except slack.com.
+Calls use the user's existing Slack session, so no API token has to be created or pasted. That token is memory-only (chrome.storage.session), never written to disk, and never sent anywhere but slack.com.
 ```
 
-**Remote code**
+Because 1,000 characters cannot hold the full token rationale, **Access → Test instructions
+(§2.5) is now the only place it appears in full**. That tab is no longer optional polish.
+
+**Remote code** — select **"No, I am not using remote code"**
+
+The radio button alone is not enough: Chrome requires the justification box to be filled in
+even when the answer is No, and leaving it empty is one of the errors the submit check
+raises. Paste:
 ```
-No, I am not using remote code.
+No remote code is used. Every line of JavaScript, HTML and CSS the extension executes ships inside the uploaded package. Nothing is fetched or injected at runtime, and there is no eval(), no new Function(), no remotely-hosted script tag and no dynamic import. The extension-pages content security policy is "script-src 'self'; object-src 'none'", which blocks remote execution at the platform level as well. The extension's only network requests are API calls to slack.com, which return JSON data — never code.
 ```
-All code is bundled in the package. Nothing is fetched or `eval`'d at runtime; the
-extension-pages CSP is `script-src 'self'; object-src 'none'`.
 
 ### Data usage
 
@@ -208,6 +282,85 @@ Either URL satisfies the requirement; the GitHub one needs no new infrastructure
 
 ---
 
+## 2.5. Access tab → Test instructions
+
+Chrome's counterpart to AMO's "Notes for Reviewer". A reviewer cannot exercise this
+extension without a Slack account, and the extension reads a session token out of the Slack
+page's `localStorage` — which looks alarming with no context. Explaining it here is the
+cheapest way to avoid a rejection that is purely a misunderstanding.
+
+There is also a "Does this item require a login?" style question on this tab. Answer that
+it needs **a Slack account, but no credentials from us** — there is no account to hand out,
+any free Slack workspace works, and the extension has no login of its own.
+
+```
+Thanks for reviewing. Context that should make testing straightforward.
+
+WHAT IT DOES
+Bulk Clean for Slack adds a dashboard to the Slack web client that bulk-deletes the user's
+OWN messages in the conversation they currently have open, with filters (sender, date range,
+keyword or /regex/, attachments-only, thread replies), a mandatory scan-and-preview step,
+and a resumable background delete queue.
+
+LOGIN
+No credentials are needed from us and none exist — the extension has no account system. It
+acts through the reviewer's own Slack session. Any free Slack workspace is enough to test.
+
+HOW TO TEST
+1. Sign in to any Slack workspace at https://app.slack.com.
+2. Open a channel or DM and post a few throwaway messages.
+3. Click the toolbar icon, then "Open Clean Dashboard" (or press Ctrl+Shift+K).
+4. Choose filters and press "Scan Messages" — this step is read-only and deletes nothing.
+5. Review the previewed list, then press "Start Deleting".
+   Jobs over 100 messages require typing DELETE to confirm.
+
+EVERY SLACK API ENDPOINT USED, AND WHY
+  conversations.history  read the open conversation to find matching messages
+  conversations.replies  read thread replies, when "include threads" is enabled
+  conversations.info     resolve the open conversation's name and type for the UI
+  users.list             cache member display names so the preview shows "Alice" instead
+                         of "U01ABC". Cached locally for 24h, used only for rendering.
+  chat.delete            delete one of the user's messages
+  chat.update            attachments-only mode: strip files/attachments, keep the text
+  files.info             check how many conversations a file is shared into, BEFORE
+                         deleting it (see the safety note below)
+  files.delete           remove a file the user is deleting along with its message
+
+A deliberate safety detail: Slack's files.delete purges a file from every conversation it
+was ever shared into, not just this one. So files.info is called first and the file is left
+intact if it is shared anywhere else — cleaning one conversation can never destroy content
+in another.
+
+ABOUT THE SLACK TOKEN (please read — this is the part that looks unusual)
+The extension reads the user's existing Slack session token from the Slack web app's own
+localStorage key "localConfig_v2", in the Slack tab, and calls the endpoints above as that
+already-logged-in user.
+
+- The token is never stored on disk. It is held in memory and in chrome.storage.session,
+  which is cleared when the browser closes. An automated test in the repository asserts
+  that no token is ever written to storage.local.
+- The token is never transmitted anywhere except slack.com. There is no backend, no
+  analytics, no telemetry, and no third-party endpoint of any kind.
+- This is the only way to act on the user's behalf without asking them to create a Slack
+  app and paste a long-lived API token, which would be a worse experience and a worse
+  security posture for a personal cleanup tool.
+
+NO REMOTE CODE
+All code is bundled in the package. Nothing is fetched or eval'd at runtime. The
+extension-pages CSP is "script-src 'self'; object-src 'none'".
+
+SOURCE
+Unminified and readable exactly as shipped; there is no build step that transforms it.
+Public source: https://github.com/yogesh-bhatttk/bulk-clean-for-slack
+
+DATA COLLECTION
+None. Nothing leaves the user's device except the calls to Slack's own API listed above.
+
+Happy to answer anything — yogeshb@prosperix.com
+```
+
+---
+
 ## 3. Distribution / Payments tab
 
 | Field | Value |
@@ -228,9 +381,10 @@ above. They are here so a rejection email is not a surprise.
    carries an explicit non-affiliation disclaimer. Chrome can still ask for a rename; if it
    does, the fix is a name change, not an appeal.
 2. **Reading the session token from `localStorage`.** This is the part that looks unusual
-   at a glance and it is why the host-permission justification explains it in full. Chrome
-   reviewers have no separate notes field to read, so that justification is the only place
-   the explanation can land — do not shorten it.
+   at a glance, and it is explained in two places on purpose: the host-permission
+   justification (§2, shown next to the permission during review) and Test instructions
+   (§2.5, the reviewer's testing brief). Do not shorten either — they are read by different
+   parts of the process.
 
 ## 5. Before you click Submit
 
