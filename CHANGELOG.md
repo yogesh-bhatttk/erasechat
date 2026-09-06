@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased
+
+Four filter/UX additions on top of the 1.0.0 safety model, none of which touch the
+delete path itself: two are new scan-time qualification options in the single shared
+decision function, one is a client-side convenience, one is translation.
+
+#### Skip Pinned Messages, on by default (`shared-filters.js`, `background.js`, `content.js`)
+
+`qualifies()` dropped Slack's pin *notification* subtypes (`pinned_item`/`unpinned_item`)
+but had no opinion on a message that is itself currently pinned — a filter matching on
+date or keyword could delete something the user deliberately kept. `qualifies()` now
+takes an `options` object (`{ invertText, excludePinned }`) and, when `excludePinned` is
+set, drops any message with a non-empty `pinned_to`. Wired through as a toggle in the
+Deletion Filter Matrix, **checked by default** (opt-out, not opt-in) — the one new control
+here that defaults to the more cautious behavior rather than the previous one.
+
+#### Invert Text Match: "delete everything EXCEPT matches" (`shared-filters.js`, `content.js`)
+
+The Text Match / `/regex/` filter only ever meant "delete if it matches." An inline
+"Invert" checkbox under the field flips that to "keep if it matches, delete the rest,"
+without hand-rolling a negative-lookahead regex. The existing empty-string-match guard
+(a degenerate pattern like `/.*/` selects NOTHING rather than the whole channel) had to
+be generalized rather than just reused: naively inverting "matches nothing" would have
+meant "delete everything," reintroducing the exact mass-over-delete failure that guard
+exists to prevent. The qualification logic now computes match + degenerate as two
+separate signals, and a degenerate pattern short-circuits to "select nothing" in EITHER
+mode before the invert flag is even consulted.
+
+#### Saved Filter Presets (`content.js`)
+
+The full filter form (sender, date mode, text/invert, threads, attachments, skip-pinned,
+delay) can be named and saved to `chrome.storage.local`, then reloaded from a dropdown —
+useful for a recurring cleanup ("older than 90 days, no attachments") that previously
+needed re-entering every time. Capped at 20 saved presets so the habit can't grow storage
+without bound. Naming a preset uses a new lightweight custom prompt modal
+(`sc-prompt-modal`), added to match the existing non-blocking alert/confirm modal pattern
+(and wired into the same Escape/Tab focus-trap handling) rather than reaching for a
+blocking native `window.prompt()`.
+
+#### Additional locales: Spanish, French, German (`_locales/{es,fr,de}/messages.json`)
+
+Translations of every `data-i18n` / `__MSG_` string used in the popup and dashboard.
+`manifest.json`'s `default_locale: "en"` and Chrome's automatic `_locales/<dir>` discovery
+mean no manifest change was needed — dropping in the new directories is sufficient, and
+`scripts/build.sh` already ships the whole `_locales` tree.
+
 ## 1.0.0 — 2026-07-31
 
 First public release, targeting the Chrome Web Store and Firefox AMO.

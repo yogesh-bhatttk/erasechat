@@ -57,6 +57,10 @@ if (!window.slackCleanInitialized) {
     // users.list is Slack Tier 2 (~20 req/min). 5 pages × 1000 = up to 5,000
     // member names cached at init — a balance between coverage and startup latency.
     const MAX_USER_CACHE_PAGES = 5;
+    // Saved filter presets are a convenience list, not a database — cap it so a
+    // "Save Current" habit can't grow chrome.storage.local without bound.
+    const MAX_FILTER_PRESETS = 20;
+    const FILTER_PRESETS_STORAGE_KEY = "bulkCleanFilterPresets";
 
     // UI Shadow DOM and Element Cache references
     let shadowHost = null;
@@ -684,6 +688,17 @@ if (!window.slackCleanInitialized) {
                   <section class="panel-card">
                     <h3 class="panel-title" data-i18n="dashFilterMatrix">Deletion Filter Matrix</h3>
                     <div class="filter-form">
+                      <div class="form-group sc-preset-group">
+                        <label for="sc-preset-select" data-i18n="dashPresetLabel">Saved Presets</label>
+                        <div class="preset-controls">
+                          <select id="sc-preset-select" aria-label="Load a saved filter preset">
+                            <option value="" data-i18n="dashPresetChoose">Load preset…</option>
+                          </select>
+                          <button type="button" id="sc-btn-preset-save" class="dashboard-btn btn-scan" data-i18n="dashPresetSave">Save Current</button>
+                          <button type="button" id="sc-btn-preset-delete" class="dashboard-btn btn-scan hidden" data-i18n="dashPresetDelete">Delete</button>
+                        </div>
+                      </div>
+
                       <div class="form-row">
                         <div class="form-group">
                           <label for="sc-filter-sender" data-i18n="dashSenderProfile">Sender Profile</label>
@@ -725,6 +740,10 @@ if (!window.slackCleanInitialized) {
                         <div class="form-group">
                           <label for="sc-filter-text" data-i18n="dashTextMatch">Text Match (Optional)</label>
                           <input type="text" id="sc-filter-text" data-i18n-ph="dashKeywordPlaceholder" placeholder="Keyword or Phrase">
+                          <label class="sc-inline-checkbox" for="sc-filter-invert-text">
+                            <input type="checkbox" id="sc-filter-invert-text" aria-label="Invert text match: delete everything except matches">
+                            <span data-i18n="dashInvertText">Invert: delete everything EXCEPT matches</span>
+                          </label>
                         </div>
                         <div class="form-group">
                           <label for="sc-filter-delay" data-i18n="dashSpeedDelay">Speed Delay (ms)</label>
@@ -750,6 +769,17 @@ if (!window.slackCleanInitialized) {
                         </div>
                         <label class="switch">
                           <input type="checkbox" id="sc-filter-attachments" aria-label="Only delete attachments checkbox">
+                          <span class="slider"></span>
+                        </label>
+                      </div>
+
+                      <div class="toggle-group">
+                        <div class="toggle-label">
+                          <span class="toggle-title" data-i18n="dashSkipPinned">Skip Pinned Messages</span>
+                          <span class="toggle-subtitle" data-i18n="dashSkipPinnedDesc">Never delete a message that is currently pinned in this conversation</span>
+                        </div>
+                        <label class="switch">
+                          <input type="checkbox" id="sc-filter-skip-pinned" checked aria-label="Skip pinned messages checkbox">
                           <span class="slider"></span>
                         </label>
                       </div>
@@ -901,6 +931,19 @@ if (!window.slackCleanInitialized) {
             </div>
           </div>
         </div>
+
+        <!-- Custom Prompt Modal (single text-input dialog, e.g. naming a saved preset) -->
+        <div class="verification-overlay hidden" id="sc-prompt-modal" role="dialog" aria-modal="true" aria-labelledby="sc-prompt-title">
+          <div class="verification-card sc-card-purple">
+            <h4 id="sc-prompt-title" data-i18n="dashPromptTitle">Name This Preset</h4>
+            <p id="sc-prompt-message"></p>
+            <input type="text" id="sc-prompt-input" maxlength="60" aria-label="Preset name">
+            <div class="sc-modal-actions">
+              <button class="dashboard-btn btn-scan" id="sc-prompt-cancel-btn" data-i18n="dashCancel">Cancel</button>
+              <button class="dashboard-btn btn-delete" id="sc-prompt-ok-btn" disabled data-i18n="dashConfirm">Confirm</button>
+            </div>
+          </div>
+        </div>
       `;
 
       shadowRoot.appendChild(dashboardEl);
@@ -924,6 +967,7 @@ if (!window.slackCleanInitialized) {
       // Set up theme controls and button events
       setupUIListeners();
       startUrlObserver();
+      refreshPresetSelect();
 
       // Trigger DOM paint then slide in, then move focus for accessibility
       setTimeout(() => {
@@ -1156,6 +1200,161 @@ if (!window.slackCleanInitialized) {
       modal.classList.remove("hidden");
     }
 
+    // Custom non-blocking single-text-input Prompt Dialog helper (e.g. naming a preset).
+    // callback receives the trimmed value, or null if cancelled.
+    function showCustomPrompt(title, message, placeholder, callback) {
+      const modal = shadowRoot.getElementById("sc-prompt-modal");
+      if (!modal) return;
+
+      shadowRoot.getElementById("sc-prompt-title").innerText = title;
+      shadowRoot.getElementById("sc-prompt-message").innerText = message || "";
+
+      const input = shadowRoot.getElementById("sc-prompt-input");
+      input.value = "";
+      input.placeholder = placeholder || "";
+
+      const okBtn = shadowRoot.getElementById("sc-prompt-ok-btn");
+      const newOkBtn = okBtn.cloneNode(true);
+      okBtn.parentNode.replaceChild(newOkBtn, okBtn);
+      newOkBtn.disabled = true;
+
+      const cancelBtn = shadowRoot.getElementById("sc-prompt-cancel-btn");
+      const newCancelBtn = cancelBtn.cloneNode(true);
+      cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
+
+      const onInput = () => {
+        newOkBtn.disabled = input.value.trim().length === 0;
+      };
+      input.addEventListener("input", onInput);
+
+      const finish = (value) => {
+        input.removeEventListener("input", onInput);
+        modal.classList.add("hidden");
+        callback(value);
+      };
+
+      newOkBtn.addEventListener("click", () => finish(input.value.trim()));
+      newCancelBtn.addEventListener("click", () => finish(null));
+
+      modal.classList.remove("hidden");
+      input.focus();
+    }
+
+    // Saved Filter Presets ---------------------------------------------------
+    // Presets capture every filter input EXCEPT the destructive/context-specific
+    // ones (sender profile stays "me" by default is fine to include; the target
+    // channel and delete queue itself are never part of a preset). Stored in
+    // chrome.storage.local so they survive across Slack sessions/tabs.
+
+    // Shows/hides the "days old" vs "custom range" rows to match the Date Threshold
+    // select. Shared by the live change listener and by applyFilterFormState (loading
+    // a saved preset), so both paths keep the visible rows in sync with the value.
+    function updateDateFilterRows(val) {
+      const daysRow = shadowRoot.getElementById("sc-date-days-row");
+      const customRow = shadowRoot.getElementById("sc-date-custom-row");
+      if (!daysRow || !customRow) return;
+
+      if (val === "older_than") {
+        daysRow.classList.remove("hidden");
+        customRow.classList.add("hidden");
+      } else if (val === "custom") {
+        daysRow.classList.add("hidden");
+        customRow.classList.remove("hidden");
+      } else {
+        daysRow.classList.add("hidden");
+        customRow.classList.add("hidden");
+      }
+    }
+
+    function readFilterFormState() {
+      return {
+        sender: shadowRoot.getElementById("sc-filter-sender").value,
+        dateMode: shadowRoot.getElementById("sc-filter-date").value,
+        days: shadowRoot.getElementById("sc-filter-days").value,
+        startDate: shadowRoot.getElementById("sc-filter-start-date").value,
+        endDate: shadowRoot.getElementById("sc-filter-end-date").value,
+        text: shadowRoot.getElementById("sc-filter-text").value,
+        invertText: shadowRoot.getElementById("sc-filter-invert-text").checked,
+        threads: shadowRoot.getElementById("sc-filter-threads").checked,
+        onlyAttachments: shadowRoot.getElementById("sc-filter-attachments").checked,
+        skipPinned: shadowRoot.getElementById("sc-filter-skip-pinned").checked,
+        delay: shadowRoot.getElementById("sc-filter-delay").value
+      };
+    }
+
+    function applyFilterFormState(state) {
+      if (!state) return;
+      const setVal = (id, val) => {
+        const el = shadowRoot.getElementById(id);
+        if (el && val !== undefined) el.value = val;
+      };
+      const setChecked = (id, val) => {
+        const el = shadowRoot.getElementById(id);
+        if (el && val !== undefined) el.checked = !!val;
+      };
+
+      setVal("sc-filter-sender", state.sender);
+      setVal("sc-filter-date", state.dateMode);
+      setVal("sc-filter-days", state.days);
+      setVal("sc-filter-start-date", state.startDate);
+      setVal("sc-filter-end-date", state.endDate);
+      setVal("sc-filter-text", state.text);
+      setChecked("sc-filter-invert-text", state.invertText);
+      setChecked("sc-filter-threads", state.threads);
+      setChecked("sc-filter-attachments", state.onlyAttachments);
+      setChecked("sc-filter-skip-pinned", state.skipPinned);
+      setVal("sc-filter-delay", state.delay);
+
+      // Sync the days/custom-range rows to the loaded mode instead of leaving
+      // them showing whatever the previous selection had visible.
+      updateDateFilterRows(state.dateMode);
+    }
+
+    async function loadFilterPresets() {
+      try {
+        const data = await chrome.storage.local.get(FILTER_PRESETS_STORAGE_KEY);
+        const presets = data[FILTER_PRESETS_STORAGE_KEY];
+        return Array.isArray(presets) ? presets : [];
+      } catch (err) {
+        console.warn("SlackClean: Error loading filter presets:", err);
+        return [];
+      }
+    }
+
+    async function saveFilterPresets(presets) {
+      try {
+        await chrome.storage.local.set({ [FILTER_PRESETS_STORAGE_KEY]: presets });
+      } catch (err) {
+        console.warn("SlackClean: Error saving filter presets:", err);
+      }
+    }
+
+    function populatePresetSelect(presets) {
+      const select = shadowRoot.getElementById("sc-preset-select");
+      if (!select) return;
+      const previousValue = select.value;
+
+      while (select.options.length > 1) select.remove(1);
+
+      presets.forEach(preset => {
+        const opt = document.createElement("option");
+        opt.value = preset.id;
+        opt.textContent = preset.name;
+        select.appendChild(opt);
+      });
+
+      // Keep the current selection if it still exists (e.g. after a save that
+      // didn't change the list order), otherwise fall back to the placeholder.
+      select.value = presets.some(p => p.id === previousValue) ? previousValue : "";
+      const delBtn = shadowRoot.getElementById("sc-btn-preset-delete");
+      if (delBtn) delBtn.classList.toggle("hidden", !select.value);
+    }
+
+    async function refreshPresetSelect() {
+      const presets = await loadFilterPresets();
+      populatePresetSelect(presets);
+    }
+
     // Listens for SPA tab URL navigation changes via low-overhead checks (replaces CPU intensive MutationObservers)
     let lastUrl = window.location.href;
     function startUrlObserver() {
@@ -1315,20 +1514,7 @@ if (!window.slackCleanInitialized) {
 
       // Date Filter Selector Toggles
       getEl("sc-filter-date").addEventListener("change", (e) => {
-        const val = e.target.value;
-        const daysRow = getEl("sc-date-days-row");
-        const customRow = getEl("sc-date-custom-row");
-
-        if (val === "older_than") {
-          daysRow.classList.remove("hidden");
-          customRow.classList.add("hidden");
-        } else if (val === "custom") {
-          daysRow.classList.add("hidden");
-          customRow.classList.remove("hidden");
-        } else {
-          daysRow.classList.add("hidden");
-          customRow.classList.add("hidden");
-        }
+        updateDateFilterRows(e.target.value);
       });
 
       // Scan Button Event
@@ -1380,6 +1566,77 @@ if (!window.slackCleanInitialized) {
         const checkboxes = shadowRoot.querySelectorAll(".msg-checkbox");
         checkboxes.forEach(cb => cb.checked = checked);
         updateScanBadgeCount();
+      });
+
+      // Saved Filter Presets: load selection, save current filters, delete selected
+      getEl("sc-preset-select").addEventListener("change", async (e) => {
+        const presetId = e.target.value;
+        const delBtn = getEl("sc-btn-preset-delete");
+        if (delBtn) delBtn.classList.toggle("hidden", !presetId);
+        if (!presetId) return;
+
+        const presets = await loadFilterPresets();
+        const preset = presets.find(p => p.id === presetId);
+        if (preset) {
+          applyFilterFormState(preset);
+          logConsole(`Loaded filter preset "${preset.name}".`, "info");
+        }
+      });
+
+      getEl("sc-btn-preset-save").addEventListener("click", () => {
+        showCustomPrompt(
+          "Name This Preset",
+          "Save the current filter settings for reuse later.",
+          "e.g. Older than 90 days, no attachments",
+          async (name) => {
+            if (!name) return;
+
+            const presets = await loadFilterPresets();
+            const state = readFilterFormState();
+            const existing = presets.find(p => p.name.toLowerCase() === name.toLowerCase());
+
+            if (existing) {
+              Object.assign(existing, state);
+            } else {
+              if (presets.length >= MAX_FILTER_PRESETS) {
+                showCustomAlert(
+                  "Preset Limit Reached",
+                  `You already have ${MAX_FILTER_PRESETS} saved presets, the maximum. Delete one before saving another.`
+                );
+                return;
+              }
+              presets.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name, ...state });
+            }
+
+            await saveFilterPresets(presets);
+            populatePresetSelect(presets);
+            getEl("sc-preset-select").value = existing ? existing.id : presets[presets.length - 1].id;
+            getEl("sc-btn-preset-delete").classList.remove("hidden");
+            logConsole(`Saved filter preset "${name}".`, "info");
+          }
+        );
+      });
+
+      getEl("sc-btn-preset-delete").addEventListener("click", () => {
+        const select = getEl("sc-preset-select");
+        const presetId = select.value;
+        if (!presetId) return;
+
+        const selectedLabel = select.options[select.selectedIndex]?.text || "this preset";
+        showCustomConfirm(
+          "Delete Preset?",
+          `Remove the saved preset "${selectedLabel}"? This cannot be undone.`,
+          "Delete",
+          "Cancel",
+          async (confirmed) => {
+            if (!confirmed) return;
+            const presets = await loadFilterPresets();
+            const remaining = presets.filter(p => p.id !== presetId);
+            await saveFilterPresets(remaining);
+            populatePresetSelect(remaining);
+            logConsole(`Deleted filter preset "${selectedLabel}".`, "info");
+          }
+        );
       });
 
       // Clear Logs (using DOM construction instead of innerHTML for security)
@@ -1481,6 +1738,7 @@ if (!window.slackCleanInitialized) {
           const alertModal = shadowRoot.getElementById("sc-alert-modal");
           const confirmModal = shadowRoot.getElementById("sc-confirm-modal");
           const verifyModal = shadowRoot.getElementById("sc-verify-modal");
+          const promptModal = shadowRoot.getElementById("sc-prompt-modal");
 
           if (alertModal && !alertModal.classList.contains("hidden")) {
             shadowRoot.getElementById("sc-alert-ok-btn")?.click();
@@ -1490,6 +1748,9 @@ if (!window.slackCleanInitialized) {
             e.preventDefault();
           } else if (verifyModal && !verifyModal.classList.contains("hidden")) {
             shadowRoot.getElementById("sc-verify-cancel-btn")?.click();
+            e.preventDefault();
+          } else if (promptModal && !promptModal.classList.contains("hidden")) {
+            shadowRoot.getElementById("sc-prompt-cancel-btn")?.click();
             e.preventDefault();
           }
           return;
@@ -1501,6 +1762,7 @@ if (!window.slackCleanInitialized) {
           const alertModal = shadowRoot.getElementById("sc-alert-modal");
           const confirmModal = shadowRoot.getElementById("sc-confirm-modal");
           const verifyModal = shadowRoot.getElementById("sc-verify-modal");
+          const promptModal = shadowRoot.getElementById("sc-prompt-modal");
 
           if (alertModal && !alertModal.classList.contains("hidden")) {
             containerEl = alertModal;
@@ -1508,6 +1770,8 @@ if (!window.slackCleanInitialized) {
             containerEl = confirmModal;
           } else if (verifyModal && !verifyModal.classList.contains("hidden")) {
             containerEl = verifyModal;
+          } else if (promptModal && !promptModal.classList.contains("hidden")) {
+            containerEl = promptModal;
           }
 
           const focusableSelectors = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -1555,6 +1819,8 @@ if (!window.slackCleanInitialized) {
       const filterText = shadowRoot.getElementById("sc-filter-text").value.trim();
       const includeThreads = shadowRoot.getElementById("sc-filter-threads").checked;
       const onlyAttachments = shadowRoot.getElementById("sc-filter-attachments").checked;
+      const invertText = shadowRoot.getElementById("sc-filter-invert-text").checked;
+      const excludePinned = shadowRoot.getElementById("sc-filter-skip-pinned").checked;
 
       let oldest = 0;
       let latest = Math.floor(Date.now() / 1000);
@@ -1637,6 +1903,8 @@ if (!window.slackCleanInitialized) {
         filterSender,
         filterText,
         onlyAttachments,
+        invertText,
+        excludePinned,
         userId: activeTeam.userId
       }, (response) => {
         // The timeout may have already restored the UI and given up on this scan.
@@ -2102,11 +2370,16 @@ if (!window.slackCleanInitialized) {
         "sc-filter-start-date",
         "sc-filter-end-date",
         "sc-filter-text",
+        "sc-filter-invert-text",
         "sc-filter-delay",
         "sc-filter-threads",
         "sc-filter-attachments",
+        "sc-filter-skip-pinned",
         "sc-btn-scan",
-        "sc-select-all"
+        "sc-select-all",
+        "sc-preset-select",
+        "sc-btn-preset-save",
+        "sc-btn-preset-delete"
       ];
 
       selectors.forEach(id => {

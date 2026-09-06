@@ -271,6 +271,64 @@ test("runScanInBg: a fully-examined channel reports no truncation", async () => 
   assert.strictEqual(scan.results.length, 1);
 });
 
+test("runScanInBg: excludePinned drops a pinned message end-to-end", async () => {
+  const stub = makeSlackFetch({
+    "conversations.history": () => ({
+      ok: true,
+      messages: [
+        { ts: "1000.000", user: "U1", text: "pinned announcement", pinned_to: ["C123"] },
+        { ts: "1001.000", user: "U1", text: "ordinary message" }
+      ],
+      response_metadata: { next_cursor: "" }
+    })
+  });
+
+  const { context } = loadBackground({ fetchImpl: stub.fetch });
+  const scan = await vm.runInContext("runScanInBg", context)("xoxc-test", {
+    channelId: "C123",
+    oldest: 0,
+    latest: 9999999999,
+    includeThreads: false,
+    filterSender: "all",
+    filterText: "",
+    onlyAttachments: false,
+    excludePinned: true,
+    userId: "U1"
+  });
+
+  assert.strictEqual(scan.results.length, 1);
+  assert.strictEqual(scan.results[0].ts, "1001.000");
+});
+
+test("runScanInBg: invertText keeps the non-matching message and drops the matching one", async () => {
+  const stub = makeSlackFetch({
+    "conversations.history": () => ({
+      ok: true,
+      messages: [
+        { ts: "1000.000", user: "U1", text: "this is confidential" },
+        { ts: "1001.000", user: "U1", text: "unrelated chatter" }
+      ],
+      response_metadata: { next_cursor: "" }
+    })
+  });
+
+  const { context } = loadBackground({ fetchImpl: stub.fetch });
+  const scan = await vm.runInContext("runScanInBg", context)("xoxc-test", {
+    channelId: "C123",
+    oldest: 0,
+    latest: 9999999999,
+    includeThreads: false,
+    filterSender: "all",
+    filterText: "confidential",
+    onlyAttachments: false,
+    invertText: true,
+    userId: "U1"
+  });
+
+  assert.strictEqual(scan.results.length, 1);
+  assert.strictEqual(scan.results[0].ts, "1001.000");
+});
+
 test("runScanInBg: thread replies outside the date window are never queued", async () => {
   // The scan deliberately relaxes the server-side `oldest` when threads are included
   // (so pre-window parents can be expanded). That makes the CLIENT-side window guard

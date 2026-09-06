@@ -89,11 +89,29 @@ function isSafeRegex(pattern) {
 }
 
 // ReDoS-shielded qualification checker used by the background scan engine.
-function qualifies(msg, userId, senderMode, textFilter, onlyAttachments) {
+//
+// `options`:
+//   invertText     -> the text/regex filter means "keep if it matches" instead of
+//                     "delete if it matches", i.e. delete everything EXCEPT matches.
+//                     A degenerate (empty-matching) pattern still selects NOTHING in
+//                     either mode — inverting a broken filter must never expand
+//                     scope to the whole channel.
+//   excludePinned  -> never qualify a message Slack currently shows as pinned
+//                     (msg.pinned_to non-empty). Off by default for backward
+//                     compatibility with existing positional callers/tests.
+function qualifies(msg, userId, senderMode, textFilter, onlyAttachments, options) {
+  const { invertText = false, excludePinned = false } = options || {};
+
   // "me" mode must be able to identify the current user. If userId is missing
   // (upstream resolution failure), fail CLOSED — otherwise `undefined !== undefined`
   // lets a user-less message (bot/integration/system) slip through as "mine".
   if (senderMode === "me" && (!userId || msg.user !== userId)) {
+    return false;
+  }
+
+  // A message the user deliberately pinned is the opposite of throwaway content —
+  // protect it from an otherwise-matching bulk filter unless the user opts out.
+  if (excludePinned && Array.isArray(msg.pinned_to) && msg.pinned_to.length > 0) {
     return false;
   }
 
@@ -123,13 +141,17 @@ function qualifies(msg, userId, senderMode, textFilter, onlyAttachments) {
     }
 
     const keyword = textFilter.toLowerCase();
+    let matched;
+    // Set only when the pattern matches the empty string (see the comment at the
+    // regex.test("") check below) — never toggled for the plain-substring path.
+    let degenerate = false;
 
     if (keyword.startsWith("/") && keyword.endsWith("/") && keyword.length > 2) {
       const pattern = textFilter.substring(1, textFilter.length - 1);
 
       if (!isSafeRegex(pattern)) {
         // Dangerous or oversized pattern — fall back to literal substring match
-        if (!msgText.includes(pattern.toLowerCase())) return false;
+        matched = msgText.includes(pattern.toLowerCase());
       } else {
         try {
           const regex = new RegExp(pattern, "i");
@@ -137,20 +159,29 @@ function qualifies(msg, userId, senderMode, textFilter, onlyAttachments) {
           // always a mistyped filter (a stray trailing `*`/`?`, a lone `^`/`$`, `.*`,
           // an all-optional group). For a permanent-delete tool, silently selecting
           // the entire channel is the worst failure mode, so treat a degenerate
-          // empty-matching pattern as selecting NOTHING: the user gets 0 results and
-          // fixes the filter instead of nuking everything.
-          if (regex.test("")) return false;
-          // Bound the input a safe regex actually runs against (see MAX_REGEX_INPUT) —
-          // a final backstop so even a ≤2-unbounded (quadratic) pattern on a very long
-          // repeated run can't stall the worker.
-          if (!regex.test(msgText.slice(0, MAX_REGEX_INPUT))) return false;
+          // empty-matching pattern as selecting NOTHING — in EITHER mode: normal
+          // mode already refuses to match, and inverting "match nothing" would
+          // otherwise mean "delete everything", the exact failure this guards
+          // against. The user gets 0 results and fixes the filter instead.
+          if (regex.test("")) {
+            degenerate = true;
+            matched = false;
+          } else {
+            // Bound the input a safe regex actually runs against (see
+            // MAX_REGEX_INPUT) — a final backstop so even a ≤2-unbounded
+            // (quadratic) pattern on a very long repeated run can't stall the worker.
+            matched = regex.test(msgText.slice(0, MAX_REGEX_INPUT));
+          }
         } catch (e) {
-          if (!msgText.includes(pattern.toLowerCase())) return false;
+          matched = msgText.includes(pattern.toLowerCase());
         }
       }
     } else {
-      if (!msgText.includes(keyword)) return false;
+      matched = msgText.includes(keyword);
     }
+
+    if (degenerate) return false;
+    if (invertText ? matched : !matched) return false;
   }
 
   // Fallback for any OTHER (unlisted) subtype: drop it only when it carries no text

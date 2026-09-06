@@ -18,15 +18,21 @@ browser extension for **Chrome / Chromium** (Chrome, Brave, Edge) and **Firefox*
 - **Scan & preview before deleting** — nothing is deleted until you review the matched
   list and confirm.
 - **Filters** — by sender (only me / everyone), date (all time, older-than-N-days, or a
-  custom range), free-text keyword, `/regex/` pattern, and attachments-only.
+  custom range), free-text keyword, `/regex/` pattern, and attachments-only. An **Invert**
+  checkbox flips the text/regex filter to "keep matches, delete everything else."
 - **Threads** — optionally scan and delete replies inside threads.
 - **Attachment cleaning** — "Only Delete Attachments" strips files/attachments while
   keeping the message text (a message that is *only* a file is deleted).
+- **Skip Pinned Messages** — on by default: a message currently pinned in the
+  conversation is never selected for deletion, regardless of what else matches.
+- **Saved filter presets** — name and save a full filter combination for reuse (e.g.
+  "older than 90 days, no attachments"), stored locally per browser profile.
 - **Safety** — a type-**DELETE** confirmation for large batches (>100), channel/workspace
   drift protection that auto-pauses if you navigate away, and pause/resume/cancel at any
   time. Bulk jobs run in the background and survive the service worker being suspended.
 - **Rate-limit aware** — honors Slack's `Retry-After` with a synced countdown.
 - **Export** — download scanned messages as CSV, and the execution log as text.
+- **Localized** — English, Spanish, French, and German.
 - **Local & private** — your Slack token stays in `chrome.storage.session` (memory-only)
   and is never written to disk or sent anywhere but `slack.com`.
 
@@ -43,6 +49,9 @@ expression instead. Notes:
   match; they never hang the scan.
 - To match a literal string that happens to begin and end with `/` (like the path
   `/etc/`), it will be interpreted as the regex `etc` — use it deliberately.
+- The **Invert** checkbox next to the field flips the meaning to "keep whatever matches,
+  delete everything else." A pattern that would otherwise select nothing (see above)
+  still selects nothing when inverted — it never flips into "delete everything."
 
 ## Install
 

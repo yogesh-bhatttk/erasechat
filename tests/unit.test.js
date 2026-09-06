@@ -325,6 +325,60 @@ test('qualifies: combined filters — sender + keyword + attachments', () => {
 });
 
 // ============================================================
+// qualifies — excludePinned (safety toggle: never delete a pinned message)
+// ============================================================
+
+test('qualifies: excludePinned=true drops a message with a non-empty pinned_to', () => {
+  const pinned = { ts: '1', user: CURRENT_USER, text: 'hello', pinned_to: ['C123'] };
+  assert.equal(qualifies(pinned, CURRENT_USER, 'all', '', false, { excludePinned: true }), false);
+});
+
+test('qualifies: excludePinned=false (or omitted) does not touch pinned messages', () => {
+  const pinned = { ts: '1', user: CURRENT_USER, text: 'hello', pinned_to: ['C123'] };
+  assert.equal(qualifies(pinned, CURRENT_USER, 'all', '', false, { excludePinned: false }), true);
+  // Backward compatible: an absent options arg (existing positional callers) must
+  // behave exactly as before this feature — pinned status is simply ignored.
+  assert.equal(qualifies(pinned, CURRENT_USER, 'all', '', false), true);
+});
+
+test('qualifies: excludePinned=true still accepts an unpinned message', () => {
+  const notPinned = { ts: '1', user: CURRENT_USER, text: 'hello', pinned_to: [] };
+  assert.equal(qualifies(notPinned, CURRENT_USER, 'all', '', false, { excludePinned: true }), true);
+  assert.equal(qualifies({ ts: '2', user: CURRENT_USER, text: 'hello' }, CURRENT_USER, 'all', '', false, { excludePinned: true }), true);
+});
+
+// ============================================================
+// qualifies — invertText ("keep if matches" instead of "delete if matches")
+// ============================================================
+
+test('qualifies: invertText=true keeps a non-matching message and drops a matching one', () => {
+  const matches = { ts: '1', user: CURRENT_USER, text: 'this is confidential' };
+  const other = { ts: '2', user: CURRENT_USER, text: 'totally unrelated' };
+  assert.equal(qualifies(matches, CURRENT_USER, 'all', 'confidential', false, { invertText: true }), false);
+  assert.equal(qualifies(other, CURRENT_USER, 'all', 'confidential', false, { invertText: true }), true);
+  // Non-inverted behavior is unchanged.
+  assert.equal(qualifies(matches, CURRENT_USER, 'all', 'confidential', false, { invertText: false }), true);
+  assert.equal(qualifies(other, CURRENT_USER, 'all', 'confidential', false, { invertText: false }), false);
+});
+
+test('qualifies: invertText=true works with a regex filter too', () => {
+  const matches = { ts: '1', user: CURRENT_USER, text: 'ERR_500 occurred' };
+  const other = { ts: '2', user: CURRENT_USER, text: 'all clear' };
+  assert.equal(qualifies(matches, CURRENT_USER, 'all', '/ERR_\\d+/', false, { invertText: true }), false);
+  assert.equal(qualifies(other, CURRENT_USER, 'all', '/ERR_\\d+/', false, { invertText: true }), true);
+});
+
+test('qualifies: invertText=true STILL selects nothing for a degenerate empty-matching pattern', () => {
+  // Inverting a filter that (mistakenly) matches everything must not flip into
+  // "delete everything" — the single worst failure mode for a permanent-delete tool.
+  const anyMsg = { ts: '1', user: CURRENT_USER, text: 'totally unrelated message' };
+  for (const pat of ['/a?/', '/x*/', '/^/', '/.*/']) {
+    assert.equal(qualifies(anyMsg, CURRENT_USER, 'all', pat, false, { invertText: true }), false,
+      `inverted degenerate pattern ${pat} must still select nothing`);
+  }
+});
+
+// ============================================================
 // decideItemAction — trim (preserve text) vs full delete
 // (regression coverage for the attachment-mode data-loss fix)
 // ============================================================

@@ -644,7 +644,8 @@ async function runWatchdogSweep() {
 
 // Background Scan Execution
 async function runScanInBg(token, req) {
-  const { channelId, oldest, latest, includeThreads, filterSender, filterText, onlyAttachments, userId } = req;
+  const { channelId, oldest, latest, includeThreads, filterSender, filterText, onlyAttachments, userId, invertText, excludePinned } = req;
+  const qualifyOpts = { invertText: !!invertText, excludePinned: !!excludePinned };
   // Numeric bounds for the manual thread-reply time filter below. Coerce defensively:
   // a missing/empty `latest` must mean "no upper bound" (Infinity), not "" — because
   // `replyTsNum > ""` coerces to `> 0` and would drop every reply. Likewise oldest -> 0.
@@ -708,7 +709,7 @@ async function runScanInBg(token, req) {
       const msgTsNum = parseFloat(msg.ts);
       const rootInWindow = msgTsNum >= oldestNum && msgTsNum <= latestNum;
 
-      if (rootInWindow && qualifies(msg, userId, filterSender, filterText, onlyAttachments) && !seenTs.has(msg.ts)) {
+      if (rootInWindow && qualifies(msg, userId, filterSender, filterText, onlyAttachments, qualifyOpts) && !seenTs.has(msg.ts)) {
         seenTs.add(msg.ts);
         results.push({
           ts: msg.ts,
@@ -747,7 +748,7 @@ async function runScanInBg(token, req) {
               const replyTsNum = parseFloat(reply.ts);
               if (replyTsNum < oldestNum || replyTsNum > latestNum) continue;
 
-              if (qualifies(reply, userId, filterSender, filterText, onlyAttachments) && !seenTs.has(reply.ts)) {
+              if (qualifies(reply, userId, filterSender, filterText, onlyAttachments, qualifyOpts) && !seenTs.has(reply.ts)) {
                 seenTs.add(reply.ts);
                 results.push({
                   ts: reply.ts,

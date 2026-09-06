@@ -962,3 +962,43 @@ select:focus-visible,
 #sc-alert-message,
 #sc-confirm-message { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 20px; }
 #sc-alert-ok-btn { padding: 10px 24px; }
+
+/* Prompt modal (single text input, e.g. naming a saved filter preset) */
+#sc-prompt-modal { z-index: 100001; }
+#sc-prompt-title { color: var(--text-primary); margin: 0 0 10px 0; font-size: 16px; }
+#sc-prompt-message { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 14px; }
+#sc-prompt-input {
+  width: 100%;
+  padding: 10px 12px;
+  background-color: var(--field);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  margin-bottom: 20px;
+  outline: none;
+  box-sizing: border-box;
+}
+#sc-prompt-input:focus { border-color: var(--accent); background-color: var(--field-focus); }
+
+/* Saved filter presets row + inline "invert" checkbox under Text Match */
+.preset-controls { display: flex; gap: 8px; align-items: center; }
+.preset-controls select { flex: 1; min-width: 0; }
+.preset-controls .dashboard-btn { padding: 8px 12px; font-size: 12px; flex-shrink: 0; }
+
+.sc-inline-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-top: 2px;
+}
+.sc-inline-checkbox input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
