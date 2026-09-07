@@ -67,6 +67,7 @@ document.addEventListener("DOMContentLoaded", () => {
   renderPlatformList();
 
   document.getElementById("btn-back-to-platforms").addEventListener("click", showPlatformList);
+  document.getElementById("btn-back-to-platforms-bluesky").addEventListener("click", showPlatformList);
 
   // Auto-skip the picker only when the active tab is unambiguously Slack's --
   // every other platform's own migration step decides its own auto-detect
@@ -134,6 +135,10 @@ function onPlatformRowClick(platform) {
   if (!platform.ready) return; // inert placeholder, nothing to launch yet
   if (platform.id === "slack") {
     enterSlackView();
+    return;
+  }
+  if (platform.id === "bluesky") {
+    enterBlueskyView();
     return;
   }
   if (Array.isArray(platform.form)) {
@@ -283,8 +288,20 @@ function connectAndLaunchPlatform(platform, formValues) {
 function showPlatformList() {
   document.getElementById("platform-list-state").classList.remove("hidden");
   document.getElementById("slack-view").classList.add("hidden");
+  document.getElementById("bluesky-view").classList.add("hidden");
   const badge = document.getElementById("brand-badge");
   if (badge) badge.textContent = t("brandTag", "Choose a platform");
+}
+
+// Bluesky's own login/status states are managed entirely by bluesky-popup.bundle.js
+// (already listening on these elements since page load -- see that file's own
+// DOMContentLoaded handler and the comment on its <script> tag in popup.html). This
+// just handles which view is visible, matching enterSlackView() below.
+function enterBlueskyView() {
+  document.getElementById("platform-list-state").classList.add("hidden");
+  document.getElementById("bluesky-view").classList.remove("hidden");
+  const badge = document.getElementById("brand-badge");
+  if (badge) badge.textContent = "Bluesky";
 }
 
 function enterSlackView() {

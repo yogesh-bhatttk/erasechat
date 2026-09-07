@@ -147,6 +147,48 @@
           <p id="grant-manual-hint" class="hidden desc" data-i18n="popupGrantManualHint">Your browser did not grant access from here. Open your browser's extensions page, find Bulk Clean for Slack, and set its site access to allow slack.com.</p>
         </div>
       </div>
+
+      <!-- Bluesky view: OAuth needs the real @atproto/oauth-client-browser library
+           (bundled separately, see scripts/build-bluesky.js) and chrome.identity, so
+           it's its own view with its own bundle -- like Slack, not the generic
+           form/connect machinery the other platforms use. -->
+      <div id="bluesky-view" class="hidden">
+        <button id="btn-back-to-platforms-bluesky" class="btn-back" data-i18n-aria="popupBackToPlatformsAria" aria-label="Back to all platforms">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+          <span data-i18n="popupBackToPlatforms">All platforms</span>
+        </button>
+
+        <div id="login-section" class="state-container">
+          <div class="workspace-info">
+            <label class="label" for="handle">Bluesky Handle</label>
+            <input type="text" id="handle" class="text-input" placeholder="you.bsky.social" autocomplete="off" spellcheck="false">
+          </div>
+          <div id="error-msg" class="error-msg"></div>
+          <button id="login-btn" class="btn btn-primary" style="background: linear-gradient(135deg, #0085ff, #10b981); border:none; color:white;">
+            <span>Connect</span>
+          </button>
+        </div>
+
+        <div id="status-section" class="state-container">
+          <div class="status-card">
+            <div class="pulse-indicator" style="background: #0085ff;"></div>
+            <p>Connected as <span id="connected-handle"></span></p>
+          </div>
+
+          <button id="dashboard-btn" class="btn btn-primary" style="background: linear-gradient(135deg, #0085ff, #10b981); border:none; color:white;">
+            <span>Open Dashboard</span>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </button>
+          <button id="logout-btn" class="btn btn-secondary">
+            <span>Log Out</span>
+          </button>
+        </div>
+      </div>
     </main>
 
     <!-- First-Run Onboarding (SC-UX-01) -->
@@ -173,5 +215,6 @@
   <script src="popup/connect-mastodon.js"></script>
   <script src="popup/connect-teams.js"></script>
   <script src="popup.js"></script>
+  <script src="bluesky-popup.bundle.js"></script>
 </body>
 </html>

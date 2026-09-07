@@ -23,3 +23,10 @@ Thumbs.db
 *.xpi
 web-ext-artifacts/
 dist/
+
+# Generated bundles (scripts/build-bluesky.js) -- rebuilt by `npm run build`, not
+# committed source, same reasoning as dist/ above.
+bluesky-popup.bundle.js
+bluesky-popup.bundle.js.map
+bluesky-dashboard.bundle.js
+bluesky-dashboard.bundle.js.map

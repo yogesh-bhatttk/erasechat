@@ -1,0 +1,20 @@
+{
+  "_comment": "TODO BEFORE CHROME WEB STORE SUBMISSION: this file is currently NOT used by the extension -- bluesky-popup.src.js/bluesky-dashboard.src.js use the AT Protocol 'loopback client' pattern (client_id = http://localhost?scope=...) for local/dev testing, which requires no hosting, but is confirmed rejected by the real bsky.social authorization server for anything but a literal loopback redirect_uri (see MULTI_PLATFORM_EXPANSION_PLAN.md §7.8's real HTTP 400 evidence). To make Bluesky login actually work you MUST: (1) replace client_id below with the real, stable, public HTTPS URL where this exact file will be hosted (e.g. GitHub Pages, such as https://<you>.github.io/<repo>/client-metadata.json), (2) host this exact JSON file at that URL, and (3) update the client_id in bluesky-popup.src.js and bluesky-dashboard.src.js from the loopback pattern to that hosted URL, then rebuild (npm run build). The redirect_uris entry below already has this extension's real, permanent ID (pinned via manifest.json's \"key\" field) and does not need to change.",
+  "client_id": "https://TODO_REPLACE_WITH_YOUR_HOSTED_URL/client-metadata.json",
+  "client_name": "Bulk Clean",
+  "client_uri": "https://github.com/bulk-clean",
+  "redirect_uris": [
+    "https://aakjpapmmdfbfhaialkekbobcfhnieep.chromiumapp.org/"
+  ],
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "scope": "atproto transition:generic",
+  "token_endpoint_auth_method": "none",
+  "application_type": "web",
+  "dpop_bound_access_tokens": true
+}

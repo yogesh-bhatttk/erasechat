@@ -85,12 +85,16 @@ const PLATFORMS = [
     id: "bluesky",
     name: "Bluesky",
     accent: ["#0085ff", "#10b981"],
-    // Account's PDS host varies per user and is resolved at connect-time, not here.
+    // Account's PDS host varies per user and is resolved internally by
+    // @atproto/oauth-client-browser, not here. Listed for documentation --
+    // bluesky-popup.bundle.js requests these itself; popup.js's generic
+    // connectAndLaunchPlatform() is not used for this platform at all (see
+    // onPlatformRowClick's special case, same as Slack).
     isTabMatch: null,
     optionalHostPermissions: ["https://*/*"],
     optionalPermissions: ["identity"],
     dashboard: "dashboard-bluesky.html",
-    ready: false
+    ready: true
   },
   {
     id: "telegram",

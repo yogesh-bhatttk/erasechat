@@ -20,6 +20,9 @@ DIST="$ROOT/dist"
 rm -rf "$DIST"
 mkdir -p "$DIST/chrome" "$DIST/firefox"
 
+echo "Bundling Bluesky's OAuth client (esbuild)..."
+node scripts/build-bluesky.js
+
 # Runtime assets shipped in BOTH packages (the manifest is added per target below).
 # privacy.html ships because the popup links to it (in-extension policy page);
 # LICENSE ships for hygiene.
@@ -50,6 +53,12 @@ ASSETS=(
   dashboard-teams.html
   dashboard-teams.js
   dashboard-teams.css
+  dashboard-bluesky.html
+  dashboard-bluesky.css
+  bluesky-popup.bundle.js
+  bluesky-popup.bundle.js.map
+  bluesky-dashboard.bundle.js
+  bluesky-dashboard.bundle.js.map
 )
 
 copy_assets() {

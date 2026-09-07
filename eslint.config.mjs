@@ -61,6 +61,13 @@ const correctnessRules = {
 
 export default [
   {
+    // Generated output, not hand-written and not committed (see .gitignore):
+    // scripts/build-bluesky.js's bundles at repo root, and scripts/build.sh's
+    // full packaged copies under dist/. Linting bundled/packaged third-party
+    // code is neither useful nor meaningful.
+    ignores: ["bluesky-popup.bundle.js", "bluesky-dashboard.bundle.js", "dist/**"]
+  },
+  {
     // Background service worker / event page.
     files: ["background.js"],
     languageOptions: {
@@ -84,6 +91,26 @@ export default [
       ecmaVersion: 2022,
       sourceType: "script",
       globals: { ...browserGlobals, self: "readonly" }
+    },
+    rules: correctnessRules
+  },
+  {
+    // Bluesky's popup/dashboard source, pre-bundle (see scripts/build-bluesky.js).
+    // Unlike every other file here, these use real ES-module import statements --
+    // esbuild resolves them at build time, so sourceType must be "module" for
+    // ESLint to parse them at all.
+    files: ["bluesky-popup.src.js", "bluesky-dashboard.src.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        ...browserGlobals,
+        window: "readonly",
+        document: "readonly",
+        indexedDB: "readonly",
+        alert: "readonly",
+        prompt: "readonly"
+      }
     },
     rules: correctnessRules
   },
