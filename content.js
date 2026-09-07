@@ -1,4 +1,25 @@
 // Bulk Clean for Slack - Content Script Logic Engine (Fortified Production Edition)
+
+// Pure predicate, kept at module scope (outside the IIFE below) so it's unit-
+// testable without a DOM: does a background broadcast belong to THIS tab's
+// currently active channel/workspace?
+//
+// Broadcasts (JOB_UPDATE/JOB_RATELIMIT/JOB_LOG) go to every Slack tab regardless
+// of workspace, so channelId alone isn't enough to identify "this tab's job" --
+// Slack channel IDs are workspace-scoped, incrementing identifiers, not globally
+// random, so two independently-created workspaces could plausibly share one
+// (e.g. an early #general). teamId must match too, or a job update meant for an
+// unrelated workspace's same-named channel ID could otherwise flip this tab's UI
+// into "running"/"finished" state and wipe its own pending scan results out from
+// under the user.
+function matchesActiveWorkspaceChannel(reqChannelId, reqTeamId, activeChannel, activeTeam) {
+  return !!(activeChannel && activeTeam && reqChannelId === activeChannel.id && reqTeamId === activeTeam.id);
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { matchesActiveWorkspaceChannel };
+}
+
 if (!window.slackCleanInitialized) {
   window.slackCleanInitialized = true;
 
@@ -28,6 +49,16 @@ if (!window.slackCleanInitialized) {
     // match the intended target) instead of being shown/armed against B.
     let scanResultsChannelId = null;
     let intendedChannelId = null;
+    // Same pinning, but for the WORKSPACE (team) a queue/scan belongs to. Channel
+    // IDs are workspace-scoped, incrementing identifiers, not globally random, so
+    // two independently-created workspaces could plausibly share one (e.g. an
+    // early #general) -- channel-only guards can't tell those apart. `activeTeam`
+    // is reassigned SYNCHRONOUSLY the instant a workspace switch is detected
+    // (unlike activeChannel, which lags behind an await), so `intendedTeamId` is
+    // set at the very same moment for symmetry with the channel-side variables.
+    let queueTeamId = null;
+    let scanResultsTeamId = null;
+    let intendedTeamId = null;
     // Guards the one-time "Bulk Clean Finished" completion alert against a
     // redundant final JOB_UPDATE re-firing it. Reset when a new job starts.
     let jobFinalized = false;
@@ -122,7 +153,7 @@ if (!window.slackCleanInitialized) {
         initDashboard();
         sendResponse({ success: true });
       } else if (request.type === "JOB_UPDATE") {
-        if (activeChannel && request.job.channelId === activeChannel.id) {
+        if (matchesActiveWorkspaceChannel(request.job.channelId, request.job.teamId, activeChannel, activeTeam)) {
           isRunning = request.job.isRunning;
           isPaused = request.job.isPaused;
           deleteIndex = request.job.deleteIndex;
@@ -150,11 +181,11 @@ if (!window.slackCleanInitialized) {
           }
         }
       } else if (request.type === "JOB_RATELIMIT") {
-        if (activeChannel && request.channelId === activeChannel.id) {
+        if (matchesActiveWorkspaceChannel(request.channelId, request.teamId, activeChannel, activeTeam)) {
           startClientRateLimitCountdown(request.pauseTime);
         }
       } else if (request.type === "JOB_LOG") {
-        if (activeChannel && request.channelId === activeChannel.id) {
+        if (matchesActiveWorkspaceChannel(request.channelId, request.teamId, activeChannel, activeTeam)) {
           logConsole(request.log.message, request.log.type);
         }
       }
@@ -478,6 +509,8 @@ if (!window.slackCleanInitialized) {
       deleteQueue = [];
       queueChannelId = null;
       scanResultsChannelId = null;
+      queueTeamId = null;
+      scanResultsTeamId = null;
       const container = shadowRoot.getElementById("sc-results-list");
       if (container) {
         const nm = document.createElement("div");
@@ -516,6 +549,10 @@ if (!window.slackCleanInitialized) {
       // New workspace target — clear the finalize guard (see switchTargetChannel).
       jobFinalized = false;
       activeTeam = info.team;
+      // Record the intended workspace SYNCHRONOUSLY, mirroring intendedChannelId's
+      // reasoning: a scan/delete race guard checked before the async work below
+      // resolves must be able to tell this workspace switch is already underway.
+      intendedTeamId = activeTeam.id;
 
       // Refresh the background token cache for the newly-active workspace.
       chrome.runtime.sendMessage({
@@ -1014,6 +1051,7 @@ if (!window.slackCleanInitialized) {
       }
 
       activeTeam = info.team;
+      intendedTeamId = activeTeam.id;
       const targetChannelId = info.channelId;
 
       // Populate Connection Details
@@ -1827,6 +1865,7 @@ if (!window.slackCleanInitialized) {
       if (!activeChannel) return;
       
       const targetChannelId = activeChannel.id;
+      const targetTeamId = activeTeam.id;
       const scanBtn = shadowRoot.getElementById("sc-btn-scan");
       scanBtn.disabled = true;
       scanBtn.innerText = t("dashScanning", "Scanning...");
@@ -1943,24 +1982,34 @@ if (!window.slackCleanInitialized) {
           return;
         }
 
-        // Channel Race Protection: discard stale results if the user navigated away
-        // during the scan. Check BOTH activeChannel AND intendedChannelId — activeChannel
-        // is reassigned only after an await in loadActiveChannel, so during a switch it
-        // still holds the OLD channel and would wrongly pass this guard; intendedChannelId
-        // flips synchronously the instant the switch is detected, closing that race
-        // (a scan started in A finishing while switching to B is now correctly dropped).
+        // Channel/workspace Race Protection: discard stale results if the user
+        // navigated away during the scan. Check BOTH activeChannel/activeTeam AND
+        // intendedChannelId/intendedTeamId — activeChannel is reassigned only
+        // after an await in loadActiveChannel, so during a switch it still holds
+        // the OLD channel and would wrongly pass this guard; intendedChannelId
+        // flips synchronously the instant the switch is detected, closing that
+        // race (a scan started in A finishing while switching to B is now
+        // correctly dropped). The team-side check closes the identical race for
+        // a WORKSPACE switch: activeTeam IS reassigned synchronously (see
+        // switchWorkspace), so it alone would wrongly pass this guard during the
+        // async work switchWorkspace still has in flight — intendedTeamId is
+        // required too, exactly mirroring the channel-side reasoning.
         if ((activeChannel && activeChannel.id !== targetChannelId) ||
-            (intendedChannelId && intendedChannelId !== targetChannelId)) {
-          logConsole("Channel changed during active scan. Discarding stale scan results.", "warn");
+            (intendedChannelId && intendedChannelId !== targetChannelId) ||
+            (activeTeam && activeTeam.id !== targetTeamId) ||
+            (intendedTeamId && intendedTeamId !== targetTeamId)) {
+          logConsole("Channel or workspace changed during active scan. Discarding stale scan results.", "warn");
           return;
         }
 
         if (response && response.ok) {
           scanResults = response.results || [];
-          // Tag the results with the channel they were scanned in, so the delete path
-          // can refuse to dispatch them against a different target (belt-and-suspenders
-          // alongside the guard above and the queue's queueChannelId pin).
+          // Tag the results with the channel/workspace they were scanned in, so
+          // the delete path can refuse to dispatch them against a different
+          // target (belt-and-suspenders alongside the guard above and the
+          // queue's queueChannelId/queueTeamId pin).
           scanResultsChannelId = targetChannelId;
+          scanResultsTeamId = targetTeamId;
           // Two distinct truncation reasons — surface both honestly:
           //  - capped:        hit the 5,000 matched-results ceiling
           //  - moreAvailable: hit the page-scan limit while older messages remained
@@ -2209,10 +2258,12 @@ if (!window.slackCleanInitialized) {
           ? `CRITICAL WARNING: You have selected one or more Thread Roots. Slack will permanently delete ALL replies by other users in those threads! `
           : `WARNING: `;
 
-        // Pin this queue to the channel it was built against. startDeletionProcess
-        // re-checks this before dispatching, so a channel switch during the
-        // (non-blocking) confirmation modal can't misroute the delete.
+        // Pin this queue to the channel/workspace it was built against.
+        // startDeletionProcess re-checks this before dispatching, so a channel or
+        // workspace switch during the (non-blocking) confirmation modal can't
+        // misroute the delete.
         queueChannelId = activeChannel.id;
+        queueTeamId = activeTeam.id;
 
         let delayVal = parseInt(shadowRoot.getElementById("sc-filter-delay").value, 10);
         if (isNaN(delayVal) || delayVal < MIN_THROTTLE_DELAY_MS) {
@@ -2285,15 +2336,22 @@ if (!window.slackCleanInitialized) {
 
     // Start queue execution delegated to background
     function startDeletionProcess() {
-      // Drift guard: the queue was built and confirmed for `queueChannelId`, and its
-      // items came from a scan of `scanResultsChannelId`. Abort unless BOTH still match
-      // the currently-active conversation — this catches (a) a channel switch while the
-      // confirmation modal was open (queueChannelId mismatch) and (b) a scan that ran
-      // in a different channel than the one now targeted (scanResultsChannelId mismatch,
-      // the async-lag race). Never dispatch one channel's queue against another.
-      if (!activeChannel || !queueChannelId ||
+      // Drift guard: the queue was built and confirmed for `queueChannelId`/`queueTeamId`,
+      // and its items came from a scan of `scanResultsChannelId`/`scanResultsTeamId`.
+      // Abort unless ALL of these still match the currently-active conversation AND
+      // workspace — this catches (a) a channel switch while the confirmation modal was
+      // open (queueChannelId mismatch), (b) a scan that ran in a different channel than
+      // the one now targeted (scanResultsChannelId mismatch, the async-lag race), and
+      // (c) either of those same two races happening across a WORKSPACE switch instead
+      // of a channel switch (queueTeamId/scanResultsTeamId mismatch) — channel IDs are
+      // workspace-scoped, not globally unique, so a channel-only check could otherwise
+      // let a queue built in one workspace dispatch against a same-ID channel in
+      // another. Never dispatch one channel/workspace's queue against another.
+      if (!activeChannel || !activeTeam || !queueChannelId || !queueTeamId ||
           activeChannel.id !== queueChannelId ||
-          scanResultsChannelId !== activeChannel.id) {
+          activeTeam.id !== queueTeamId ||
+          scanResultsChannelId !== activeChannel.id ||
+          scanResultsTeamId !== activeTeam.id) {
         logConsole("Target conversation changed before deletion started — operation aborted for safety. Re-scan the current channel.", "error");
         showCustomAlert(
           "Deletion Aborted",

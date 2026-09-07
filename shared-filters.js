@@ -211,9 +211,12 @@ function qualifies(msg, userId, senderMode, textFilter, onlyAttachments, options
 //
 // In attachment-only mode: items with no files/attachments are SKIPPED (deleting
 // them would contradict "only delete attachments"); items with text are trimmed
-// (text preserved); caption-less attachment carriers fall through to "delete",
-// and the worker also removes their underlying file objects. Outside attachment
-// mode every qualifying item is a full delete.
+// (text preserved); caption-less attachment carriers fall through to "delete" via
+// chat.delete. The underlying file objects themselves are NOT separately removed
+// (files.delete was deliberately dropped to avoid collateral data loss in unseen
+// private channels the file may also be shared into — see background.js's
+// executeQueue) — the file remains in Slack's workspace storage. Outside
+// attachment mode every qualifying item is a full delete.
 function decideItemAction(item, filterAttachments) {
   const hasFiles = !!(item.files && item.files.length > 0);
   const hasAttach = !!item.hasAttachments || !!(item.attachments && item.attachments.length > 0);

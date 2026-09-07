@@ -794,6 +794,12 @@ async function runScanInBg(token, req) {
               threadHasMore = false;
             }
           } else {
+            // The replies call itself failed (retries exhausted, or a Slack
+            // error other than the cap above) -- this thread was only
+            // partially examined, same as hitting MAX_THREAD_PAGES. Flag it so
+            // moreAvailable reflects the real, incomplete coverage instead of
+            // silently under-reporting matches from this thread.
+            threadsTruncated = true;
             break;
           }
         }
@@ -1096,6 +1102,7 @@ function broadcastRateLimit(job, pauseTime) {
     tabs.forEach(tab => {
       chrome.tabs.sendMessage(tab.id, {
         type: "JOB_RATELIMIT",
+        teamId: job.teamId,
         channelId: job.channelId,
         pauseTime
       }, () => {
@@ -1114,6 +1121,7 @@ function sendLogMessage(job, message, type = "info") {
     tabs.forEach(tab => {
       chrome.tabs.sendMessage(tab.id, {
         type: "JOB_LOG",
+        teamId: job.teamId,
         channelId: job.channelId,
         log: { message: prefixedMessage, type, timestamp: new Date().toLocaleTimeString() }
       }, () => {
