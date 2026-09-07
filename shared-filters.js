@@ -1,4 +1,4 @@
-// Bulk Clean for Slack - Shared filtering & safety logic (SINGLE SOURCE OF TRUTH)
+// Erasechat - Shared filtering & safety logic (SINGLE SOURCE OF TRUTH)
 //
 // Loaded by:
 //   - background.js  (Chrome/Chromium via manifest.json: importScripts in the service

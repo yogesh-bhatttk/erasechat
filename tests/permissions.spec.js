@@ -1,4 +1,4 @@
-// Bulk Clean for Slack - Playwright E2E: host-permission gating in the popup
+// Erasechat - Playwright E2E: host-permission gating in the popup
 //
 // Declaring a host permission is not the same as HAVING it. Chrome lets a user set an
 // extension's site access to "On click" / "On specific sites", and Firefox MV3 can

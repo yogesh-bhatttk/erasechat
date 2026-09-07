@@ -46,6 +46,23 @@ Translations of every `data-i18n` / `__MSG_` string used in the popup and dashbo
 mean no manifest change was needed — dropping in the new directories is sufficient, and
 `scripts/build.sh` already ships the whole `_locales` tree.
 
+#### Renamed to "Erasechat" (was "Bulk Clean for Slack")
+
+With six optional platforms now alongside Slack, a "for Slack" name no longer fit.
+Applied across both manifests, `_locales` (including the German/Spanish/French
+translations — the name itself is left untranslated, as is normal for a product name),
+the dashboard/popup UI (title, onboarding text, permission-grant hint), README,
+PRIVACY_POLICY, SECURITY, TERMS, CONTRIBUTING, AUDIT_PROMPT, store listing docs,
+`package.json` (including `package-lock.json`), the build script and its output zip
+names (`dist/erasechat-{chrome,firefox}-<version>.zip`), export filenames
+(`erasechat_log_…` / `erasechat_messages_…`), the saved-filter-presets storage key
+(`erasechatFilterPresets` — safe to change pre-launch since no build has shipped to a
+real user yet), and test file headers. Left unchanged, deliberately: the Bluesky OAuth
+`CLIENT_ID` / `client_uri` URLs (`bulk-clean-oauth` on GitHub Pages — a live registered
+OAuth client; renaming it would break Bluesky login until re-registered) and the
+historical `bulk-clean-for-<platform>` comments crediting the standalone repos each
+platform module was ported from (those repos are real and keep their own names).
+
 ## 1.0.0 — 2026-07-31
 
 First public release, targeting the Chrome Web Store and Firefox AMO.

@@ -19,12 +19,12 @@ Web Store's taxonomy, which does not match AMO's (see Categories below).
 
 ## Name
 ```
-Bulk Clean for Slack
+Erasechat
 ```
 
 ## Add-on URL slug
 ```
-bulk-clean-for-slack
+erasechat
 ```
 
 ## Summary
@@ -40,7 +40,7 @@ Bulk delete and clean your Slack messages in channels and DMs with advanced filt
 > add-on on its product page. Use the full text below (AMO supports light Markdown).
 
 ```
-Tired of scrolling back years to clean up your Slack? Bulk Clean for Slack clears your own messages in bulk — with the filters and safety controls to do it right.
+Tired of scrolling back years to clean up your Slack? Erasechat clears your own messages in bulk — with the filters and safety controls to do it right.
 
 Open any channel, private group, or direct message, pick your filters, preview exactly what will be removed, and delete in bulk — all from your browser.
 
@@ -75,7 +75,7 @@ Open any channel, private group, or direct message, pick your filters, preview e
 
 ---
 
-**Please note:** Bulk Clean for Slack is an independent tool and is not affiliated with, endorsed by, or sponsored by Slack. It acts on your behalf using your existing Slack session. Deletions are permanent and cannot be undone — always preview (and export a backup) before you delete. Deleting messages you do not have permission to remove may be restricted by your workspace.
+**Please note:** Erasechat is an independent tool and is not affiliated with, endorsed by, or sponsored by Slack. It acts on your behalf using your existing Slack session. Deletions are permanent and cannot be undone — always preview (and export a backup) before you delete. Deleting messages you do not have permission to remove may be restricted by your workspace.
 ```
 
 ## "This add-on is experimental"
@@ -145,7 +145,7 @@ URL satisfies that — see [`CWS_SUBMISSION_FIELDS.md`](./CWS_SUBMISSION_FIELDS.
 Thanks for reviewing. Some context that should make testing straightforward.
 
 WHAT IT DOES
-Bulk Clean for Slack adds a dashboard to the Slack web client that lets a user bulk-delete
+Erasechat adds a dashboard to the Slack web client that lets a user bulk-delete
 their OWN messages in the conversation they currently have open, with filters (sender,
 date range, keyword or /regex/, attachments-only, thread replies), a mandatory scan-and-
 preview step, and a resumable background delete queue.

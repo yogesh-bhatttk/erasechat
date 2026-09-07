@@ -1,4 +1,4 @@
-# Bulk Clean for Slack — Store Listing Copy
+# Erasechat — Store Listing Copy
 
 > **⚠️ Also stale on the multi-platform question (2026-09-07):** this file, and both
 > submission sheets it points to below, still describe Slack only. The extension now also
@@ -28,7 +28,7 @@ every listing has to keep honest. All of it matches the extension's actual behav
 ---
 
 ## Name
-`Bulk Clean for Slack`
+`Erasechat`
 
 ## Tagline
 _For promo tiles and headings. Not a store field._
@@ -77,7 +77,7 @@ first if the extension changes.
 Every listing carries this, verbatim. It is not optional — the name uses Slack's mark, and
 the tool destroys data irreversibly.
 
-> Bulk Clean for Slack is an independent tool and is not affiliated with, endorsed by, or
+> Erasechat is an independent tool and is not affiliated with, endorsed by, or
 > sponsored by Slack. It acts on your behalf using your existing Slack session. Deletions
 > are permanent and cannot be undone — always preview (and export a backup) before you
 > delete. Deleting messages you do not have permission to remove may be restricted by your
@@ -102,8 +102,8 @@ _Order matches `store-assets/screenshots/`. Identical on both stores._
 
 `npm run build` produces both store-ready zips in `dist/`:
 
-- `bulk-clean-for-slack-chrome-<version>.zip` (uses `manifest.json`)
-- `bulk-clean-for-slack-firefox-<version>.zip` (uses `manifest.firefox.json`)
+- `erasechat-chrome-<version>.zip` (uses `manifest.json`)
+- `erasechat-firefox-<version>.zip` (uses `manifest.firefox.json`)
 
 The build ships only runtime files (+ `privacy.html`, `LICENSE`) and excludes `tests/`,
 `package.json`, `playwright.config.js`, `CHANGELOG.md`, `store-assets/`, `.agents/`, and

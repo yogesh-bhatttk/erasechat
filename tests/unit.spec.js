@@ -1,4 +1,4 @@
-// Bulk Clean for Slack - Core Logic Unit Test Suite (Playwright runner)
+// Erasechat - Core Logic Unit Test Suite (Playwright runner)
 //
 // Uses the SAME production logic as the background worker (shared-filters.js) —
 // no forked/inline reimplementation.
@@ -6,7 +6,7 @@
 const { test, expect } = require('@playwright/test');
 const { qualifies } = require('../shared-filters.js');
 
-test.describe('Bulk Clean for Slack Qualification Engine', () => {
+test.describe('Erasechat Qualification Engine', () => {
   const CURRENT_USER = 'U123456';
 
   test('should correctly filter messages by sender (me vs all)', () => {

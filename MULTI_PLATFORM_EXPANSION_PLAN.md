@@ -20,7 +20,7 @@ reference in case this decision is revisited, but it is out of scope for now.
 
 ## 1. Why this document exists
 
-`Bulk Clean for Slack` works because of one specific, fragile-sounding but real fact:
+`Erasechat` works because of one specific, fragile-sounding but real fact:
 Slack's web client exposes an internal API that a user's own logged-in browser session
 can call directly (`credentials: "include"` fetch, no OAuth app registration, no backend
 server), and doing so to manage *your own* messages is not a Slack ToS violation. That

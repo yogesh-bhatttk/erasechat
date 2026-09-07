@@ -1,4 +1,4 @@
-// Bulk Clean for Slack - Content Script Logic Engine (Fortified Production Edition)
+// Erasechat - Content Script Logic Engine (Fortified Production Edition)
 
 // Pure predicate, kept at module scope (outside the IIFE below) so it's unit-
 // testable without a DOM: does a background broadcast belong to THIS tab's
@@ -59,7 +59,7 @@ if (!window.slackCleanInitialized) {
     let queueTeamId = null;
     let scanResultsTeamId = null;
     let intendedTeamId = null;
-    // Guards the one-time "Bulk Clean Finished" completion alert against a
+    // Guards the one-time "Erasechat Finished" completion alert against a
     // redundant final JOB_UPDATE re-firing it. Reset when a new job starts.
     let jobFinalized = false;
     // Bumped on every renderScanResults() call. The chunked (requestAnimationFrame)
@@ -91,7 +91,7 @@ if (!window.slackCleanInitialized) {
     // Saved filter presets are a convenience list, not a database — cap it so a
     // "Save Current" habit can't grow chrome.storage.local without bound.
     const MAX_FILTER_PRESETS = 20;
-    const FILTER_PRESETS_STORAGE_KEY = "bulkCleanFilterPresets";
+    const FILTER_PRESETS_STORAGE_KEY = "erasechatFilterPresets";
 
     // UI Shadow DOM and Element Cache references
     let shadowHost = null;
@@ -172,7 +172,7 @@ if (!window.slackCleanInitialized) {
             // "Successfully deleted".
             let summary = `Bulk deletion process completed.\n\nSuccessfully deleted: ${stats.success}\nFailed: ${stats.fail}`;
             if (skipped > 0) summary += `\nSkipped (nothing to clean): ${skipped}`;
-            showCustomAlert("Bulk Clean Finished", summary);
+            showCustomAlert("Erasechat Finished", summary);
             stopOperations("Finished");
             // Clear the now-deleted messages from the preview so the user can't
             // re-run a delete against stale results (which would all fail as
@@ -690,8 +690,8 @@ if (!window.slackCleanInitialized) {
                   <path d="M300 120 L340 160" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round" />
                 </svg>
                 <div class="brand-title">
-                  <h2>Bulk Clean</h2>
-                  <span class="premium-badge" data-i18n="brandTag">for Slack</span>
+                  <h2>Erasechat</h2>
+                  <span class="premium-badge" data-i18n="brandTag">Choose a platform</span>
                 </div>
               </div>
               <div class="header-right">
@@ -915,7 +915,7 @@ if (!window.slackCleanInitialized) {
                       </div>
                     </div>
                     <div class="console-terminal" id="sc-console-log" aria-live="polite" role="log">
-                      <div class="console-line info">Bulk Clean for Slack initialized in Safe (Single-Channel) Mode.</div>
+                      <div class="console-line info">Erasechat initialized in Safe (Single-Channel) Mode.</div>
                     </div>
                   </div>
                 </div>
@@ -933,7 +933,7 @@ if (!window.slackCleanInitialized) {
                 </svg>
               </div>
               <div class="minimized-info">
-                <h5 id="sc-min-status-title">Bulk Clean</h5>
+                <h5 id="sc-min-status-title">Erasechat</h5>
                 <span id="sc-min-status-text">Idle</span>
               </div>
               <button class="btn-maximize" id="sc-btn-maximize" data-i18n-title="dashMaximize" title="Expand Dashboard" data-i18n-aria="dashMaximize" aria-label="Expand dashboard overlay">
@@ -1727,7 +1727,7 @@ if (!window.slackCleanInitialized) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `bulkclean_log_${activeChannel ? activeChannel.name : "export"}_${Date.now()}.txt`;
+        a.download = `erasechat_log_${activeChannel ? activeChannel.name : "export"}_${Date.now()}.txt`;
         a.click();
         URL.revokeObjectURL(url);
       });
@@ -1757,7 +1757,7 @@ if (!window.slackCleanInitialized) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `bulkclean_messages_${activeChannel ? activeChannel.name : "export"}_${Date.now()}.csv`;
+        a.download = `erasechat_messages_${activeChannel ? activeChannel.name : "export"}_${Date.now()}.csv`;
         a.click();
         URL.revokeObjectURL(url);
 
@@ -2477,7 +2477,7 @@ if (!window.slackCleanInitialized) {
       const minProgressText = shadowRoot.getElementById("sc-min-status-text");
       if (minProgressText) minProgressText.innerText = t("dashIdle", "Idle");
       const minTitle = shadowRoot.getElementById("sc-min-status-title");
-      if (minTitle) minTitle.innerText = "Bulk Clean";
+      if (minTitle) minTitle.innerText = "Erasechat";
     }
 
     // Input toggles during deletes

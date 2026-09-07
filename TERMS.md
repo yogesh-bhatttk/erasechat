@@ -2,7 +2,7 @@
 
 _Last updated: July 29, 2026_
 
-Bulk Clean for Slack ("the Extension") is a free, open-source browser extension provided
+Erasechat ("the Extension") is a free, open-source browser extension provided
 by Yogesh Bhatt ("the Author"). By installing or using the Extension, you agree to these
 terms. If you do not agree, do not install or use the Extension.
 

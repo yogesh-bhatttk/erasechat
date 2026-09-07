@@ -1,5 +1,5 @@
 {
-  "name": "bulk-clean-for-slack",
+  "name": "erasechat",
   "version": "1.0.0",
   "private": true,
   "description": "Bulk delete and clean your Slack messages with advanced filters, threads, and safety controls.",
@@ -16,7 +16,7 @@
     "build": "bash scripts/build.sh",
     "version:set": "bash scripts/set-version.sh",
     "hooks:install": "git config core.hooksPath .githooks && echo \"pre-push guard active (main: no force-push, no deletion, gate must pass)\"",
-    "validate:firefox": "npx --yes addons-linter@^10 dist/bulk-clean-for-slack-firefox-$npm_package_version.zip",
+    "validate:firefox": "npx --yes addons-linter@^10 dist/erasechat-firefox-$npm_package_version.zip",
     "verify": "npm run lint && npm test && npm run test:e2e && npm run build && npm run validate:firefox"
   },
   "dependencies": {

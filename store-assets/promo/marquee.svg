@@ -69,9 +69,8 @@
 
   <!-- Wordmark. Baselines put the block's optical centre on the canvas midline. -->
   <g font-family="'DejaVu Sans','Liberation Sans','Helvetica Neue',Arial,sans-serif">
-    <text x="606" y="208" font-size="78" font-weight="700" fill="#F8FAFC">Bulk Clean</text>
-    <text x="606" y="298" font-size="78" font-weight="700" fill="url(#wordAccent)">for Slack</text>
-    <text x="610" y="354" font-size="27" font-weight="400" fill="#94A3B8">Delete your messages in bulk — safely.</text>
-    <text x="610" y="403" font-size="22" font-weight="600" fill="#A78BFA" letter-spacing="4.4">SCAN · PREVIEW · DELETE</text>
+    <text x="606" y="253" font-size="78" font-weight="700" fill="url(#wordAccent)">Erasechat</text>
+    <text x="610" y="309" font-size="27" font-weight="400" fill="#94A3B8">Delete your messages in bulk — safely.</text>
+    <text x="610" y="358" font-size="22" font-weight="600" fill="#A78BFA" letter-spacing="4.4">SCAN · PREVIEW · DELETE</text>
   </g>
 </svg>

@@ -1,4 +1,4 @@
-// Bulk Clean for Slack — background service-worker harness tests (node --test)
+// Erasechat — background service-worker harness tests (node --test)
 //
 // background.js is written for a browser worker global, not for CommonJS, so these
 // tests load it into a `vm` context with a mocked `chrome` API surface. That buys two

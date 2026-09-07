@@ -1,7 +1,7 @@
 {
-  "extensionName": { "message": "Massenbereinigung für Slack" },
+  "extensionName": { "message": "Erasechat" },
   "extensionDescription": { "message": "Lösche und bereinige deine Slack-Nachrichten in Kanälen und Direktnachrichten massenhaft, mit erweiterten Filtern, Thread-Unterstützung und Sicherheitskontrollen." },
-  "actionTitle": { "message": "Dashboard für Massenbereinigung für Slack öffnen" },
+  "actionTitle": { "message": "Erasechat-Dashboard öffnen" },
 
   "brandTag": { "message": "Plattform wählen" },
   "privacyPolicy": { "message": "Datenschutzrichtlinie" },
@@ -14,7 +14,7 @@
   "popupOpenDashboardAria": { "message": "Modalfenster des Bereinigungs-Dashboards öffnen" },
   "popupStatusOffline": { "message": "Slack-Client offline" },
   "popupOpenToBegin": { "message": "Öffne Slack, um zu beginnen" },
-  "popupOpenToBeginBody": { "message": "Um Massenbereinigung für Slack zu nutzen, musst du Slack in deinem Browser öffnen und dich in deinem Arbeitsbereich anmelden." },
+  "popupOpenToBeginBody": { "message": "Um Erasechat zu nutzen, musst du Slack in deinem Browser öffnen und dich in deinem Arbeitsbereich anmelden." },
   "popupGotoSlack": { "message": "app.slack.com öffnen" },
   "popupGotoSlackAria": { "message": "Zum Webclient app.slack.com navigieren" },
   "popupStatusNoAccess": { "message": "Website-Zugriff erforderlich" },
@@ -22,7 +22,7 @@
   "popupGrantBody": { "message": "Dein Browser verweigert dieser Erweiterung derzeit den Zugriff auf slack.com, daher kann sie nichts lesen oder bereinigen. Erlaube den Zugriff, um fortzufahren — keine andere Website ist betroffen." },
   "popupGrantButton": { "message": "Zugriff auf slack.com erlauben" },
   "popupGrantAria": { "message": "Dieser Erweiterung Zugriff auf slack.com gewähren" },
-  "popupGrantManualHint": { "message": "Dein Browser hat den Zugriff von hier aus nicht gewährt. Öffne die Erweiterungsseite deines Browsers, suche Massenbereinigung für Slack und stelle den Website-Zugriff auf slack.com ein." },
+  "popupGrantManualHint": { "message": "Dein Browser hat den Zugriff von hier aus nicht gewährt. Öffne die Erweiterungsseite deines Browsers, suche Erasechat und stelle den Website-Zugriff auf slack.com ein." },
   "popupConnecting": { "message": "Verbindung wird hergestellt..." },
   "popupSetupRequired": { "message": "Einrichtung erforderlich" },
   "popupSetupRequiredDesc": { "message": "Bitte lade die Slack-Seite neu, um die Erweiterung zu aktivieren." },
@@ -30,7 +30,7 @@
   "popupConnectionLost": { "message": "Verbindung verloren. Bitte lade die Seite neu." },
   "footerLocalOnly": { "message": "Ausschließlich lokale Verarbeitung" },
 
-  "onboardingTitle": { "message": "👋 Willkommen bei Bulk Clean!" },
+  "onboardingTitle": { "message": "👋 Willkommen bei Erasechat!" },
   "onboardingIntro": { "message": "Lösche deine eigenen Beiträge und Nachrichten massenhaft auf Slack, Reddit, X, Mastodon, Microsoft Teams, Bluesky und Telegram – wähle unten eine Plattform, um zu starten." },
   "onboardingBullet1": { "message": "🔒 Die gesamte Verarbeitung erfolgt lokal in deinem Browser" },
   "onboardingBullet2": { "message": "📋 Scannen und vor dem Löschen prüfen" },

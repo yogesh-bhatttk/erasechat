@@ -1,7 +1,7 @@
 {
-  "extensionName": { "message": "Nettoyage en Masse pour Slack" },
+  "extensionName": { "message": "Erasechat" },
   "extensionDescription": { "message": "Supprimez et nettoyez en masse vos messages Slack dans les canaux et messages privés, avec des filtres avancés, la gestion des fils de discussion et des contrôles de sécurité." },
-  "actionTitle": { "message": "Ouvrir le tableau de bord de Nettoyage en Masse pour Slack" },
+  "actionTitle": { "message": "Ouvrir le tableau de bord d'Erasechat" },
 
   "brandTag": { "message": "Choisissez une plateforme" },
   "privacyPolicy": { "message": "Politique de confidentialité" },
@@ -14,7 +14,7 @@
   "popupOpenDashboardAria": { "message": "Ouvrir la fenêtre modale du tableau de bord de nettoyage" },
   "popupStatusOffline": { "message": "Client Slack hors ligne" },
   "popupOpenToBegin": { "message": "Ouvrez Slack pour commencer" },
-  "popupOpenToBeginBody": { "message": "Pour utiliser Nettoyage en Masse pour Slack, vous devez ouvrir Slack dans votre navigateur et vous connecter à votre espace de travail." },
+  "popupOpenToBeginBody": { "message": "Pour utiliser Erasechat, vous devez ouvrir Slack dans votre navigateur et vous connecter à votre espace de travail." },
   "popupGotoSlack": { "message": "Ouvrir app.slack.com" },
   "popupGotoSlackAria": { "message": "Aller au client web app.slack.com" },
   "popupStatusNoAccess": { "message": "Accès au site requis" },
@@ -22,7 +22,7 @@
   "popupGrantBody": { "message": "Votre navigateur bloque actuellement l'accès de cette extension à slack.com, elle ne peut donc rien lire ni nettoyer. Autorisez l'accès pour continuer — aucun autre site n'est concerné." },
   "popupGrantButton": { "message": "Autoriser l'accès à slack.com" },
   "popupGrantAria": { "message": "Autoriser cette extension à accéder à slack.com" },
-  "popupGrantManualHint": { "message": "Votre navigateur n'a pas autorisé l'accès depuis ici. Ouvrez la page des extensions de votre navigateur, trouvez Nettoyage en Masse pour Slack, et réglez son accès au site pour autoriser slack.com." },
+  "popupGrantManualHint": { "message": "Votre navigateur n'a pas autorisé l'accès depuis ici. Ouvrez la page des extensions de votre navigateur, trouvez Erasechat, et réglez son accès au site pour autoriser slack.com." },
   "popupConnecting": { "message": "Connexion en cours..." },
   "popupSetupRequired": { "message": "Configuration requise" },
   "popupSetupRequiredDesc": { "message": "Veuillez recharger la page Slack pour activer l'extension." },
@@ -30,7 +30,7 @@
   "popupConnectionLost": { "message": "Connexion perdue. Veuillez recharger la page." },
   "footerLocalOnly": { "message": "Traitement local uniquement" },
 
-  "onboardingTitle": { "message": "👋 Bienvenue dans Bulk Clean !" },
+  "onboardingTitle": { "message": "👋 Bienvenue dans Erasechat !" },
   "onboardingIntro": { "message": "Supprimez en masse vos propres publications et messages sur Slack, Reddit, X, Mastodon, Microsoft Teams, Bluesky et Telegram — choisissez une plateforme ci-dessous pour commencer." },
   "onboardingBullet1": { "message": "🔒 Tout le traitement se fait localement dans votre navigateur" },
   "onboardingBullet2": { "message": "📋 Analysez et prévisualisez avant de supprimer quoi que ce soit" },

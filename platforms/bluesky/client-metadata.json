@@ -1,7 +1,7 @@
 {
   "_comment": "This file is hosted (not shipped as part of the extension) at https://yogesh-bhatttk.github.io/bulk-clean-oauth/oauth-client-metadata.json -- kept here in the repo only as the source of truth for that hosted copy, so a change to the extension's own id (manifest.json's \"key\") or redirect setup can be pushed there deliberately. See https://github.com/yogesh-bhatttk/bulk-clean-oauth. bluesky-popup.src.js and bluesky-dashboard.src.js reference the hosted URL directly as their client_id.",
   "client_id": "https://yogesh-bhatttk.github.io/bulk-clean-oauth/oauth-client-metadata.json",
-  "client_name": "Bulk Clean",
+  "client_name": "Erasechat",
   "client_uri": "https://yogesh-bhatttk.github.io/bulk-clean-oauth/",
   "redirect_uris": [
     "https://aakjpapmmdfbfhaialkekbobcfhnieep.chromiumapp.org/"

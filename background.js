@@ -1,4 +1,4 @@
-// Bulk Clean for Slack - Background Service Worker
+// Erasechat - Background Service Worker
 
 // Load shared filtering/safety logic (single source of truth).
 // Chrome/Chromium MV3 (manifest.json): the background is a service worker, where

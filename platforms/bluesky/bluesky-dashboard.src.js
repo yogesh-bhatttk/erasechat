@@ -23,7 +23,7 @@ function buildClient() {
     handleResolver: 'https://bsky.social',
     clientMetadata: {
       client_id: CLIENT_ID,
-      client_name: "Bulk Clean",
+      client_name: "Erasechat",
       client_uri: "https://yogesh-bhatttk.github.io/bulk-clean-oauth/",
       redirect_uris: [redirectUri],
       scope: OAUTH_SCOPE,

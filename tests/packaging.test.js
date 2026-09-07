@@ -1,4 +1,4 @@
-// Bulk Clean for Slack — packaging & manifest gate (node --test)
+// Erasechat — packaging & manifest gate (node --test)
 //
 // These are the checks that otherwise only fail late, in a store review queue:
 // a manifest property AMO rejects, a version that drifted between the two manifests

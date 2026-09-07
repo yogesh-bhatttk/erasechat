@@ -1,4 +1,4 @@
-// Bulk Clean for Slack - Playwright E2E Test Suite
+// Erasechat - Playwright E2E Test Suite
 
 const { test, expect, chromium } = require('@playwright/test');
 const path = require('path');
@@ -28,7 +28,7 @@ test('should load popup page and render the platform picker by default', async (
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
 
   const title = await page.locator('h1').innerText();
-  expect(title).toBe('Bulk Clean');
+  expect(title).toBe('Erasechat');
 
   // The platform picker is the default entry point (this test runs outside any
   // matching platform's tab, so nothing auto-skips it).

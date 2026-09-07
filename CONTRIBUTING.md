@@ -1,6 +1,6 @@
-# Contributing to Bulk Clean for Slack
+# Contributing to Erasechat
 
-Thanks for your interest in improving Bulk Clean for Slack. Because this tool
+Thanks for your interest in improving Erasechat. Because this tool
 **permanently deletes user data**, correctness and safety take priority over everything
 else — please keep that lens on any change.
 

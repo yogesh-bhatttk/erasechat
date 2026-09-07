@@ -1,4 +1,4 @@
-// ESLint flat config for Bulk Clean for Slack.
+// ESLint flat config for Erasechat.
 //
 // Scoped deliberately narrow: this is a correctness gate, not a style enforcer. The
 // rules enabled are the ones that catch bugs which are genuinely hard to see by eye in

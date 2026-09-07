@@ -1,14 +1,14 @@
-# Bulk Clean for Slack — Privacy Policy
+# Erasechat — Privacy Policy
 
 **Last Updated:** September 7, 2026
 
 ## Overview
 
-Bulk Clean for Slack is a browser extension that helps users bulk-delete their own content across seven platforms: **Slack** (built in, always available) and six **optional** platforms the user can connect one at a time from the extension's popup: **Reddit, X, Mastodon, Microsoft Teams, Bluesky, and Telegram**. This privacy policy describes what data the extension accesses for each platform, how it is used, and how it is stored.
+Erasechat is a browser extension that helps users bulk-delete their own content across seven platforms: **Slack** (built in, always available) and six **optional** platforms the user can connect one at a time from the extension's popup: **Reddit, X, Mastodon, Microsoft Teams, Bluesky, and Telegram**. This privacy policy describes what data the extension accesses for each platform, how it is used, and how it is stored.
 
 ## Data Collection
 
-Bulk Clean for Slack does **NOT** collect, transmit, sell, or share any user data with third parties, on any platform. All data processing happens entirely within your browser on your local device. There is no developer-operated backend server anywhere in this extension — every network request goes directly from your browser to the platform you're managing (or, for Bluesky, to the AT Protocol server your account actually lives on).
+Erasechat does **NOT** collect, transmit, sell, or share any user data with third parties, on any platform. All data processing happens entirely within your browser on your local device. There is no developer-operated backend server anywhere in this extension — every network request goes directly from your browser to the platform you're managing (or, for Bluesky, to the AT Protocol server your account actually lives on).
 
 Connecting a platform beyond Slack is always something you do explicitly, one click at a time, from the popup's platform picker — nothing beyond Slack is ever contacted automatically.
 
@@ -87,7 +87,7 @@ For all six non-Slack platforms, a small marker (just two numbers — how many i
 
 ## How Data is Used
 
-All data accessed by Bulk Clean for Slack, on every platform, is used exclusively for that platform's own core scan/delete functionality — authenticating your own requests, showing you what will be deleted before you confirm, and tracking in-progress deletion state. Nothing is aggregated, profiled, or used for any purpose beyond the operation you explicitly started.
+All data accessed by Erasechat, on every platform, is used exclusively for that platform's own core scan/delete functionality — authenticating your own requests, showing you what will be deleted before you confirm, and tracking in-progress deletion state. Nothing is aggregated, profiled, or used for any purpose beyond the operation you explicitly started.
 
 ## Data Storage
 
@@ -98,7 +98,7 @@ All data accessed by Bulk Clean for Slack, on every platform, is used exclusivel
 
 ## Data Sharing
 
-Bulk Clean for Slack does **not**, on any of the seven platforms:
+Erasechat does **not**, on any of the seven platforms:
 - Transmit any data to third-party servers
 - Include any analytics, telemetry, or tracking code
 - Use advertising networks or data brokers
@@ -138,7 +138,7 @@ Telegram needs no host permission at all — it communicates over its own native
 
 ## Children's Privacy
 
-Bulk Clean for Slack is not directed at children under 13 and does not knowingly collect personal information from children.
+Erasechat is not directed at children under 13 and does not knowingly collect personal information from children.
 
 ## Changes to This Policy
 

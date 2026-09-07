@@ -1,4 +1,4 @@
-# Bulk Clean for Slack
+# Erasechat
 
 Bulk-delete and clean your own Slack messages — in channels, private groups, and DMs —
 with advanced filters, thread support, and strong safety controls. A Manifest V3

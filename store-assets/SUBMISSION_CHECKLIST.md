@@ -1,4 +1,4 @@
-# Submission Checklist — Bulk Clean for Slack
+# Submission Checklist — Erasechat
 
 A single place to track everything needed to publish. Items marked **(blocker)** must be
 resolved before submitting; **(you)** require your action outside this repo.
@@ -26,10 +26,11 @@ resolved before submitting; **(you)** require your action outside this repo.
       "reload the page". This is the state a cautious user installs into, and it is the one
       failure mode that cannot be reproduced from automation (Chrome exposes no API to
       revoke a required host permission), which is why it is a manual check.
-- [ ] **(blocker, you)** **Trademark / policy review.** Name is now "Bulk Clean for Slack"
-      (compliant "X for Slack" form, not leading with "Slack"). Confirm you're comfortable
-      with Slack's brand guidelines and API/ToS, given the extension uses the private
-      `xoxc-` session token. Consider whether an official Slack OAuth app is warranted.
+- [ ] **(blocker, you)** **Trademark / policy review.** Name is now "Erasechat" — platform-
+      agnostic, so it sidesteps the earlier "X for Slack" naming constraint entirely.
+      Confirm you're comfortable with Slack's brand guidelines and API/ToS, given the
+      extension uses the private `xoxc-` session token. Consider whether an official Slack
+      OAuth app is warranted.
 - [ ] **(you)** Decide on hosting for the privacy policy (see step 2).
 
 ## 1. Assets (in this repo)
@@ -39,7 +40,7 @@ resolved before submitting; **(you)** require your action outside this repo.
 - [x] Listing icon 512×512 — `store-assets/promo/listing-icon-512.png` (AMO; Chrome has no
       512 slot)
 - [x] Screenshots 1280×800 ×5 — `store-assets/screenshots/` (rebranded to
-      "Bulk Clean for Slack"). Regenerate anytime with
+      "Erasechat"). Regenerate anytime with
       `node store-assets/screenshots/src/gen.js` + the render loop documented in that file.
 - [x] Small promo tile 440×280 — `store-assets/promo/promo-tile-440x280.png`
 - [x] Marquee 1400×560 — `store-assets/promo/marquee-1400x560.png`, built from
@@ -161,7 +162,7 @@ zips as build artifacts, so a green CI run is equivalent to this section.
 
 ## 6. Post-rename housekeeping (in this repo)
 
-- [x] Name changed to "Bulk Clean for Slack" everywhere user-facing
+- [x] Name changed to "Erasechat" everywhere user-facing
 - [x] `manifest.json` (Chrome) / `manifest.firefox.json` (Firefox) both validate
 - [x] `LICENSE` (MIT), `README.md`, `SECURITY.md`, `TERMS.md`, `CONTRIBUTING.md`
 - [ ] Bump the version with `npm run version:set <version>` — it rewrites both manifests,

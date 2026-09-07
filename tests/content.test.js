@@ -1,4 +1,4 @@
-// Bulk Clean for Slack — content.js unit tests (node --test)
+// Erasechat — content.js unit tests (node --test)
 //
 // content.js is otherwise untestable without a full DOM: its dashboard logic lives
 // inside an IIFE gated by `if (!window.slackCleanInitialized)`, all closure-private,

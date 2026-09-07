@@ -1,4 +1,4 @@
-// Bulk Clean for Slack - Playwright E2E: per-platform permission-request + connect flow
+// Erasechat - Playwright E2E: per-platform permission-request + connect flow
 //
 // chrome.permissions.request() shows a real, native browser prompt that Playwright
 // cannot drive (it's not part of any page's DOM) -- so these specs mock

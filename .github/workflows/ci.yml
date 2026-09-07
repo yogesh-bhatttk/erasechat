@@ -109,10 +109,10 @@ jobs:
           # --verify-tag refuses to invent a tag if the ref somehow does not exist.
           gh release create "$GITHUB_REF_NAME" dist/*.zip \
             --verify-tag \
-            --title "Bulk Clean for Slack $GITHUB_REF_NAME" \
+            --title "Erasechat $GITHUB_REF_NAME" \
             --notes "Store packages for \`$GITHUB_REF_NAME\`, built from this tag after the full gate passed (lint, unit + packaging tests, Playwright e2e, both builds, addons-linter).
 
-          - \`bulk-clean-for-slack-chrome-*.zip\` — Chrome Web Store (MV3 service worker)
-          - \`bulk-clean-for-slack-firefox-*.zip\` — Firefox AMO (MV3 event page)
+          - \`erasechat-chrome-*.zip\` — Chrome Web Store (MV3 service worker)
+          - \`erasechat-firefox-*.zip\` — Firefox AMO (MV3 event page)
 
           See [CHANGELOG.md](CHANGELOG.md) for what changed, and \`store-assets/SUBMISSION_CHECKLIST.md\` for the submission steps."

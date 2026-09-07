@@ -1,4 +1,4 @@
-// Bulk Clean for Slack - Node.js Unit Test Suite
+// Erasechat - Node.js Unit Test Suite
 // Runs with zero dependencies:  node --test tests/unit.test.js
 //
 // These tests import the ACTUAL production logic from shared-filters.js — the same

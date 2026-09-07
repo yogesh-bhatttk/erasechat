@@ -1,6 +1,6 @@
 # Security Policy
 
-Bulk Clean for Slack **permanently deletes user data**, so security and correctness are
+Erasechat **permanently deletes user data**, so security and correctness are
 treated as the top priority.
 
 ## Reporting a vulnerability

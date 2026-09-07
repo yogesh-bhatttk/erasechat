@@ -1,4 +1,4 @@
-// Generates the 5 store-screenshot compositions (1280x800) with "Bulk Clean for Slack"
+// Generates the 5 store-screenshot compositions (1280x800) with "Erasechat"
 // branding. Faithful recreation of the originals (marketing mockups), using the
 // product's own Outfit font (inlined) so it renders offline.
 const fs = require('fs');
@@ -36,12 +36,11 @@ const LOGO = (size) => `
   <circle cx="410" cy="330" r="12" fill="#F9A8D4"/><circle cx="132" cy="392" r="9" fill="#fff" opacity=".9"/>
 </svg>`;
 
-const brand = (nameSize, badgeSize) => `
+const brand = (nameSize) => `
 <span style="display:inline-flex;align-items:center;gap:12px">
   ${LOGO(nameSize + 20)}
   <span style="display:inline-flex;align-items:baseline;gap:10px">
-    <span style="font-weight:800;font-size:${nameSize}px;color:#F8FAFC;letter-spacing:-.5px">Bulk Clean</span>
-    <span style="font-size:${badgeSize}px;font-weight:700;letter-spacing:.5px;padding:3px 10px;border-radius:999px;background:linear-gradient(135deg,#8b5cf6,#ec4899);color:#fff">for Slack</span>
+    <span style="font-weight:800;font-size:${nameSize}px;color:#F8FAFC;letter-spacing:-.5px">Erasechat</span>
   </span>
 </span>`;
 
@@ -94,7 +93,7 @@ const page = (bodyInner) => `<!doctype html><html><head><meta charset="utf-8"><s
 <body><div class="grid"></div><div class="page">${bodyInner}</div></body></html>`;
 
 const head = (tag, h1html, sub) => `
-<div class="top">${brand(22,12)}${tag?`<div class="tag">${tag}</div>`:'<div></div>'}</div>
+<div class="top">${brand(22)}${tag?`<div class="tag">${tag}</div>`:'<div></div>'}</div>
 <h1>${h1html}</h1><div class="sub">${sub}</div>`;
 
 // ---------- Slide 1: overview ----------
@@ -210,7 +209,7 @@ const s4 = page(head('Step 2 · Clean',
         <span style="display:flex;gap:6px">${['CLEAR','EXPORT','RUNNING'].map(x=>`<span style="border:1px solid rgba(148,163,184,.2);border-radius:6px;padding:3px 8px;font-size:11px;color:#cbd5e1">${x}</span>`).join('')}</span>
       </div>
       <div class="mono" style="padding:12px 14px;font-size:12.5px;line-height:1.55">
-        ${logln('#60a5fa','Bulk Clean for Slack initialized in Safe (Single-Channel) Mode.')}
+        ${logln('#60a5fa','Erasechat initialized in Safe (Single-Channel) Mode.')}
         ${logln('#60a5fa','Scan complete — 128 messages matched active filters.')}
         ${logln('#34d399','✓ Deleted message ts=1721632841.221 (77/128)')}
         ${logln('#34d399','✓ Deleted message ts=1721632844.007 (78/128)')}
@@ -226,10 +225,10 @@ const s4 = page(head('Step 2 · Clean',
 const feat=(ic,t,d)=>`<div style="display:flex;gap:16px;padding:16px 0;border-bottom:1px solid rgba(148,163,184,.1)"><div style="width:40px;height:40px;border-radius:10px;background:rgba(139,92,246,.14);display:flex;align-items:center;justify-content:center;font-size:19px;flex:0 0 auto">${ic}</div><div><div style="font-weight:700;color:#fff;font-size:16px">${t}</div><div style="color:#94a3b8;font-size:14px;margin-top:2px;line-height:1.45">${d}</div></div></div>`;
 const s5 = page(head('Private by Design',
   `100% local. <span class="a">Nothing leaves your browser.</span>`,
-  `Bulk Clean for Slack runs entirely on your machine using your existing Slack login. There are no accounts, no servers, and no tracking.`) + `
+  `Erasechat runs entirely on your machine using your existing Slack login. There are no accounts, no servers, and no tracking.`) + `
 <div style="display:grid;grid-template-columns:400px 1fr;gap:40px;margin-top:30px">
   <div class="card" style="padding:26px">
-    ${brand(22,12)}
+    ${brand(22)}
     <div style="margin-top:18px"><span style="display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#34d399;background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);border-radius:999px;padding:7px 14px">🟢 Slack Web Client Detected</span></div>
     <div style="margin-top:18px;background:rgba(15,23,42,.55);border:1px solid rgba(148,163,184,.14);border-radius:12px;padding:16px">
       <div style="font-size:11px;letter-spacing:1.5px;color:#8b93a7">CONNECTED TO WORKSPACE</div>
