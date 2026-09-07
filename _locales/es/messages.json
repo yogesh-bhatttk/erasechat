@@ -3,7 +3,7 @@
   "extensionDescription": { "message": "Elimina y limpia en masa tus mensajes de Slack en canales y mensajes directos con filtros avanzados, hilos y controles de seguridad." },
   "actionTitle": { "message": "Abrir el panel de Limpieza Masiva para Slack" },
 
-  "brandTag": { "message": "para Slack" },
+  "brandTag": { "message": "Elige una plataforma" },
   "privacyPolicy": { "message": "Política de Privacidad" },
 
   "popupStatusDetected": { "message": "Cliente web de Slack detectado" },
@@ -30,13 +30,13 @@
   "popupConnectionLost": { "message": "Se perdió la conexión. Vuelve a cargar la página." },
   "footerLocalOnly": { "message": "Procesamiento local únicamente" },
 
-  "onboardingTitle": { "message": "👋 ¡Bienvenido a Limpieza Masiva para Slack!" },
-  "onboardingIntro": { "message": "Elimina en masa tus mensajes de Slack con filtros avanzados, soporte de hilos y controles de seguridad." },
+  "onboardingTitle": { "message": "👋 ¡Bienvenido a Bulk Clean!" },
+  "onboardingIntro": { "message": "Elimina en masa tus propias publicaciones y mensajes en Slack, Reddit, X, Mastodon, Microsoft Teams, Bluesky y Telegram: elige una plataforma abajo para comenzar." },
   "onboardingBullet1": { "message": "🔒 Todo el procesamiento ocurre localmente en tu navegador" },
-  "onboardingBullet2": { "message": "📋 Escanea y previsualiza los mensajes antes de eliminarlos" },
-  "onboardingBullet3": { "message": "⏸️ Pausa, reanuda o cancela en cualquier momento" },
-  "onboardingBullet4": { "message": "📥 Exporta los mensajes como respaldo CSV" },
-  "onboardingPrivacy": { "message": "Esta es una herramienta independiente, no afiliada ni respaldada por Slack. Usa tu sesión existente de Slack para eliminar mensajes en tu nombre; las eliminaciones son permanentes. No se envían datos a servidores externos." },
+  "onboardingBullet2": { "message": "📋 Escanea y previsualiza antes de eliminar algo" },
+  "onboardingBullet3": { "message": "🗑️ Las eliminaciones son permanentes: revisa con cuidado primero" },
+  "onboardingBullet4": { "message": "🔑 Cada plataforma solo pide acceso cuando la abres" },
+  "onboardingPrivacy": { "message": "Esta es una herramienta independiente, no afiliada ni respaldada por ninguna de las plataformas anteriores. Usa tu propia sesión existente en cada una para eliminar contenido en tu nombre; las eliminaciones son permanentes. No se envían datos a servidores externos." },
   "onboardingDismiss": { "message": "Entendido, ¡vamos!" },
 
   "dashSessionConnection": { "message": "Conexión de sesión" },

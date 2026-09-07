@@ -3,7 +3,7 @@
   "extensionDescription": { "message": "Lösche und bereinige deine Slack-Nachrichten in Kanälen und Direktnachrichten massenhaft, mit erweiterten Filtern, Thread-Unterstützung und Sicherheitskontrollen." },
   "actionTitle": { "message": "Dashboard für Massenbereinigung für Slack öffnen" },
 
-  "brandTag": { "message": "für Slack" },
+  "brandTag": { "message": "Plattform wählen" },
   "privacyPolicy": { "message": "Datenschutzrichtlinie" },
 
   "popupStatusDetected": { "message": "Slack-Webclient erkannt" },
@@ -30,13 +30,13 @@
   "popupConnectionLost": { "message": "Verbindung verloren. Bitte lade die Seite neu." },
   "footerLocalOnly": { "message": "Ausschließlich lokale Verarbeitung" },
 
-  "onboardingTitle": { "message": "👋 Willkommen bei Massenbereinigung für Slack!" },
-  "onboardingIntro": { "message": "Lösche deine Slack-Nachrichten massenhaft mit erweiterten Filtern, Thread-Unterstützung und Sicherheitskontrollen." },
+  "onboardingTitle": { "message": "👋 Willkommen bei Bulk Clean!" },
+  "onboardingIntro": { "message": "Lösche deine eigenen Beiträge und Nachrichten massenhaft auf Slack, Reddit, X, Mastodon, Microsoft Teams, Bluesky und Telegram – wähle unten eine Plattform, um zu starten." },
   "onboardingBullet1": { "message": "🔒 Die gesamte Verarbeitung erfolgt lokal in deinem Browser" },
-  "onboardingBullet2": { "message": "📋 Nachrichten scannen und vor dem Löschen prüfen" },
-  "onboardingBullet3": { "message": "⏸️ Jederzeit pausieren, fortsetzen oder abbrechen" },
-  "onboardingBullet4": { "message": "📥 Nachrichten als CSV-Sicherung exportieren" },
-  "onboardingPrivacy": { "message": "Dies ist ein unabhängiges Tool, weder mit Slack verbunden noch von Slack unterstützt. Es nutzt deine bestehende Slack-Sitzung, um in deinem Namen Nachrichten zu löschen; Löschungen sind endgültig. Es werden keine Daten an externe Server gesendet." },
+  "onboardingBullet2": { "message": "📋 Scannen und vor dem Löschen prüfen" },
+  "onboardingBullet3": { "message": "🗑️ Löschungen sind endgültig – vorher sorgfältig prüfen" },
+  "onboardingBullet4": { "message": "🔑 Jede Plattform fragt erst um Zugriff, wenn du sie öffnest" },
+  "onboardingPrivacy": { "message": "Dies ist ein unabhängiges Tool, das mit keiner der oben genannten Plattformen verbunden ist oder von ihnen unterstützt wird. Es nutzt deine eigene bestehende Sitzung auf jeder Plattform, um in deinem Namen Inhalte zu löschen; Löschungen sind endgültig. Es werden keine Daten an externe Server gesendet." },
   "onboardingDismiss": { "message": "Verstanden — los geht's!" },
 
   "dashSessionConnection": { "message": "Sitzungsverbindung" },

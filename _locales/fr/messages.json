@@ -3,7 +3,7 @@
   "extensionDescription": { "message": "Supprimez et nettoyez en masse vos messages Slack dans les canaux et messages privés, avec des filtres avancés, la gestion des fils de discussion et des contrôles de sécurité." },
   "actionTitle": { "message": "Ouvrir le tableau de bord de Nettoyage en Masse pour Slack" },
 
-  "brandTag": { "message": "pour Slack" },
+  "brandTag": { "message": "Choisissez une plateforme" },
   "privacyPolicy": { "message": "Politique de confidentialité" },
 
   "popupStatusDetected": { "message": "Client web Slack détecté" },
@@ -30,13 +30,13 @@
   "popupConnectionLost": { "message": "Connexion perdue. Veuillez recharger la page." },
   "footerLocalOnly": { "message": "Traitement local uniquement" },
 
-  "onboardingTitle": { "message": "👋 Bienvenue dans Nettoyage en Masse pour Slack !" },
-  "onboardingIntro": { "message": "Supprimez en masse vos messages Slack grâce à des filtres avancés, la gestion des fils de discussion et des contrôles de sécurité." },
+  "onboardingTitle": { "message": "👋 Bienvenue dans Bulk Clean !" },
+  "onboardingIntro": { "message": "Supprimez en masse vos propres publications et messages sur Slack, Reddit, X, Mastodon, Microsoft Teams, Bluesky et Telegram — choisissez une plateforme ci-dessous pour commencer." },
   "onboardingBullet1": { "message": "🔒 Tout le traitement se fait localement dans votre navigateur" },
-  "onboardingBullet2": { "message": "📋 Analysez et prévisualisez les messages avant de les supprimer" },
-  "onboardingBullet3": { "message": "⏸️ Mettez en pause, reprenez ou annulez à tout moment" },
-  "onboardingBullet4": { "message": "📥 Exportez les messages en sauvegarde CSV" },
-  "onboardingPrivacy": { "message": "Ceci est un outil indépendant, non affilié à Slack et non approuvé par Slack. Il utilise votre session Slack existante pour supprimer des messages en votre nom ; les suppressions sont définitives. Aucune donnée n'est envoyée à des serveurs externes." },
+  "onboardingBullet2": { "message": "📋 Analysez et prévisualisez avant de supprimer quoi que ce soit" },
+  "onboardingBullet3": { "message": "🗑️ Les suppressions sont définitives — vérifiez bien avant" },
+  "onboardingBullet4": { "message": "🔑 Chaque plateforme ne demande l'accès que lorsque vous l'ouvrez" },
+  "onboardingPrivacy": { "message": "Ceci est un outil indépendant, non affilié à l'une des plateformes ci-dessus et non approuvé par elles. Il utilise votre propre session existante sur chacune pour supprimer du contenu en votre nom ; les suppressions sont définitives. Aucune donnée n'est envoyée à des serveurs externes." },
   "onboardingDismiss": { "message": "Compris, allons-y !" },
 
   "dashSessionConnection": { "message": "Connexion de session" },
