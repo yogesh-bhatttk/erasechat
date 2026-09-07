@@ -1,5 +1,13 @@
 # Bulk Clean for Slack — Store Listing Copy
 
+> **⚠️ Also stale on the multi-platform question (2026-09-07):** this file, and both
+> submission sheets it points to below, still describe Slack only. The extension now also
+> offers six optional platforms (Reddit, X, Mastodon, Microsoft Teams, Bluesky, Telegram),
+> each connected explicitly from the popup. `CWS_SUBMISSION_FIELDS.md`'s §2 has been
+> updated for this; `AMO_SUBMISSION_FIELDS.md` has a matching reviewer-notes addendum but
+> its Description is still Slack-only. Neither file's Description/Screenshots reflect the
+> platform picker yet — that's a visual-asset task, not a text edit.
+>
 > **Per-store field values live in the two submission sheets, not here.** Chrome and AMO
 > disagree on nearly every field — category taxonomy, whether the summary comes from the
 > package, whether the description renders Markdown, whether a privacy policy may be pasted

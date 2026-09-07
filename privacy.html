@@ -72,21 +72,25 @@
   <div class="wrap">
     <header>
       <h1>Bulk Clean for Slack — Privacy Policy</h1>
-      <div class="updated">Last Updated: July 22, 2026</div>
+      <div class="updated">Last Updated: September 7, 2026</div>
     </header>
 
     <div class="note">
       <strong>In short:</strong> Bulk Clean for Slack does <strong>not</strong> collect,
-      transmit, sell, or share any user data. All processing happens locally in your
-      browser. The only network calls go directly to Slack's own API on your behalf.
+      transmit, sell, or share any user data, on any of the seven platforms it supports.
+      All processing happens locally in your browser. The only network calls go directly
+      to the platform you're managing — there is no developer-operated backend server.
     </div>
 
     <h2>Overview</h2>
-    <p>Bulk Clean for Slack is a browser extension that helps users bulk-delete their own
-      Slack messages. This policy describes what data the extension accesses, how it is
-      used, and how it is stored.</p>
+    <p>Bulk Clean for Slack helps users bulk-delete their own content on Slack (built in)
+      and six <strong>optional</strong> platforms connected one at a time from the popup:
+      <strong>Reddit, X, Mastodon, Microsoft Teams, Bluesky, and Telegram</strong>. This
+      policy describes what data the extension accesses for each platform, how it is
+      used, and how it is stored. Connecting a platform beyond Slack is always an
+      explicit action you take — nothing beyond Slack is ever contacted automatically.</p>
 
-    <h2>Data the extension accesses</h2>
+    <h2>Data the extension accesses — Slack</h2>
     <table>
       <thead>
         <tr><th>Data type</th><th>Purpose</th><th>Storage</th><th>Retention</th></tr>
@@ -100,52 +104,86 @@
       </tbody>
     </table>
 
-    <h3>Data the extension does NOT access</h3>
+    <h2>Data the extension accesses — the six optional platforms</h2>
+    <p>Each of these is only ever contacted after you explicitly connect it from the
+      popup. Scanned post/message text and timestamps are, on every platform, held only
+      in browser memory for the current dashboard tab and cleared when the tab closes or
+      a new scan runs — never written to disk.</p>
+    <table>
+      <thead>
+        <tr><th>Platform</th><th>Credential accessed</th><th>Storage</th><th>Retention</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Reddit</strong></td><td>Your existing reddit.com session cookie (read live, never copied into storage) plus a "modhash" and username Reddit's own API requires for delete calls</td><td><code>chrome.storage.local</code> (modhash/username only)</td><td>Until you disconnect/reconnect Reddit</td></tr>
+        <tr><td><strong>X</strong></td><td>Your existing x.com/twitter.com session's CSRF token (<code>ct0</code>) — never your password or the underlying session cookie itself</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect X</td></tr>
+        <tr><td><strong>Mastodon</strong></td><td>The instance URL you type and a personal access token you generate yourself on that instance</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect Mastodon</td></tr>
+        <tr><td><strong>Microsoft Teams</strong></td><td>A Bearer token passively observed from your own already-authenticated Teams traffic</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect Teams</td></tr>
+        <tr><td><strong>Bluesky</strong></td><td>An OAuth 2.0 + PKCE + DPoP session, managed by the official <code>@atproto/oauth-client-browser</code> library</td><td>IndexedDB (not <code>chrome.storage</code>)</td><td>Until logout (revokes server-side) or natural token expiry</td></tr>
+        <tr><td><strong>Telegram</strong></td><td>Your own <code>api_id</code>/<code>api_hash</code> (from Telegram's developer portal) and an MTProto session from your phone/code/2FA login</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect (logout also revokes the session server-side)</td></tr>
+      </tbody>
+    </table>
+    <p>Mastodon's host permission is requested narrowly for the one instance you typed —
+      never a blanket grant across every Mastodon server. Telegram needs no host
+      permission at all: it talks to Telegram's own MTProto servers over WebSockets.</p>
+
+    <h3>Delete-progress markers</h3>
+    <p>For the six optional platforms, a small marker — just two numbers, items
+      processed and total — is written to <code>chrome.storage.local</code> while a
+      deletion is actively running, so a tab closed or crashed mid-delete leaves you an
+      honest "previous run was interrupted" notice instead of silence. It never contains
+      message content, clears automatically when a deletion finishes, and cannot resume a
+      delete without you running a fresh scan first.</p>
+
+    <h3>Data the extension does NOT access, on any platform</h3>
     <ul>
-      <li>Message content is generally <strong>not stored to disk</strong>. The one
-        exception: "Only Delete Attachments (preserve text)" persists the edited
-        message's text to local storage for the duration of that operation so it can be
-        restored if the browser interrupts the job; it is deleted when the operation
-        completes or is cancelled. All other message text stays in browser memory only.</li>
-      <li>No browsing history, cookies, bookmarks, or other browser data.</li>
-      <li>No personal information beyond your Slack user ID and workspace membership.</li>
+      <li>Message content is generally <strong>not stored to disk</strong> on any
+        platform. The one exception on Slack: "Only Delete Attachments (preserve text)"
+        persists the edited message's text to local storage for the duration of that
+        operation so it can be restored if the browser interrupts the job; it is
+        deleted when the operation completes or is cancelled.</li>
+      <li>No browsing history, bookmarks, or unrelated cookies — only the specific
+        session/auth data each platform's own login mechanism requires.</li>
+      <li>No personal information beyond what's needed to authenticate as you and show
+        scan results.</li>
     </ul>
 
     <h2>How data is used</h2>
-    <ul>
-      <li><strong>Session token</strong> — authenticate Slack API calls
-        (<code>conversations.history</code>, <code>chat.delete</code>,
-        <code>files.delete</code>, <code>users.list</code>,
-        <code>conversations.info</code>) on your behalf.</li>
-      <li><strong>Message metadata</strong> — track which messages have been processed,
-        enabling pause/resume/recovery.</li>
-      <li><strong>User cache</strong> — display readable usernames instead of Slack IDs.</li>
-    </ul>
+    <p>All data accessed, on every platform, is used exclusively for that platform's own
+      scan/delete functionality: authenticating your requests, previewing what will be
+      deleted before you confirm, and tracking in-progress deletion state. Nothing is
+      aggregated, profiled, or reused beyond the operation you started.</p>
 
     <h2>Data storage &amp; sharing</h2>
     <ul>
-      <li><strong>No data is transmitted to external servers.</strong> All API calls go
-        directly from your browser to Slack's official endpoints
-        (<code>https://slack.com/api/</code>).</li>
-      <li><strong>Session tokens are never written to disk</strong> — they live only in
-        <code>chrome.storage.session</code> (memory-only, cleared on browser close).</li>
-      <li><strong>No analytics, telemetry, tracking, advertising, or data brokers.</strong>
-        Nothing is shared with any entity other than Slack's own API, at your direction.</li>
+      <li><strong>No data is transmitted to external servers.</strong> Every call goes
+        directly from your browser to the platform being managed — Slack, reddit.com,
+        x.com, your chosen Mastodon instance, teams.microsoft.com, your account's Bluesky
+        PDS, or Telegram's own MTProto servers.</li>
+      <li><strong>Slack's session token is never written to disk</strong> — it lives only
+        in <code>chrome.storage.session</code> (memory-only, cleared on browser close).
+        The other platforms' credentials are stored locally in <code>chrome.storage.local</code>
+        (or, for Bluesky, IndexedDB) so you don't have to reconnect every time — this
+        never leaves your device and is never synced to any account.</li>
+      <li><strong>No analytics, telemetry, tracking, advertising, or data brokers, on any
+        platform.</strong> Nothing is shared with any entity other than the platform
+        you're directly operating on, at your own direction.</li>
     </ul>
 
     <h2>User control</h2>
     <ul>
-      <li>Pause, resume, or cancel any deletion at any time; closing the dashboard stops operations.</li>
-      <li>Uninstalling the extension clears all stored data.</li>
-      <li>Deletions require explicit confirmation, with a typed <strong>DELETE</strong> step for large batches (&gt;100 messages).</li>
+      <li>Pause, resume, or cancel any Slack deletion at any time; closing a dashboard tab stops operations for that platform.</li>
+      <li>Connect or disconnect any of the six optional platforms independently — none of them are required to use Slack, and connecting one never affects the others.</li>
+      <li>Uninstalling the extension clears all stored data across every platform.</li>
+      <li>Deletions require explicit confirmation on every platform, with a stricter "type the exact count" step for large batches (&gt;100 items) instead of a fixed one-word confirmation.</li>
     </ul>
 
     <h2>Security</h2>
     <ul>
-      <li>Session tokens are memory-only and never persisted to disk.</li>
-      <li>The dashboard renders inside a Shadow DOM, isolated from the host page.</li>
-      <li>Message sender origins are validated (<code>*.slack.com</code> only) before processing.</li>
+      <li>Slack's session token is memory-only and never persisted to disk; other platforms' tokens stay local to your device and are never sent anywhere but that platform's own API.</li>
+      <li>The Slack dashboard renders inside a Shadow DOM, isolated from the host page.</li>
+      <li>Message sender origins are validated before processing.</li>
       <li>User text filters are guarded against regex denial-of-service (ReDoS).</li>
+      <li>Scanned content is always rendered as plain text in every dashboard, never as raw HTML.</li>
     </ul>
 
     <h2>Children's privacy</h2>

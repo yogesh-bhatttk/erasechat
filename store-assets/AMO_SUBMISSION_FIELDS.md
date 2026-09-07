@@ -4,6 +4,17 @@ Copy-paste values for the Firefox Add-ons submission form, in the order the form
 Kept separate from `STORE_LISTING.md` because that file is written against the **Chrome**
 Web Store's taxonomy, which does not match AMO's (see Categories below).
 
+> **⚠️ Stale as of 2026-09-07.** This file was written before the extension grew from
+> Slack-only into a 7-platform tool (Slack plus optional Reddit, X, Mastodon, Microsoft
+> Teams, Bluesky, and Telegram, each connected explicitly from the popup). The
+> `data_collection_permissions: ["none"]` claim below still holds — nothing is
+> transmitted to the developer on any of the seven platforms, only stored locally on the
+> user's own device — but the Description and Notes for Reviewer text still describe
+> Slack only. Before a real submission, at minimum add a paragraph to Notes for Reviewer
+> along the lines of the "OPTIONAL PLATFORMS BEYOND SLACK" addendum in
+> `CWS_SUBMISSION_FIELDS.md`, and update the Description to mention the six optional
+> platforms exist. Screenshots further down are also Slack-only and unchanged.
+
 ---
 
 ## Name
@@ -191,6 +202,15 @@ the background context.
 DATA COLLECTION
 None. Declared in the manifest as
 browser_specific_settings.gecko.data_collection_permissions.required: ["none"].
+
+OPTIONAL PLATFORMS BEYOND SLACK
+The popup also offers six further platforms — Reddit, X, Mastodon, Microsoft Teams,
+Bluesky, and Telegram — each connected explicitly, one at a time, from the popup's
+platform picker. None is required to use Slack, and none is contacted until the user
+clicks it. Each follows the same scan-preview-confirm-delete safety model as Slack, using
+that platform's own existing session/login (or, for Mastodon/Telegram, credentials the
+user supplies themselves) rather than any credential from the developer. See
+PRIVACY_POLICY.md for the full per-platform data table if useful during review.
 
 Happy to answer anything — yogeshb@prosperix.com
 ```

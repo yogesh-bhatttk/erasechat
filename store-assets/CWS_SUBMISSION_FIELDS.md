@@ -196,9 +196,23 @@ tab buries the only channel a user has for reporting a bug.
 
 ## 2. Privacy practices tab
 
+> **⚠️ Stale as of 2026-09-07 — read before submitting.** Everything below this point in
+> §2 was written before the extension grew from Slack-only into a 7-platform tool (Slack
+> plus optional Reddit, X, Mastodon, Microsoft Teams, Bluesky, and Telegram support,
+> connected one at a time from the popup). The single-purpose statement and the three
+> permission justifications below have been updated to describe that reality accurately.
+> **Still needed, and not done here:** justification text for the three NEW optional
+> permissions (`cookies`, `webRequest`, `identity`) and the new optional host permissions
+> — drafted just below, but not yet measured against Chrome's real per-box character
+> limit the way the original `storage`/`scripting`/`alarms`/host-permission text was (see
+> the counting note that follows). Re-verify lengths in the actual dashboard before
+> pasting. The Description/Screenshots/promo sections further down in this file are
+> UNCHANGED and still describe Slack only — new screenshots showing the platform picker
+> and an updated description are a separate, visual-asset task, not a text edit.
+
 ### Single purpose
 ```
-Bulk Clean for Slack has a single purpose: to help users bulk-delete and clean their own messages in the Slack web client (app.slack.com and workspace subdomains). Everything the extension does — scanning conversations, previewing matches, and deleting messages — serves that one purpose.
+Bulk Clean for Slack has a single purpose: to help users bulk-delete and clean their own content across the platforms they connect to it. Slack support is built in. Six further platforms — Reddit, X, Mastodon, Microsoft Teams, Bluesky, and Telegram — are optional and connected one at a time, explicitly, from the extension's popup; none of them is required to use Slack. Everything the extension does on every platform — scanning, previewing matches, and deleting content — serves that one purpose: helping a user clean up their own past content.
 ```
 
 ### Permission justifications
@@ -239,6 +253,26 @@ Calls use the user's existing Slack session, so no API token has to be created o
 Because 1,000 characters cannot hold the full token rationale, **Access → Test instructions
 (§2.5) is now the only place it appears in full**. That tab is no longer optional polish.
 
+**`cookies` (optional permission)**
+```
+Used only for the optional Reddit and X integrations, and only after the user explicitly clicks that platform in the popup. Reddit: checks for the user's own already-logged-in reddit.com session cookie so the extension can act as them without a separate login. X: reads the CSRF token (ct0) that platform's own web client already sets for a logged-in session. No cookie value is ever transmitted anywhere except back to that same platform's own API, and never to the developer.
+```
+
+**`webRequest` (optional permission)**
+```
+Used only for the optional Microsoft Teams integration, and only after the user explicitly clicks Teams in the popup and grants this permission for teams.microsoft.com specifically. It passively observes the Authorization header on the user's own already-authenticated Teams web-client requests to capture a Bearer token, since Teams has no ambient session cookie the way Slack does. No request body or unrelated header is read or stored; only the Authorization value from requests whose path matches the chat API is kept, and only in chrome.storage.local on the user's own device.
+```
+
+**`identity` (optional permission)**
+```
+Used only for the optional Bluesky integration, and only after the user explicitly clicks Bluesky in the popup. Bluesky's AT Protocol requires OAuth 2.0 + PKCE, and chrome.identity.launchWebAuthFlow is the standard, Google-documented way for a Chrome extension to run that flow with no embedded secret. The resulting session is managed by the official @atproto/oauth-client-browser library and stored in the browser's IndexedDB, not transmitted to the developer.
+```
+
+**Optional host permissions — `*.reddit.com`, `*.x.com`, `*.twitter.com`, `*.teams.microsoft.com`, `*.msg.teams.microsoft.com`, `https://*/*`**
+```
+Each of the platform-specific patterns is requested only once the user clicks that platform in the popup, and is used only to call that platform's own official web/API endpoints on the user's behalf. The broad https://*/* entry is the declared upper bound Chrome requires so two narrow, runtime-resolved requests can be legal: Mastodon (federated — every instance is a different origin) requests permission for only the exact instance URL the user typed, and Bluesky requests only what its OAuth library resolves for the user's own account server (PDS). Neither ever requests or receives the broad pattern itself — chrome.permissions.request() is always called with one specific, narrow origin.
+```
+
 **Remote code** — select **"No, I am not using remote code"**
 
 The radio button alone is not enough: Chrome requires the justification box to be filled in
@@ -254,9 +288,11 @@ No remote code is used. Every line of JavaScript, HTML and CSS the extension exe
 
 Chrome defines collection as obtaining data and **transmitting it off the user's device**.
 This extension transmits nothing to the developer or to any third party — there is no
-backend, no analytics, no telemetry. The only network traffic is the user's own browser
-talking to Slack's API over the user's own session, which is the service they are already
-logged into and the action they explicitly asked for.
+backend, no analytics, no telemetry, on Slack or on any of the six optional platforms
+(Reddit, X, Mastodon, Microsoft Teams, Bluesky, Telegram). The only network traffic, on
+any platform, is the user's own browser talking directly to that platform's own API over
+their own already-logged-in session (or, for Bluesky, their account's own AT Protocol
+server) — always a service they're already using and an action they explicitly asked for.
 
 Do not "play it safe" by checking *Authentication information* or *Personal communications*.
 Those checkboxes render as a public "this developer collects…" panel on the listing page,
@@ -355,6 +391,15 @@ Public source: https://github.com/yogesh-bhatttk/bulk-clean-for-slack
 
 DATA COLLECTION
 None. Nothing leaves the user's device except the calls to Slack's own API listed above.
+
+OPTIONAL PLATFORMS BEYOND SLACK
+The popup also offers six further platforms — Reddit, X, Mastodon, Microsoft Teams,
+Bluesky, and Telegram — each connected explicitly, one at a time, from the popup's
+platform picker. None is required to use Slack, and none is contacted until the user
+clicks it. Each follows the same scan-preview-confirm-delete safety model as Slack, using
+that platform's own existing session/login (or, for Mastodon/Telegram, credentials the
+user supplies themselves) rather than any credential from the developer. See
+PRIVACY_POLICY.md for the full per-platform data table if useful during review.
 
 Happy to answer anything — yogeshb@prosperix.com
 ```
