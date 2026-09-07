@@ -68,6 +68,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("btn-back-to-platforms").addEventListener("click", showPlatformList);
   document.getElementById("btn-back-to-platforms-bluesky").addEventListener("click", showPlatformList);
+  document.getElementById("btn-back-to-platforms-telegram").addEventListener("click", showPlatformList);
 
   // Auto-skip the picker only when the active tab is unambiguously Slack's --
   // every other platform's own migration step decides its own auto-detect
@@ -139,6 +140,10 @@ function onPlatformRowClick(platform) {
   }
   if (platform.id === "bluesky") {
     enterBlueskyView();
+    return;
+  }
+  if (platform.id === "telegram") {
+    enterTelegramView();
     return;
   }
   if (Array.isArray(platform.form)) {
@@ -289,8 +294,19 @@ function showPlatformList() {
   document.getElementById("platform-list-state").classList.remove("hidden");
   document.getElementById("slack-view").classList.add("hidden");
   document.getElementById("bluesky-view").classList.add("hidden");
+  document.getElementById("telegram-view").classList.add("hidden");
   const badge = document.getElementById("brand-badge");
   if (badge) badge.textContent = t("brandTag", "Choose a platform");
+}
+
+// Telegram's multi-step login flow (credentials -> code -> 2FA -> success) is
+// managed entirely by telegram-popup.bundle.js, same reasoning as
+// enterBlueskyView() above -- this only handles which view is visible.
+function enterTelegramView() {
+  document.getElementById("platform-list-state").classList.add("hidden");
+  document.getElementById("telegram-view").classList.remove("hidden");
+  const badge = document.getElementById("brand-badge");
+  if (badge) badge.textContent = "Telegram";
 }
 
 // Bluesky's own login/status states are managed entirely by bluesky-popup.bundle.js

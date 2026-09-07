@@ -189,6 +189,84 @@
           </button>
         </div>
       </div>
+
+      <!-- Telegram view: real MTProto client (bundled separately, see
+           scripts/build-telegram.js/webpack.telegram.config.js), a multi-step
+           phone/code/2FA login with no permission to request at all (MTProto runs
+           over its own WebSocket transport, not chrome.permissions-gated fetch) --
+           its own view and bundle, like Slack and Bluesky. -->
+      <div id="telegram-view" class="hidden">
+        <button id="btn-back-to-platforms-telegram" class="btn-back" data-i18n-aria="popupBackToPlatformsAria" aria-label="Back to all platforms">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+          <span data-i18n="popupBackToPlatforms">All platforms</span>
+        </button>
+
+        <div id="step-credentials" class="step active">
+          <div class="form-group">
+            <label for="api-id">API ID</label>
+            <input type="text" id="api-id" placeholder="e.g. 123456" autocomplete="off" inputmode="numeric">
+          </div>
+          <div class="form-group">
+            <label for="api-hash">API Hash</label>
+            <input type="text" id="api-hash" placeholder="Your api_hash" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="phone">Phone Number</label>
+            <input type="tel" id="phone" placeholder="+1 555 555 5555" autocomplete="off">
+          </div>
+          <button id="btn-request-code" class="btn btn-primary" style="background: linear-gradient(135deg, #2AABEE, #229ED9); border:none; color:white;">
+            <span>Request Code</span>
+          </button>
+          <p class="hint-text">Get your own <code>api_id</code> / <code>api_hash</code> at <strong>my.telegram.org</strong>. Never shared with anyone.</p>
+        </div>
+
+        <div id="step-code" class="step">
+          <div class="status-card inactive">
+            <div class="warning-dot"></div>
+            <p>Code sent to your Telegram app</p>
+          </div>
+          <div class="form-group">
+            <label for="auth-code">Login Code</label>
+            <input type="text" id="auth-code" placeholder="12345" autocomplete="off" inputmode="numeric">
+          </div>
+          <button id="btn-submit-code" class="btn btn-primary" style="background: linear-gradient(135deg, #2AABEE, #229ED9); border:none; color:white;">
+            <span>Submit Code</span>
+          </button>
+        </div>
+
+        <div id="step-password" class="step">
+          <div class="status-card inactive">
+            <div class="warning-dot"></div>
+            <p>2FA password required</p>
+          </div>
+          <div class="form-group">
+            <label for="2fa-password">Cloud Password</label>
+            <input type="password" id="2fa-password" placeholder="Your 2FA password" autocomplete="off">
+          </div>
+          <button id="btn-submit-password" class="btn btn-primary" style="background: linear-gradient(135deg, #2AABEE, #229ED9); border:none; color:white;">
+            <span>Submit Password</span>
+          </button>
+        </div>
+
+        <div id="step-success" class="step">
+          <div class="status-card">
+            <div class="pulse-indicator" style="background: #2AABEE;"></div>
+            <p>Connected</p>
+          </div>
+          <button id="btn-dashboard" class="btn btn-primary" style="background: linear-gradient(135deg, #2AABEE, #229ED9); border:none; color:white;">
+            <span>Open Dashboard</span>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </button>
+          <button id="btn-logout" class="btn btn-secondary">Log Out</button>
+        </div>
+
+        <div id="error-msg-telegram" class="error-msg"></div>
+      </div>
     </main>
 
     <!-- First-Run Onboarding (SC-UX-01) -->
@@ -216,5 +294,7 @@
   <script src="popup/connect-teams.js"></script>
   <script src="popup.js"></script>
   <script src="bluesky-popup.bundle.js"></script>
+  <script src="process-shim.js"></script>
+  <script src="telegram-popup.bundle.js"></script>
 </body>
 </html>

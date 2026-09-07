@@ -102,9 +102,12 @@ const PLATFORMS = [
     accent: ["#2AABEE", "#229ED9"],
     // Native MTProto client, not a web origin -- nothing to auto-detect or match,
     // and no host permission needed (it talks over its own WebSocket transport).
+    // popup.js's generic connectAndLaunchPlatform() is not used for this platform
+    // at all (see onPlatformRowClick's special case, same as Slack and Bluesky) --
+    // telegram-popup.bundle.js manages its own multi-step login entirely.
     isTabMatch: null,
     dashboard: "dashboard-telegram.html",
-    ready: false
+    ready: true
   }
 ];
 

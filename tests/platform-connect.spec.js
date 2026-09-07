@@ -339,6 +339,32 @@ test('a denied Bluesky permission request surfaces an inline error, not a silent
   }
 });
 
+test('clicking Telegram enters its own view with the credentials step, and back returns to the picker', async () => {
+  const { context, extensionId } = await launch();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.locator('.platform-row[data-platform="telegram"]').click();
+
+    await expect(page.locator('#telegram-view')).toBeVisible();
+    await expect(page.locator('#platform-list-state')).toBeHidden();
+    // No chrome.permissions.request at all for Telegram -- MTProto needs none --
+    // so the first (and only initially visible) step is straight to credentials.
+    await expect(page.locator('#step-credentials')).toHaveClass(/active/);
+    await expect(page.locator('#api-id')).toBeVisible();
+    await expect(page.locator('#api-hash')).toBeVisible();
+    await expect(page.locator('#phone')).toBeVisible();
+    await expect(page.locator('#step-code')).not.toHaveClass(/active/);
+
+    await page.locator('#btn-back-to-platforms-telegram').click();
+    await expect(page.locator('#platform-list-state')).toBeVisible();
+    await expect(page.locator('#telegram-view')).toBeHidden();
+  } finally {
+    await context.close();
+  }
+});
+
 test('Teams times out with an actionable error when background.js never captures a token', async () => {
   test.setTimeout(20000); // connectTeams' own poll loop runs up to 15s
   const { context, extensionId } = await launch();

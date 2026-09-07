@@ -222,6 +222,52 @@ body {
   margin-top: 8px;
 }
 
+/* Telegram view: multi-step login flow (credentials -> code -> 2FA -> success). */
+.step {
+  display: none;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.step.active {
+  display: flex;
+  animation: fadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.form-group input {
+  padding: 10px 12px;
+  background-color: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.form-group input:focus {
+  border-color: var(--accent);
+}
+
+.hint-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
 /* Bluesky view: status-section starts hidden -- bluesky-popup.bundle.js toggles
    both sections' display directly via inline styles once client.init()/login
    resolves (see showStatus() in bluesky-popup.src.js). Without this default, both

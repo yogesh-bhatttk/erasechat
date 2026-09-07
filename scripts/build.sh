@@ -23,6 +23,9 @@ mkdir -p "$DIST/chrome" "$DIST/firefox"
 echo "Bundling Bluesky's OAuth client (esbuild)..."
 node scripts/build-bluesky.js
 
+echo "Bundling Telegram's MTProto client (webpack)..."
+node scripts/build-telegram.js
+
 # Runtime assets shipped in BOTH packages (the manifest is added per target below).
 # privacy.html ships because the popup links to it (in-extension policy page);
 # LICENSE ships for hygiene.
@@ -59,6 +62,11 @@ ASSETS=(
   bluesky-popup.bundle.js.map
   bluesky-dashboard.bundle.js
   bluesky-dashboard.bundle.js.map
+  dashboard-telegram.html
+  dashboard-telegram.css
+  process-shim.js
+  telegram-popup.bundle.js
+  telegram-dashboard.bundle.js
 )
 
 copy_assets() {

@@ -65,7 +65,11 @@ export default [
     // scripts/build-bluesky.js's bundles at repo root, and scripts/build.sh's
     // full packaged copies under dist/. Linting bundled/packaged third-party
     // code is neither useful nor meaningful.
-    ignores: ["bluesky-popup.bundle.js", "bluesky-dashboard.bundle.js", "dist/**"]
+    ignores: [
+      "bluesky-popup.bundle.js", "bluesky-dashboard.bundle.js",
+      "telegram-popup.bundle.js", "telegram-dashboard.bundle.js",
+      "dist/**"
+    ]
   },
   {
     // Background service worker / event page.
@@ -111,6 +115,35 @@ export default [
         alert: "readonly",
         prompt: "readonly"
       }
+    },
+    rules: correctnessRules
+  },
+  {
+    // Telegram's popup/dashboard source, pre-bundle (see
+    // webpack.telegram.config.js). Same ES-module situation as Bluesky's above.
+    files: ["telegram-popup.src.js", "telegram-dashboard.src.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        ...browserGlobals,
+        window: "readonly",
+        document: "readonly",
+        alert: "readonly",
+        prompt: "readonly"
+      }
+    },
+    rules: correctnessRules
+  },
+  {
+    // Loaded as a plain classic <script> before either Telegram bundle -- see the
+    // file's own header comment for why (MV3 extension-page CSP blocks inline
+    // scripts, so this can't be inlined into the HTML instead).
+    files: ["process-shim.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      globals: { self: "readonly", Promise: "readonly" }
     },
     rules: correctnessRules
   },
@@ -191,7 +224,7 @@ export default [
     rules: correctnessRules
   },
   {
-    files: ["tests/**/*.js", "scripts/**/*.js"],
+    files: ["tests/**/*.js", "scripts/**/*.js", "webpack.telegram.config.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "commonjs",
