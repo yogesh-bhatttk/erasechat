@@ -105,5 +105,13 @@
   "dashAlertTitle": { "message": "Benachrichtigung" },
   "dashConfirmTitle": { "message": "Bestätigung" },
   "dashOk": { "message": "OK" },
-  "dashConfirm": { "message": "Bestätigen" }
+  "dashConfirm": { "message": "Bestätigen" },
+
+  "popupBackToPlatforms": { "message": "Alle Plattformen" },
+  "popupBackToPlatformsAria": { "message": "Zurück zu allen Plattformen" },
+  "popupComingSoon": { "message": "Demnächst verfügbar" },
+  "popupConnect": { "message": "Verbinden" },
+  "popupConnectFailed": { "message": "Verbindung fehlgeschlagen. Bitte versuche es erneut." },
+  "popupCurrentTab": { "message": "Dieser Tab" },
+  "popupPermissionDenied": { "message": "Die Berechtigung wurde nicht erteilt, daher kann diese Plattform nicht geöffnet werden." }
 }

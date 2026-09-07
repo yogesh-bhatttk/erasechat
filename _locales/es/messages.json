@@ -105,5 +105,13 @@
   "dashAlertTitle": { "message": "Notificación" },
   "dashConfirmTitle": { "message": "Confirmación" },
   "dashOk": { "message": "Aceptar" },
-  "dashConfirm": { "message": "Confirmar" }
+  "dashConfirm": { "message": "Confirmar" },
+
+  "popupBackToPlatforms": { "message": "Todas las plataformas" },
+  "popupBackToPlatformsAria": { "message": "Volver a todas las plataformas" },
+  "popupComingSoon": { "message": "Próximamente" },
+  "popupConnect": { "message": "Conectar" },
+  "popupConnectFailed": { "message": "No se pudo conectar. Inténtalo de nuevo." },
+  "popupCurrentTab": { "message": "Esta pestaña" },
+  "popupPermissionDenied": { "message": "No se concedió el permiso, por lo que esta plataforma no se puede abrir." }
 }
