@@ -1,3 +1,21 @@
+// Tracks whether the user has navigated away from the platform-picker list (into
+// the Slack/Bluesky/Telegram special views) while a connectAndLaunchPlatform()
+// call for some OTHER platform is still in flight, so that call's eventual
+// afterConnect() can tell it should no longer yank the user into a newly-opened
+// dashboard tab with the popup closed out from under them.
+//
+// This is deliberately a single boolean, not "which platform was clicked last" --
+// an earlier version tracked the latter (activeConnectPlatformId) and had a real
+// bug: starting a connect for one platform (e.g. Teams, which polls up to 15s)
+// and then clicking a DIFFERENT platform's row (e.g. Reddit, a few fast fetches)
+// while the first is still pending would overwrite that single "current platform"
+// value, so Teams' later, entirely legitimate success would be silently dropped
+// (no dashboard opened, no error shown) even though the user never left the
+// picker at all. Concurrent connects for different platforms are fine; only
+// actually leaving the picker (for one of the three special-cased views) should
+// suppress a still-pending connect's tab-open.
+let leftPlatformPicker = false;
+
 // i18n helpers. Localized text is applied over the English already in the HTML,
 // so a missing key or a browser without chrome.i18n simply keeps the English —
 // no blank strings, no regression.
@@ -135,14 +153,17 @@ function renderPlatformList() {
 function onPlatformRowClick(platform) {
   if (!platform.ready) return; // inert placeholder, nothing to launch yet
   if (platform.id === "slack") {
+    leftPlatformPicker = true; // see connectAndLaunchPlatform's afterConnect guard
     enterSlackView();
     return;
   }
   if (platform.id === "bluesky") {
+    leftPlatformPicker = true;
     enterBlueskyView();
     return;
   }
   if (platform.id === "telegram") {
+    leftPlatformPicker = true;
     enterTelegramView();
     return;
   }
@@ -240,6 +261,16 @@ function clearPlatformConnectError() {
 // formValues is only passed for platforms with a `form` (see togglePlatformForm) --
 // it's undefined for the cookie-session platforms that connect with no input.
 function connectAndLaunchPlatform(platform, formValues) {
+  const row = document.querySelector(`.platform-row[data-platform="${platform.id}"]`);
+  if (row && row.classList.contains("is-connecting")) {
+    // A fast double-click (or double-submit of the inline form) would otherwise
+    // fire chrome.permissions.request twice concurrently -- possibly showing two
+    // permission prompts back-to-back, or running connect()/opening the dashboard
+    // tab twice. No-op while a request for this same platform is already in flight.
+    return;
+  }
+
+  leftPlatformPicker = false;
   clearPlatformConnectError();
 
   // A dynamic-origin platform (e.g. Mastodon's user-typed instance) resolves the
@@ -261,33 +292,52 @@ function connectAndLaunchPlatform(platform, formValues) {
 
   const request = { origins, permissions: platform.optionalPermissions || [] };
 
-  chrome.permissions.request(request, (granted) => {
-    void chrome.runtime.lastError;
-    if (!granted) {
-      setPlatformRowStatus(platform.id, "");
-      showPlatformConnectError(t("popupPermissionDenied", "Permission was not granted, so this platform can't be opened."));
-      return;
-    }
-
-    const afterConnect = (result) => {
-      if (result && result.ok === false) {
+  try {
+    chrome.permissions.request(request, (granted) => {
+      void chrome.runtime.lastError;
+      if (!granted) {
         setPlatformRowStatus(platform.id, "");
-        showPlatformConnectError(result.message || t("popupConnectFailed", "Could not connect. Please try again."));
+        showPlatformConnectError(t("popupPermissionDenied", "Permission was not granted, so this platform can't be opened."));
         return;
       }
-      chrome.tabs.create({ url: chrome.runtime.getURL(platform.dashboard) });
-      window.close();
-    };
 
-    if (typeof platform.connect === "function") {
-      Promise.resolve(platform.connect(formValues)).then(afterConnect).catch((err) => {
-        setPlatformRowStatus(platform.id, "");
-        showPlatformConnectError(String(err && err.message ? err.message : err));
-      });
-    } else {
-      afterConnect({ ok: true });
-    }
-  });
+      const afterConnect = (result) => {
+        if (result && result.ok === false) {
+          setPlatformRowStatus(platform.id, "");
+          showPlatformConnectError(result.message || t("popupConnectFailed", "Could not connect. Please try again."));
+          return;
+        }
+        if (leftPlatformPicker) {
+          // The user navigated away from the picker (e.g. into the Slack view)
+          // while this connect was still in flight. Don't yank them out of that
+          // view by opening a dashboard tab and closing the popup out from under
+          // them for a platform they're no longer looking at -- just leave the
+          // permission granted; they can click this row again if they still want it.
+          setPlatformRowStatus(platform.id, "");
+          return;
+        }
+        chrome.tabs.create({ url: chrome.runtime.getURL(platform.dashboard) });
+        window.close();
+      };
+
+      if (typeof platform.connect === "function") {
+        Promise.resolve(platform.connect(formValues)).then(afterConnect).catch((err) => {
+          setPlatformRowStatus(platform.id, "");
+          showPlatformConnectError(String(err && err.message ? err.message : err));
+        });
+      } else {
+        afterConnect({ ok: true });
+      }
+    });
+  } catch (err) {
+    // chrome.permissions.request() throws synchronously (rather than calling
+    // back with granted:false) on a malformed match pattern -- e.g. a
+    // resolveOrigin() result that isn't a legal Chrome match pattern. Without
+    // this catch, the row would be stuck on "Connecting..." forever with no
+    // error shown.
+    setPlatformRowStatus(platform.id, "");
+    showPlatformConnectError(String(err && err.message ? err.message : err));
+  }
 }
 
 function showPlatformList() {
@@ -297,6 +347,9 @@ function showPlatformList() {
   document.getElementById("telegram-view").classList.add("hidden");
   const badge = document.getElementById("brand-badge");
   if (badge) badge.textContent = t("brandTag", "Choose a platform");
+  // Coming back to the picker means any still-pending connect for another
+  // platform is fair game to open its dashboard tab again once it resolves.
+  leftPlatformPicker = false;
 }
 
 // Telegram's multi-step login flow (credentials -> code -> 2FA -> success) is
@@ -418,7 +471,8 @@ function showPermissionRequiredState() {
 // workspace subdomain like acme.slack.com). Rejects spoofs and the bare domain.
 function isSlackClientTab(url) {
   try {
-    return new URL(url).hostname.endsWith(".slack.com");
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && parsed.hostname.endsWith(".slack.com");
   } catch (e) {
     return false;
   }

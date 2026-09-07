@@ -62,8 +62,34 @@ const PLATFORMS = [
       { id: "access-token", label: "Access Token", type: "password", placeholder: "Personal access token" }
     ],
     resolveOrigin: (values) => {
-      const host = (values["instance-url"] || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
-      return host ? `https://${host}/*` : null;
+      let host = (values["instance-url"] || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
+      // A raw Unicode/IDN hostname (e.g. "münchen.social", typed or pasted
+      // verbatim) fails the ASCII-only regex below even though it's a
+      // perfectly legitimate hostname -- punycode-normalize it first via URL,
+      // same as a real browser would. Only invoked for non-ASCII input, so
+      // plain ASCII hostnames (the common case) take an unchanged code path.
+      if (/[^\x00-\x7F]/.test(host)) {
+        try {
+          const url = new URL(`https://${host}`);
+          // Reject rather than silently accept if the input carried a path or
+          // port beyond a bare hostname -- this branch exists only to fix IDN
+          // encoding, not to become more permissive than the plain-ASCII path.
+          if ((url.pathname !== "/" && url.pathname !== "") || url.port) {
+            return null;
+          }
+          host = url.hostname;
+        } catch {
+          return null;
+        }
+      }
+      // Reject anything that isn't a plain hostname before it becomes part of a
+      // Chrome match pattern -- e.g. a literal "*" would silently widen the
+      // requested host permission from "this one instance" to "every matching
+      // subdomain" instead of failing validation.
+      if (!host || !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(host)) {
+        return null;
+      }
+      return `https://${host}/*`;
     },
     connect: (values) => connectMastodon(values),
     ready: true
@@ -72,7 +98,7 @@ const PLATFORMS = [
     id: "teams",
     name: "Microsoft Teams",
     accent: ["#6264A7", "#464775"],
-    isTabMatch: (hostname) => hostname.endsWith(".teams.microsoft.com"),
+    isTabMatch: (hostname) => hostname === "teams.microsoft.com" || hostname.endsWith(".teams.microsoft.com"),
     optionalHostPermissions: ["*://*.teams.microsoft.com/*", "*://*.msg.teams.microsoft.com/*"],
     optionalPermissions: ["webRequest"],
     dashboard: "platforms/teams/dashboard-teams.html",
