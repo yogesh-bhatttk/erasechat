@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bulk Clean for X</title>
+  <link rel="stylesheet" href="dashboard-x.css">
+  <style>
+    body {
+      background: #000;
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .dashboard-overlay {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      background: url('icons/icon128.png') no-repeat center center fixed; 
+      background-size: cover;
+    }
+    .dashboard-overlay::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-color: var(--bg-overlay);
+      backdrop-filter: blur(15px);
+    }
+    .dashboard-modal {
+      position: relative;
+      z-index: 10;
+      width: 90vw;
+      max-width: 1000px;
+      height: 85vh;
+      max-height: 800px;
+      transform: none !important;
+      margin: 0 auto;
+      top: 50%;
+      transform: translateY(-50%) !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard-overlay">
+    <div class="dashboard-modal">
+      <div class="dashboard-header">
+        <div class="header-left">
+          <div class="brand-title">
+            <img src="icons/icon48.png" width="24" height="24" alt="logo" style="border-radius: 6px;">
+            <h2>Bulk Clean for X</h2>
+          </div>
+        </div>
+      </div>
+      <div class="dashboard-body">
+        <div class="dashboard-main">
+          <div class="config-grid">
+            <div class="panel-card filter-form">
+              <h3 class="panel-title">1. Search Filters</h3>
+              
+          <div class="form-group">
+            <label>Your X.com Username</label>
+            <input type="text" id="username" placeholder="e.g. elonmusk">
+          </div>
+          <div class="form-group">
+            <label>Text Filter (Optional)</label>
+            <input type="text" id="text-filter" placeholder="e.g. word">
+          </div>
+        
+              <button id="scan-btn" class="dashboard-btn btn-scan" style="margin-top: 15px; justify-content: center;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                Scan History
+              </button>
+            </div>
+            
+            <div class="results-panel">
+              <div class="results-header">
+                <h4>Preview Results</h4>
+                <div class="results-selector" id="results-count">0 items found</div>
+              </div>
+              <div class="results-list" id="item-list">
+                <div class="no-messages">Enter parameters and click Scan to begin.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="action-panel">
+            <div class="selected-channel-summary">
+              <h4>Ready to delete?</h4>
+              <p id="status-text">Items deleted will be unrecoverable.</p>
+              <p id="progress-text" style="color: #1d9bf0; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
+            </div>
+            <div class="action-buttons">
+              <button id="delete-btn" class="dashboard-btn btn-delete danger" disabled>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                Start Deleting
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="dashboard-x.js"></script>
+</body>
+</html>

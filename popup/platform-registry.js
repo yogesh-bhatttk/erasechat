@@ -41,7 +41,8 @@ const PLATFORMS = [
     optionalHostPermissions: ["*://*.x.com/*", "*://*.twitter.com/*"],
     optionalPermissions: ["cookies"],
     dashboard: "dashboard-x.html",
-    ready: false
+    connect: () => connectX(),
+    ready: true
   },
   {
     id: "mastodon",

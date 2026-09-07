@@ -40,6 +40,9 @@ ASSETS=(
   dashboard-reddit.html
   dashboard-reddit.js
   dashboard-reddit.css
+  dashboard-x.html
+  dashboard-x.js
+  dashboard-x.css
 )
 
 copy_assets() {

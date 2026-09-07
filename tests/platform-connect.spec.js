@@ -97,3 +97,68 @@ test('a granted permission and a real session opens the Reddit dashboard tab', a
     await context.close();
   }
 });
+
+test('declining X\'s permission prompt shows an inline error and resets the row', async () => {
+  const { context, extensionId } = await launch();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.evaluate(() => {
+      chrome.permissions.request = (_req, cb) => cb(false);
+    });
+
+    await page.locator('.platform-row[data-platform="x"]').click();
+
+    await expect(page.locator('#platform-connect-error')).toBeVisible();
+    await expect(page.locator('.platform-row[data-platform="x"] .platform-status')).not.toHaveText(/connecting/i);
+  } finally {
+    await context.close();
+  }
+});
+
+test('granting permission but finding no ct0 cookie shows connectX\'s own error', async () => {
+  const { context, extensionId } = await launch();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.evaluate(() => {
+      chrome.permissions.request = (_req, cb) => cb(true);
+      chrome.cookies = { getAll: async () => [] }; // no ct0 cookie on either domain
+    });
+
+    await page.locator('.platform-row[data-platform="x"]').click();
+
+    await expect(page.locator('#platform-connect-error')).toBeVisible();
+    await expect(page.locator('#platform-connect-error')).toContainText(/log in to x\.com/i);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a granted permission and a real ct0 cookie opens the X dashboard tab', async () => {
+  const { context, extensionId } = await launch();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    const created = await page.evaluate(() => {
+      return new Promise((resolve) => {
+        chrome.permissions.request = (_req, cb) => cb(true);
+        chrome.cookies = { getAll: async (query) => query.domain === 'x.com' ? [{ name: 'ct0', value: 'csrf-token-value' }] : [] };
+        chrome.tabs.create = (opts) => { resolve(opts); return Promise.resolve({}); };
+        window.close = () => {};
+
+        document.querySelector('.platform-row[data-platform="x"]').click();
+      });
+    });
+
+    expect(created.url).toMatch(/dashboard-x\.html$/);
+
+    const stored = await page.evaluate(() => chrome.storage.local.get(['x_csrf']));
+    expect(stored.x_csrf).toBe('csrf-token-value');
+  } finally {
+    await context.close();
+  }
+});

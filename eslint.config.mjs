@@ -141,7 +141,7 @@ export default [
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "script",
-      globals: { module: "writable", connectReddit: "readonly" }
+      globals: { module: "writable", connectReddit: "readonly", connectX: "readonly" }
     },
     rules: correctnessRules
   },
