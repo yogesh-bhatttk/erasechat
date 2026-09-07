@@ -136,8 +136,70 @@ function onPlatformRowClick(platform) {
     enterSlackView();
     return;
   }
-  // Other ready platforms request their optional permission here, then open
-  // their dashboard tab -- wired up as each platform's own migration step lands.
+  connectAndLaunchPlatform(platform);
+}
+
+function setPlatformRowStatus(platformId, text, { connecting = false } = {}) {
+  const row = document.querySelector(`.platform-row[data-platform="${platformId}"]`);
+  if (!row) return;
+  row.classList.toggle("is-connecting", connecting);
+  const status = row.querySelector(".platform-status");
+  if (status) status.textContent = text;
+}
+
+function showPlatformConnectError(message) {
+  const el = document.getElementById("platform-connect-error");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.remove("hidden");
+}
+
+function clearPlatformConnectError() {
+  const el = document.getElementById("platform-connect-error");
+  if (!el) return;
+  el.textContent = "";
+  el.classList.add("hidden");
+}
+
+// Request a platform's optional permission (from this click's user gesture, as
+// required), run its own connect step if it has one, then open its dashboard tab.
+// Every failure path resets the row rather than leaving it stuck on "Connecting...".
+function connectAndLaunchPlatform(platform) {
+  clearPlatformConnectError();
+  setPlatformRowStatus(platform.id, t("popupConnecting", "Connecting..."), { connecting: true });
+
+  const request = {
+    origins: platform.optionalHostPermissions || [],
+    permissions: platform.optionalPermissions || []
+  };
+
+  chrome.permissions.request(request, (granted) => {
+    void chrome.runtime.lastError;
+    if (!granted) {
+      setPlatformRowStatus(platform.id, "");
+      showPlatformConnectError(t("popupPermissionDenied", "Permission was not granted, so this platform can't be opened."));
+      return;
+    }
+
+    const afterConnect = (result) => {
+      if (result && result.ok === false) {
+        setPlatformRowStatus(platform.id, "");
+        showPlatformConnectError(result.message || t("popupConnectFailed", "Could not connect. Please try again."));
+        return;
+      }
+      chrome.tabs.create({ url: chrome.runtime.getURL(platform.dashboard) });
+      window.close();
+    };
+
+    if (typeof platform.connect === "function") {
+      Promise.resolve(platform.connect()).then(afterConnect).catch((err) => {
+        setPlatformRowStatus(platform.id, "");
+        showPlatformConnectError(String(err && err.message ? err.message : err));
+      });
+    } else {
+      afterConnect({ ok: true });
+    }
+  });
 }
 
 function showPlatformList() {

@@ -19,6 +19,8 @@
   "popupBackToPlatformsAria": { "message": "Back to all platforms", "description": "Popup: accessible label for the back-to-platforms button" },
   "popupComingSoon": { "message": "Coming soon", "description": "Popup: status text for a platform not yet available" },
   "popupCurrentTab": { "message": "This tab", "description": "Popup: status text when the active tab matches a platform" },
+  "popupPermissionDenied": { "message": "Permission was not granted, so this platform can't be opened.", "description": "Popup: shown when the user declines a platform's permission request" },
+  "popupConnectFailed": { "message": "Could not connect. Please try again.", "description": "Popup: generic fallback when a platform's connect step fails without its own message" },
 
   "popupStatusDetected": { "message": "Slack Web Client Detected", "description": "Popup: Slack tab detected" },
   "popupConnectedTo": { "message": "Connected to Workspace", "description": "Popup: workspace label" },

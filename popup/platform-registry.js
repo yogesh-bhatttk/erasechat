@@ -25,8 +25,12 @@ const PLATFORMS = [
     accent: ["#FF4500", "#FF871D"],
     isTabMatch: (hostname) => hostname === "reddit.com" || hostname.endsWith(".reddit.com"),
     optionalHostPermissions: ["*://*.reddit.com/*"],
+    optionalPermissions: ["cookies"],
     dashboard: "dashboard-reddit.html",
-    ready: false
+    // Called after permission grant, before opening the dashboard tab. Defined in
+    // popup/connect-reddit.js (loaded by popup.html alongside this registry).
+    connect: () => connectReddit(),
+    ready: true
   },
   {
     id: "x",

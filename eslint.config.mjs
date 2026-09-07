@@ -76,6 +76,23 @@ export default [
     rules: correctnessRules
   },
   {
+    // Standalone per-platform dashboard pages (opened via chrome.tabs.create,
+    // unlike Slack's shadow-DOM overlay in content.js) — full DOM available.
+    files: ["dashboard-*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      globals: {
+        ...browserGlobals,
+        window: "readonly",
+        document: "readonly",
+        alert: "readonly",
+        prompt: "readonly"
+      }
+    },
+    rules: correctnessRules
+  },
+  {
     // Injected dashboard (content script) and popup — full DOM available.
     files: ["content.js", "popup.js"],
     languageOptions: {
@@ -105,13 +122,26 @@ export default [
     rules: correctnessRules
   },
   {
+    // Per-platform "connect" helpers the popup calls after a permission grant --
+    // full browser API surface (chrome, fetch), plus module.exports for Node tests.
+    files: ["popup/connect-*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      globals: { ...browserGlobals, module: "writable" }
+    },
+    rules: correctnessRules
+  },
+  {
     // Platform metadata table: same dual browser-global / CommonJS-module shape as
-    // shared-filters.js, loaded before popup.js.
+    // shared-filters.js, loaded before popup.js. Each entry can reference its own
+    // popup/connect-<platform>.js function by name -- declared here as each
+    // platform's migration step adds one.
     files: ["popup/platform-registry.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "script",
-      globals: { module: "writable" }
+      globals: { module: "writable", connectReddit: "readonly" }
     },
     rules: correctnessRules
   },
@@ -126,7 +156,13 @@ export default [
         module: "writable",
         __dirname: "readonly",
         process: "readonly",
-        Buffer: "readonly"
+        Buffer: "readonly",
+        // Playwright specs routinely pass callbacks to page.evaluate() that are
+        // serialized and run INSIDE the extension page, not in this (Node) file's
+        // own scope -- so `window`/`document` inside those callbacks refer to the
+        // page's globals, not anything Node-side.
+        window: "writable",
+        document: "readonly"
       }
     },
     rules: correctnessRules

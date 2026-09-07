@@ -18,6 +18,7 @@ const chromeManifest = readJson("manifest.json");
 const firefoxManifest = readJson("manifest.firefox.json");
 const pkg = readJson("package.json");
 const messages = readJson("_locales/en/messages.json");
+const { PLATFORMS } = require(path.join(ROOT, "popup/platform-registry.js"));
 
 // Every file path a manifest can point at, so a rename can't silently ship broken.
 function referencedFiles(manifest) {
@@ -193,12 +194,18 @@ test("every file referenced by either manifest exists on disk", () => {
   }
 });
 
-test("the build ships every runtime file both manifests reference", () => {
-  // scripts/build.sh copies a hand-maintained ASSETS list; a file added to a manifest
-  // but forgotten there produces a package that loads and then breaks at runtime.
+// scripts/build.sh's hand-maintained ASSETS list, parsed once and reused by every
+// "does the build actually ship X" test below.
+function shippedAssets() {
   const build = fs.readFileSync(path.join(ROOT, "scripts/build.sh"), "utf8");
   const assetBlock = build.split("ASSETS=(")[1].split(")")[0];
-  const shipped = assetBlock.split("\n").map(s => s.trim()).filter(s => s && !s.startsWith("#"));
+  return assetBlock.split("\n").map(s => s.trim()).filter(s => s && !s.startsWith("#"));
+}
+
+test("the build ships every runtime file both manifests reference", () => {
+  // A file added to a manifest but forgotten in ASSETS produces a package that loads
+  // and then breaks at runtime.
+  const shipped = shippedAssets();
 
   const referenced = new Set([...referencedFiles(chromeManifest), ...referencedFiles(firefoxManifest)]);
   // Firefox loads shared-filters.js via the manifest; Chrome via importScripts, which
@@ -218,6 +225,34 @@ test("the build ships every runtime file both manifests reference", () => {
     const topLevel = rel.split("/")[0];
     assert.ok(shipped.includes(rel) || shipped.includes(topLevel),
       `scripts/build.sh does not ship ${rel}`);
+  }
+});
+
+test("every ready platform's dashboard file exists and is shipped by the build", () => {
+  // Dashboard files are opened dynamically (chrome.tabs.create in popup.js), never
+  // referenced by either manifest -- so referencedFiles() above can't see them at
+  // all, and a platform going live without its dashboard in ASSETS would only be
+  // caught by actually clicking it in a browser. popup/platform-registry.js is the
+  // one place every platform's dashboard filename is written down, so it's the
+  // right source of truth for this check too.
+  const shipped = shippedAssets();
+  for (const platform of PLATFORMS) {
+    if (!platform.ready || !platform.dashboard) continue;
+
+    assert.ok(fs.existsSync(path.join(ROOT, platform.dashboard)),
+      `platform "${platform.id}" declares dashboard "${platform.dashboard}" but it doesn't exist`);
+
+    const topLevel = platform.dashboard.split("/")[0];
+    assert.ok(shipped.includes(platform.dashboard) || shipped.includes(topLevel),
+      `scripts/build.sh does not ship platform "${platform.id}"'s dashboard: ${platform.dashboard}`);
+
+    for (const htmlRel of htmlReferencedFiles(platform.dashboard)) {
+      assert.ok(fs.existsSync(path.join(ROOT, htmlRel)),
+        `${platform.dashboard} references missing file: ${htmlRel}`);
+      const htmlTopLevel = htmlRel.split("/")[0];
+      assert.ok(shipped.includes(htmlRel) || shipped.includes(htmlTopLevel),
+        `scripts/build.sh does not ship ${htmlRel}, referenced by ${platform.dashboard}`);
+    }
   }
 });
 

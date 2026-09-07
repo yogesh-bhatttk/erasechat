@@ -37,6 +37,9 @@ ASSETS=(
   icons
   fonts
   LICENSE
+  dashboard-reddit.html
+  dashboard-reddit.js
+  dashboard-reddit.css
 )
 
 copy_assets() {

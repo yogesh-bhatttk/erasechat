@@ -181,6 +181,17 @@ body {
   font-weight: 600;
 }
 
+.platform-row.is-connecting .platform-status {
+  color: var(--accent);
+}
+
+.error-text {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #ef4444;
+}
+
 /* Back-to-list control, shown above the Slack-specific states ------------ */
 .btn-back {
   display: flex;
