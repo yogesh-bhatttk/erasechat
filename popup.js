@@ -58,11 +58,100 @@ document.addEventListener("DOMContentLoaded", () => {
   localizeI18n(document);
 
   // Check for first-run onboarding
-  chrome.storage.local.get(["sc_onboarding_complete"], (data) => {
-    if (!data.sc_onboarding_complete) {
+  chrome.storage.local.get(["slack_onboarding_complete"], (data) => {
+    if (!data.slack_onboarding_complete) {
       showOnboarding();
     }
   });
+
+  renderPlatformList();
+
+  document.getElementById("btn-back-to-platforms").addEventListener("click", showPlatformList);
+
+  // Auto-skip the picker only when the active tab is unambiguously Slack's --
+  // every other platform's own migration step decides its own auto-detect
+  // behavior when it lands (see popup/platform-registry.js's isTabMatch).
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tab = tabs[0];
+    const hostname = tab && tab.url ? safeHostname(tab.url) : null;
+    const slackPlatform = PLATFORMS.find((p) => p.id === "slack");
+    if (hostname && slackPlatform.isTabMatch(hostname)) {
+      enterSlackView();
+    }
+  });
+});
+
+function safeHostname(url) {
+  try {
+    return new URL(url).hostname;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Build the platform picker from popup/platform-registry.js's PLATFORMS table.
+function renderPlatformList() {
+  const list = document.getElementById("platform-list");
+  list.innerHTML = "";
+
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tab = tabs[0];
+    const hostname = tab && tab.url ? safeHostname(tab.url) : null;
+
+    for (const platform of PLATFORMS) {
+      const row = document.createElement("li");
+      row.className = "platform-row";
+      row.dataset.platform = platform.id;
+
+      const isCurrentTab = hostname && typeof platform.isTabMatch === "function" && platform.isTabMatch(hostname);
+      if (isCurrentTab) row.classList.add("is-current-tab");
+      if (!platform.ready) row.classList.add("is-disabled");
+
+      const dot = document.createElement("span");
+      dot.className = "platform-dot";
+      dot.style.background = `linear-gradient(135deg, ${platform.accent[0]}, ${platform.accent[1]})`;
+
+      const name = document.createElement("span");
+      name.className = "platform-name";
+      name.textContent = platform.name;
+
+      const status = document.createElement("span");
+      status.className = "platform-status";
+      status.textContent = !platform.ready
+        ? t("popupComingSoon", "Coming soon")
+        : isCurrentTab
+          ? t("popupCurrentTab", "This tab")
+          : "";
+
+      row.append(dot, name, status);
+      row.addEventListener("click", () => onPlatformRowClick(platform));
+      list.appendChild(row);
+    }
+  });
+}
+
+function onPlatformRowClick(platform) {
+  if (!platform.ready) return; // inert placeholder, nothing to launch yet
+  if (platform.id === "slack") {
+    enterSlackView();
+    return;
+  }
+  // Other ready platforms request their optional permission here, then open
+  // their dashboard tab -- wired up as each platform's own migration step lands.
+}
+
+function showPlatformList() {
+  document.getElementById("platform-list-state").classList.remove("hidden");
+  document.getElementById("slack-view").classList.add("hidden");
+  const badge = document.getElementById("brand-badge");
+  if (badge) badge.textContent = t("brandTag", "Choose a platform");
+}
+
+function enterSlackView() {
+  document.getElementById("platform-list-state").classList.add("hidden");
+  document.getElementById("slack-view").classList.remove("hidden");
+  const badge = document.getElementById("brand-badge");
+  if (badge) badge.textContent = "Slack";
 
   hasSlackAccess().then((granted) => {
     if (!granted) {
@@ -71,7 +160,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     detectSlackTab();
   });
-});
+}
 
 function detectSlackTab() {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -89,8 +178,16 @@ function detectSlackTab() {
   });
 }
 
-// Show only the named state container, so the three states can never overlap.
+// Show only the named state container, so the three Slack-view states can never overlap.
+// Also ensures the Slack view itself (as opposed to the platform picker) is what's
+// showing, since each of the three states can be driven directly -- e.g. by a test,
+// or a future caller -- without going through enterSlackView() first.
 function showOnlyState(id) {
+  const platformList = document.getElementById("platform-list-state");
+  const slackView = document.getElementById("slack-view");
+  if (platformList) platformList.classList.add("hidden");
+  if (slackView) slackView.classList.remove("hidden");
+
   ["slack-active-state", "slack-inactive-state", "permission-required-state"].forEach((stateId) => {
     const el = document.getElementById(stateId);
     if (el) el.classList.toggle("hidden", stateId !== id);
@@ -262,7 +359,7 @@ function showOnboarding() {
   if (dismissBtn) {
     dismissBtn.addEventListener("click", () => {
       onboardingEl.classList.add("hidden");
-      chrome.storage.local.set({ sc_onboarding_complete: true });
+      chrome.storage.local.set({ slack_onboarding_complete: true });
     });
   }
 }

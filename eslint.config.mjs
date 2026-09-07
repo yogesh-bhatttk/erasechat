@@ -87,7 +87,9 @@ export default [
         document: "readonly",
         localStorage: "readonly",
         requestAnimationFrame: "readonly",
-        Blob: "readonly"
+        Blob: "readonly",
+        // Provided by popup/platform-registry.js, loaded before popup.js.
+        PLATFORMS: "readonly"
       }
     },
     rules: correctnessRules
@@ -99,6 +101,17 @@ export default [
       ecmaVersion: 2022,
       sourceType: "script",
       globals: { ...browserGlobals, module: "writable" }
+    },
+    rules: correctnessRules
+  },
+  {
+    // Platform metadata table: same dual browser-global / CommonJS-module shape as
+    // shared-filters.js, loaded before popup.js.
+    files: ["popup/platform-registry.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      globals: { module: "writable" }
     },
     rules: correctnessRules
   },

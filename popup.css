@@ -128,6 +128,78 @@ body {
 
 .hidden { display: none !important; }
 
+/* Platform picker -------------------------------------------------------- */
+.platform-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+}
+
+.platform-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.platform-row:hover { border-color: var(--border-hover); }
+
+.platform-row.is-current-tab { border-color: var(--accent); }
+
+.platform-row.is-disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.platform-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.platform-name {
+  flex-grow: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.platform-status {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.platform-row.is-current-tab .platform-status {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Back-to-list control, shown above the Slack-specific states ------------ */
+.btn-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 0 14px 0;
+}
+
+.btn-back:hover { color: var(--text-primary); }
+
+.btn-back svg { width: 14px; height: 14px; }
+
 /* Status chips ---------------------------------------------------------- */
 .status-card {
   display: flex;

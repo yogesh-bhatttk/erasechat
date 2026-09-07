@@ -576,15 +576,15 @@ test("queueKeyFor: job-progress and queue keys never collide across channels", (
 
   assert.notStrictEqual(a, b);
   assert.notStrictEqual(a, c);
-  // recoverAllJobs scans storage for the "slackclean_state_" prefix; a queue key that
+  // recoverAllJobs scans storage for the "slack_state_" prefix; a queue key that
   // shared it would be misread as a job record.
-  assert.ok(!a.startsWith("slackclean_state_"));
+  assert.ok(!a.startsWith("slack_state_"));
 });
 
 test("GET_JOB_STATUS: returns otherJob if there is a job in another channel", async () => {
   const { handlers, context } = loadBackground();
   const activeJobs = vm.runInContext("activeJobs", context);
-  activeJobs["slackclean_state_T1_C2"] = {
+  activeJobs["slack_state_T1_C2"] = {
     teamId: "T1",
     channelId: "C2",
     isPaused: true,
@@ -615,7 +615,7 @@ test("executeQueue: trim mode preserves structural blocks while removing files a
   });
 
   const activeJobs = vm.runInContext("activeJobs", context);
-  activeJobs["slackclean_state_T1_C1"] = {
+  activeJobs["slack_state_T1_C1"] = {
     teamId: "T1",
     channelId: "C1",
     token: "xoxc-test",
@@ -639,7 +639,7 @@ test("executeQueue: trim mode preserves structural blocks while removing files a
   const _processingKeys = vm.runInContext("processingKeys", context);
   
   const executeQueue = vm.runInContext("executeQueue", context);
-  await executeQueue("slackclean_state_T1_C1");
+  await executeQueue("slack_state_T1_C1");
 
   assert.strictEqual(updateCalled, true);
   const blocks = JSON.parse(sentBlocks);
@@ -652,16 +652,16 @@ test("isAutoResumeAllowed: prevents resumption on cold boot (session storage cle
   const isAutoResumeAllowed = vm.runInContext("isAutoResumeAllowed", context);
 
   // Default mock in test harness for session.get returns {} (empty), simulating cold boot
-  const coldBoot = await isAutoResumeAllowed("slackclean_state_T1_C1");
+  const coldBoot = await isAutoResumeAllowed("slack_state_T1_C1");
   assert.strictEqual(coldBoot, false, "Must default to false if run token is missing");
 });
 
 test("isAutoResumeAllowed: permits resumption after SW suspension (session storage persists)", async () => {
   const { sandbox, context } = loadBackground();
   // Simulate session storage persisting across an idle-death
-  sandbox.chrome.storage.session.get = async () => ({ "sc_run_slackclean_state_T1_C1": true });
+  sandbox.chrome.storage.session.get = async () => ({ "sc_run_slack_state_T1_C1": true });
   const isAutoResumeAllowed = vm.runInContext("isAutoResumeAllowed", context);
 
-  const warmWake = await isAutoResumeAllowed("slackclean_state_T1_C1");
+  const warmWake = await isAutoResumeAllowed("slack_state_T1_C1");
   assert.strictEqual(warmWake, true, "Must permit resumption if run token survived in session storage");
 });

@@ -37,6 +37,25 @@ function referencedFiles(manifest) {
   return files;
 }
 
+// An HTML entry point (popup.html today; dashboard-<platform>.html as each
+// platform's migration lands) can reference its own scripts/stylesheets that no
+// manifest field mentions at all -- e.g. popup/platform-registry.js, loaded only via
+// a <script src> tag inside popup.html. Manifest-derived referencedFiles() above is
+// blind to these, which is exactly the gap that let a real "ships a popup.html that
+// 404s on its own script" bug through once already.
+function htmlReferencedFiles(relHtmlPath) {
+  const html = fs.readFileSync(path.join(ROOT, relHtmlPath), "utf8");
+  const dir = path.dirname(relHtmlPath);
+  const files = [];
+  for (const m of html.matchAll(/<script[^>]+src=["']([^"']+)["']/g)) {
+    files.push(path.normalize(path.join(dir, m[1])));
+  }
+  for (const m of html.matchAll(/<link[^>]+href=["']([^"']+)["']/g)) {
+    files.push(path.normalize(path.join(dir, m[1])));
+  }
+  return files;
+}
+
 test("version is identical across both manifests and package.json", () => {
   assert.strictEqual(chromeManifest.version, pkg.version, "manifest.json vs package.json");
   assert.strictEqual(firefoxManifest.version, pkg.version, "manifest.firefox.json vs package.json");
@@ -164,6 +183,12 @@ test("every file referenced by either manifest exists on disk", () => {
   for (const [name, manifest] of [["manifest.json", chromeManifest], ["manifest.firefox.json", firefoxManifest]]) {
     for (const rel of referencedFiles(manifest)) {
       assert.ok(fs.existsSync(path.join(ROOT, rel)), `${name} references missing file: ${rel}`);
+      if (rel.endsWith(".html")) {
+        for (const htmlRel of htmlReferencedFiles(rel)) {
+          assert.ok(fs.existsSync(path.join(ROOT, htmlRel)),
+            `${rel} references missing file: ${htmlRel}`);
+        }
+      }
     }
   }
 });
@@ -179,6 +204,15 @@ test("the build ships every runtime file both manifests reference", () => {
   // Firefox loads shared-filters.js via the manifest; Chrome via importScripts, which
   // referencedFiles() cannot see — assert it explicitly.
   referenced.add("shared-filters.js");
+
+  // Follow HTML entry points to their own <script src>/<link href> references too
+  // (see htmlReferencedFiles's comment) -- iterate a snapshot since this adds to
+  // `referenced` while looping over it.
+  for (const rel of [...referenced]) {
+    if (rel.endsWith(".html")) {
+      for (const htmlRel of htmlReferencedFiles(rel)) referenced.add(htmlRel);
+    }
+  }
 
   for (const rel of referenced) {
     const topLevel = rel.split("/")[0];
@@ -238,14 +272,18 @@ test("locale file is well formed", () => {
   }
 });
 
-test("permissions stay minimal and host access is Slack-only", () => {
+test("required permissions stay minimal and required host access is Slack-only", () => {
   // Store reviewers reject unjustified permissions; this pins the surface so a
-  // debugging permission can't be left behind in a release.
+  // debugging permission can't be left behind in a release. Required (non-optional)
+  // permissions/host_permissions are the ones active from install with no user
+  // action, so they stay pinned to exactly what Slack's own flow needs -- every
+  // other platform's access is optional, requested only when the user opens it
+  // (see the optional_* pinning test below).
   const expected = ["storage", "scripting", "alarms"];
   for (const manifest of [chromeManifest, firefoxManifest]) {
     assert.deepStrictEqual([...manifest.permissions].sort(), [...expected].sort());
     for (const host of manifest.host_permissions) {
-      assert.match(host, /^https:\/\/(\*\.)?slack\.com\/\*$/, `non-Slack host permission: ${host}`);
+      assert.match(host, /^https:\/\/(\*\.)?slack\.com\/\*$/, `non-Slack required host permission: ${host}`);
     }
     for (const cs of manifest.content_scripts) {
       for (const match of cs.matches) {
@@ -257,6 +295,31 @@ test("permissions stay minimal and host access is Slack-only", () => {
         assert.match(match, /^https:\/\/\*\.slack\.com\/\*$/, `resource exposed outside Slack: ${match}`);
       }
     }
+  }
+});
+
+test("optional permissions are pinned to exactly the multi-platform surface", () => {
+  // These are inert until a specific platform's flow requests them via
+  // chrome.permissions.request() at runtime (see popup/platform-registry.js) --
+  // pinning the list here still catches an unreviewed permission sneaking in.
+  const expectedOptionalPermissions = ["cookies", "webRequest", "identity"];
+  const expectedOptionalHosts = [
+    "*://*.reddit.com/*",
+    "*://*.x.com/*",
+    "*://*.twitter.com/*",
+    "*://*.teams.microsoft.com/*",
+    "*://*.msg.teams.microsoft.com/*",
+    "https://*/*"
+  ];
+  for (const manifest of [chromeManifest, firefoxManifest]) {
+    assert.deepStrictEqual(
+      [...manifest.optional_permissions].sort(),
+      [...expectedOptionalPermissions].sort()
+    );
+    assert.deepStrictEqual(
+      [...manifest.optional_host_permissions].sort(),
+      [...expectedOptionalHosts].sort()
+    );
   }
 });
 

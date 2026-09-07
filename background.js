@@ -45,17 +45,17 @@ const SETTIMEOUT_MAX_MS = 25000;
 // Hard ceiling on a single Slack API request. Longer than any healthy call, short
 // enough that a stalled request can't pin the queue's reentrancy lock indefinitely.
 const FETCH_TIMEOUT_MS = 30000;
-const WATCHDOG_ALARM = "sc_watchdog";
+const WATCHDOG_ALARM = "slack_watchdog";
 const WATCHDOG_PERIOD_MIN = 1.0; // 1.0m: the platform minimum (Chrome enforces >= 1 min)
 const STALL_GRACE_MS = 60000;    // a job is "stalled" (SW died) only if this far past due
 
 // Companion storage key holding a job's immutable delete queue. Kept separate
 // from the (frequently-rewritten) progress record so batched progress saves
 // don't re-serialize the whole queue. Prefix intentionally does NOT start with
-// "slackclean_state_" so recoverAllJobs never mistakes it for a job record.
-const QUEUE_PREFIX = "sc_q_";
+// "slack_state_" so recoverAllJobs never mistakes it for a job record.
+const QUEUE_PREFIX = "slack_q_";
 
-let activeJobs = {}; // key: `slackclean_state_${teamId}_${channelId}` -> job state
+let activeJobs = {}; // key: `slack_state_${teamId}_${channelId}` -> job state
 let userTokens = {}; // key: `${teamId}` -> xoxc- token
 
 // Scans currently sweeping Slack, keyed by `${teamId}_${channelId}`. A scan is
@@ -152,7 +152,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
   // Set first-run flag for onboarding
   if (details.reason === "install") {
-    chrome.storage.local.set({ sc_onboarding_complete: false });
+    chrome.storage.local.set({ slack_onboarding_complete: false });
   }
 });
 
@@ -192,13 +192,13 @@ async function recoverAllJobs() {
 
     const storage = await chrome.storage.local.get(null);
     for (const [key, val] of Object.entries(storage)) {
-      if (key.startsWith("slackclean_state_") && val) {
+      if (key.startsWith("slack_state_") && val) {
         // Never clobber a live in-memory job — storage is only a backup, and a
         // running job's state is always fresher than what's on disk.
         if (activeJobs[key]) continue;
 
         const parts = key.split("_");
-        // key format: slackclean_state_${teamId}_${channelId}
+        // key format: slack_state_${teamId}_${channelId}
         if (parts.length >= 4) {
           const teamId = parts[2];
           const channelId = parts[3];
@@ -361,7 +361,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   else if (request.type === "GET_JOB_STATUS") {
-    const key = `slackclean_state_${request.teamId}_${request.channelId}`;
+    const key = `slack_state_${request.teamId}_${request.channelId}`;
     const respond = () => {
       const job = activeJobs[key];
       
@@ -449,7 +449,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
       }
 
-      const key = `slackclean_state_${request.teamId}_${request.channelId}`;
+      const key = `slack_state_${request.teamId}_${request.channelId}`;
       clearScheduled(key);
 
       // Resolve each item's concrete action once, here, via the shared decision
@@ -493,7 +493,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // pending rate-limit alarm or the watchdog would later RESUME a job the user
   // just paused/cancelled. Recover, then apply the transition. (async response.)
   else if (request.type === "PAUSE_DELETION") {
-    const key = `slackclean_state_${request.teamId}_${request.channelId}`;
+    const key = `slack_state_${request.teamId}_${request.channelId}`;
     (async () => {
       if (!activeJobs[key]) await recoverAllJobs();
       const job = activeJobs[key];
@@ -511,7 +511,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   else if (request.type === "RESUME_DELETION") {
-    const key = `slackclean_state_${request.teamId}_${request.channelId}`;
+    const key = `slack_state_${request.teamId}_${request.channelId}`;
     (async () => {
       if (!activeJobs[key]) await recoverAllJobs();
       const job = activeJobs[key];
@@ -530,7 +530,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   else if (request.type === "CANCEL_DELETION") {
-    const key = `slackclean_state_${request.teamId}_${request.channelId}`;
+    const key = `slack_state_${request.teamId}_${request.channelId}`;
     (async () => {
       if (!activeJobs[key]) await recoverAllJobs();
       const job = activeJobs[key];
@@ -1184,7 +1184,7 @@ async function clearJobState(key, job) {
       keysToRemove.push(queueKeyFor(job.teamId, job.channelId));
     } else {
       // Derive the companion queue key from the job key when no job is passed:
-      // slackclean_state_${teamId}_${channelId}
+      // slack_state_${teamId}_${channelId}
       const parts = key.split("_");
       if (parts.length >= 4) keysToRemove.push(queueKeyFor(parts[2], parts[3]));
     }

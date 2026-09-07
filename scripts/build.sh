@@ -30,6 +30,7 @@ ASSETS=(
   popup.html
   popup.js
   popup.css
+  popup
   privacy.html
   shared-filters.js
   _locales

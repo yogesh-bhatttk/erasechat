@@ -13,6 +13,19 @@
     "https://*.slack.com/*",
     "https://slack.com/*"
   ],
+  "optional_permissions": [
+    "cookies",
+    "webRequest",
+    "identity"
+  ],
+  "optional_host_permissions": [
+    "*://*.reddit.com/*",
+    "*://*.x.com/*",
+    "*://*.twitter.com/*",
+    "*://*.teams.microsoft.com/*",
+    "*://*.msg.teams.microsoft.com/*",
+    "https://*/*"
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'"
   },

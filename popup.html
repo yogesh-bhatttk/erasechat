@@ -48,84 +48,103 @@
         </svg>
         <div class="brand">
           <h1>Bulk Clean</h1>
-          <span class="badge" data-i18n="brandTag">for Slack</span>
+          <span class="badge" id="brand-badge" data-i18n="brandTag">Choose a platform</span>
         </div>
       </div>
     </header>
 
     <main class="main-content">
-      <!-- State 1: Active on Slack tab -->
-      <div id="slack-active-state" class="state-container hidden">
-        <div class="status-card">
-          <div class="pulse-indicator"></div>
-          <p data-i18n="popupStatusDetected">Slack Web Client Detected</p>
-        </div>
-
-        <div class="workspace-info">
-          <p class="label" data-i18n="popupConnectedTo">Connected to Workspace</p>
-          <h2 id="workspace-name" data-i18n="popupWorkspaceLoading">Loading Workspace...</h2>
-          <p class="desc" data-i18n="popupCleanDesc">Clean messages in channels, private groups, and direct messages.</p>
-        </div>
-
-        <button id="btn-launch" class="btn btn-primary" data-i18n-aria="popupOpenDashboardAria" aria-label="Open Clean Dashboard modal overlay">
-          <span data-i18n="popupOpenDashboard">Open Clean Dashboard</span>
-          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-            <polyline points="12 5 19 12 12 19"></polyline>
-          </svg>
-        </button>
+      <!-- Default entry point: pick which platform to clean. Slack auto-skips this
+           (see popup.js) when the active tab is already a Slack workspace, matching
+           the zero-extra-click experience this popup had before other platforms
+           were added. -->
+      <div id="platform-list-state" class="state-container">
+        <ul class="platform-list" id="platform-list" aria-label="Choose a platform to clean"></ul>
       </div>
 
-      <!-- State 2: Not on Slack tab -->
-      <div id="slack-inactive-state" class="state-container">
-        <div class="status-card inactive">
-          <span class="warning-dot"></span>
-          <p data-i18n="popupStatusOffline">Slack Client Offline</p>
-        </div>
-
-        <div class="redirect-info">
-          <h3 data-i18n="popupOpenToBegin">Open Slack to Begin</h3>
-          <p data-i18n="popupOpenToBeginBody">To use Bulk Clean for Slack, you must open Slack in your browser and log into your workspace.</p>
-        </div>
-
-        <button id="btn-goto-slack" class="btn btn-secondary" data-i18n-aria="popupGotoSlackAria" aria-label="Navigate to app.slack.com web client">
-          <span data-i18n="popupGotoSlack">Open app.slack.com</span>
-          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-            <polyline points="15 3 21 3 21 9"></polyline>
-            <line x1="10" y1="14" x2="21" y2="3"></line>
+      <!-- Slack view: unchanged from before the platform picker was added, just
+           wrapped so it can be shown/hidden as a group alongside the list above. -->
+      <div id="slack-view" class="hidden">
+        <button id="btn-back-to-platforms" class="btn-back" data-i18n-aria="popupBackToPlatformsAria" aria-label="Back to all platforms">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <polyline points="15 18 9 12 15 6"></polyline>
           </svg>
-        </button>
-      </div>
-
-      <!--
-        State 3: installed, but site access to slack.com is not actually granted.
-        Reachable whenever the browser withholds the declared host permission — Chrome's
-        per-extension "Site access: On click / On specific sites", or a Firefox MV3
-        install where host permissions still need opting into. In that state the content
-        script never auto-injects and the scripting fallback fails too, so without this
-        the popup showed "reload the Slack page", which never fixes it.
-      -->
-      <div id="permission-required-state" class="state-container hidden">
-        <div class="status-card inactive">
-          <span class="warning-dot"></span>
-          <p data-i18n="popupStatusNoAccess">Site Access Required</p>
-        </div>
-
-        <div class="redirect-info">
-          <h3 data-i18n="popupGrantTitle">Allow Access to Slack</h3>
-          <p data-i18n="popupGrantBody">Your browser is currently withholding this extension's access to slack.com, so it cannot read or clean anything. Grant access to continue — no other site is touched.</p>
-        </div>
-
-        <button id="btn-grant-access" class="btn btn-primary" data-i18n-aria="popupGrantAria" aria-label="Grant this extension access to slack.com">
-          <span data-i18n="popupGrantButton">Allow Access to slack.com</span>
-          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-            <polyline points="9 12 11 14 15 10"></polyline>
-          </svg>
+          <span data-i18n="popupBackToPlatforms">All platforms</span>
         </button>
 
-        <p id="grant-manual-hint" class="hidden desc" data-i18n="popupGrantManualHint">Your browser did not grant access from here. Open your browser's extensions page, find Bulk Clean for Slack, and set its site access to allow slack.com.</p>
+        <!-- State 1: Active on Slack tab -->
+        <div id="slack-active-state" class="state-container hidden">
+          <div class="status-card">
+            <div class="pulse-indicator"></div>
+            <p data-i18n="popupStatusDetected">Slack Web Client Detected</p>
+          </div>
+
+          <div class="workspace-info">
+            <p class="label" data-i18n="popupConnectedTo">Connected to Workspace</p>
+            <h2 id="workspace-name" data-i18n="popupWorkspaceLoading">Loading Workspace...</h2>
+            <p class="desc" data-i18n="popupCleanDesc">Clean messages in channels, private groups, and direct messages.</p>
+          </div>
+
+          <button id="btn-launch" class="btn btn-primary" data-i18n-aria="popupOpenDashboardAria" aria-label="Open Clean Dashboard modal overlay">
+            <span data-i18n="popupOpenDashboard">Open Clean Dashboard</span>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </button>
+        </div>
+
+        <!-- State 2: Not on Slack tab -->
+        <div id="slack-inactive-state" class="state-container">
+          <div class="status-card inactive">
+            <span class="warning-dot"></span>
+            <p data-i18n="popupStatusOffline">Slack Client Offline</p>
+          </div>
+
+          <div class="redirect-info">
+            <h3 data-i18n="popupOpenToBegin">Open Slack to Begin</h3>
+            <p data-i18n="popupOpenToBeginBody">To use Bulk Clean for Slack, you must open Slack in your browser and log into your workspace.</p>
+          </div>
+
+          <button id="btn-goto-slack" class="btn btn-secondary" data-i18n-aria="popupGotoSlackAria" aria-label="Navigate to app.slack.com web client">
+            <span data-i18n="popupGotoSlack">Open app.slack.com</span>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <line x1="10" y1="14" x2="21" y2="3"></line>
+            </svg>
+          </button>
+        </div>
+
+        <!--
+          State 3: installed, but site access to slack.com is not actually granted.
+          Reachable whenever the browser withholds the declared host permission — Chrome's
+          per-extension "Site access: On click / On specific sites", or a Firefox MV3
+          install where host permissions still need opting into. In that state the content
+          script never auto-injects and the scripting fallback fails too, so without this
+          the popup showed "reload the Slack page", which never fixes it.
+        -->
+        <div id="permission-required-state" class="state-container hidden">
+          <div class="status-card inactive">
+            <span class="warning-dot"></span>
+            <p data-i18n="popupStatusNoAccess">Site Access Required</p>
+          </div>
+
+          <div class="redirect-info">
+            <h3 data-i18n="popupGrantTitle">Allow Access to Slack</h3>
+            <p data-i18n="popupGrantBody">Your browser is currently withholding this extension's access to slack.com, so it cannot read or clean anything. Grant access to continue — no other site is touched.</p>
+          </div>
+
+          <button id="btn-grant-access" class="btn btn-primary" data-i18n-aria="popupGrantAria" aria-label="Grant this extension access to slack.com">
+            <span data-i18n="popupGrantButton">Allow Access to slack.com</span>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              <polyline points="9 12 11 14 15 10"></polyline>
+            </svg>
+          </button>
+
+          <p id="grant-manual-hint" class="hidden desc" data-i18n="popupGrantManualHint">Your browser did not grant access from here. Open your browser's extensions page, find Bulk Clean for Slack, and set its site access to allow slack.com.</p>
+        </div>
       </div>
     </main>
 
@@ -147,6 +166,7 @@
       <p><span data-i18n="footerLocalOnly">Local-Only Processing</span> • <a href="privacy.html" target="_blank" rel="noopener" style="color:#8B5CF6; text-decoration:none;" data-i18n="privacyPolicy">Privacy Policy</a></p>
     </footer>
   </div>
+  <script src="popup/platform-registry.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

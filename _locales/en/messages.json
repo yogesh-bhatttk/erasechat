@@ -12,8 +12,13 @@
     "description": "Tooltip for the extension action button"
   },
 
-  "brandTag": { "message": "for Slack", "description": "Brand tag shown next to the name (\"<name> for Slack\")" },
+  "brandTag": { "message": "Choose a platform", "description": "Default brand tag shown next to the name before a platform is picked" },
   "privacyPolicy": { "message": "Privacy Policy", "description": "Privacy policy link" },
+
+  "popupBackToPlatforms": { "message": "All platforms", "description": "Popup: back link from a platform's view to the platform picker" },
+  "popupBackToPlatformsAria": { "message": "Back to all platforms", "description": "Popup: accessible label for the back-to-platforms button" },
+  "popupComingSoon": { "message": "Coming soon", "description": "Popup: status text for a platform not yet available" },
+  "popupCurrentTab": { "message": "This tab", "description": "Popup: status text when the active tab matches a platform" },
 
   "popupStatusDetected": { "message": "Slack Web Client Detected", "description": "Popup: Slack tab detected" },
   "popupConnectedTo": { "message": "Connected to Workspace", "description": "Popup: workspace label" },

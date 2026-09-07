@@ -41,7 +41,10 @@ test('a normally-installed profile is not shown the site-access wall', async () 
     // way entirely — a false positive would block every user from the whole extension.
     await expect(page.locator('#permission-required-state')).toBeHidden();
 
-    // The popup's own tab is not Slack, so normal detection lands on the offline state.
+    // The popup's own tab is not Slack, so it lands on the platform picker; entering
+    // the Slack view (as a real user would by clicking its row) then lands on the
+    // offline state via normal detection.
+    await page.locator('.platform-row[data-platform="slack"]').click();
     await expect(page.locator('#slack-inactive-state')).toBeVisible();
 
     // And the detection helper agrees with the browser.
