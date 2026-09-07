@@ -111,7 +111,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   btnDashboard.addEventListener('click', () => {
-    chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
+    chrome.tabs.create({ url: chrome.runtime.getURL('platforms/telegram/dashboard-telegram.html') });
   });
 
   btnLogout.addEventListener('click', async () => {

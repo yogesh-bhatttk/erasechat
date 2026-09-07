@@ -10,7 +10,7 @@
 // browsers ship different manifests (see the packaging note in CHANGELOG.md).
 if (typeof importScripts === "function") {
   importScripts("shared-filters.js");
-  importScripts("background/teams-webrequest.js");
+  importScripts("platforms/teams/teams-webrequest.js");
 }
 
 const MAX_SCAN_PAGES = 20;

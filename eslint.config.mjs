@@ -66,8 +66,8 @@ export default [
     // full packaged copies under dist/. Linting bundled/packaged third-party
     // code is neither useful nor meaningful.
     ignores: [
-      "bluesky-popup.bundle.js", "bluesky-dashboard.bundle.js",
-      "telegram-popup.bundle.js", "telegram-dashboard.bundle.js",
+      "platforms/bluesky/bluesky-popup.bundle.js", "platforms/bluesky/bluesky-dashboard.bundle.js",
+      "platforms/telegram/telegram-popup.bundle.js", "platforms/telegram/telegram-dashboard.bundle.js",
       "dist/**"
     ]
   },
@@ -90,7 +90,7 @@ export default [
     // Per-platform background listeners, pulled into background.js via
     // importScripts on Chrome or manifest.firefox.json's background.scripts on
     // Firefox (see background.js's own comment on that split).
-    files: ["background/*.js"],
+    files: ["platforms/teams/teams-webrequest.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "script",
@@ -103,7 +103,7 @@ export default [
     // Unlike every other file here, these use real ES-module import statements --
     // esbuild resolves them at build time, so sourceType must be "module" for
     // ESLint to parse them at all.
-    files: ["bluesky-popup.src.js", "bluesky-dashboard.src.js"],
+    files: ["platforms/bluesky/bluesky-popup.src.js", "platforms/bluesky/bluesky-dashboard.src.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",
@@ -121,7 +121,7 @@ export default [
   {
     // Telegram's popup/dashboard source, pre-bundle (see
     // webpack.telegram.config.js). Same ES-module situation as Bluesky's above.
-    files: ["telegram-popup.src.js", "telegram-dashboard.src.js"],
+    files: ["platforms/telegram/telegram-popup.src.js", "platforms/telegram/telegram-dashboard.src.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",
@@ -139,7 +139,7 @@ export default [
     // Loaded as a plain classic <script> before either Telegram bundle -- see the
     // file's own header comment for why (MV3 extension-page CSP blocks inline
     // scripts, so this can't be inlined into the HTML instead).
-    files: ["process-shim.js"],
+    files: ["platforms/telegram/process-shim.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "script",
@@ -150,7 +150,7 @@ export default [
   {
     // Standalone per-platform dashboard pages (opened via chrome.tabs.create,
     // unlike Slack's shadow-DOM overlay in content.js) — full DOM available.
-    files: ["dashboard-*.js"],
+    files: ["platforms/*/dashboard-*.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "script",
@@ -196,7 +196,7 @@ export default [
   {
     // Per-platform "connect" helpers the popup calls after a permission grant --
     // full browser API surface (chrome, fetch), plus module.exports for Node tests.
-    files: ["popup/connect-*.js"],
+    files: ["platforms/*/connect-*.js"],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "script",
@@ -207,8 +207,8 @@ export default [
   {
     // Platform metadata table: same dual browser-global / CommonJS-module shape as
     // shared-filters.js, loaded before popup.js. Each entry can reference its own
-    // popup/connect-<platform>.js function by name -- declared here as each
-    // platform's migration step adds one.
+    // platforms/<platform>/connect-<platform>.js function by name -- declared here
+    // as each platform's migration step adds one.
     files: ["popup/platform-registry.js"],
     languageOptions: {
       ecmaVersion: 2022,

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bulk Clean for Bluesky</title>
-  <link rel="stylesheet" href="dashboard-bluesky.css">
+  <title>Bulk Clean for Reddit</title>
+  <link rel="stylesheet" href="dashboard-reddit.css">
   <style>
     body {
       background: #000;
@@ -24,7 +24,7 @@
       opacity: 1;
       visibility: visible;
       pointer-events: auto;
-      background: url('icons/icon128.png') no-repeat center center fixed;
+      background: url('/icons/icon128.png') no-repeat center center fixed; 
       background-size: cover;
     }
     .dashboard-overlay::before {
@@ -54,8 +54,8 @@
       <div class="dashboard-header">
         <div class="header-left">
           <div class="brand-title">
-            <img src="icons/icon48.png" width="24" height="24" alt="logo" style="border-radius: 6px;">
-            <h2>Bulk Clean for Bluesky</h2>
+            <img src="/icons/icon48.png" width="24" height="24" alt="logo" style="border-radius: 6px;">
+            <h2>Bulk Clean for Reddit</h2>
             <span id="connected-as" style="font-size: 12px; color: #8e8e93; margin-left: 8px;"></span>
           </div>
         </div>
@@ -65,25 +65,32 @@
           <div class="config-grid">
             <div class="panel-card filter-form">
               <h3 class="panel-title">1. Search Filters</h3>
-
+              
           <div class="form-group">
-            <label>Include Replies?</label>
-            <select id="include-replies">
-              <option value="false">No (Posts Only)</option>
-              <option value="true">Yes</option>
+            <label>Target</label>
+            <select id="target-type">
+              <option value="all">Everything (Comments & Posts)</option>
+              <option value="comments">Comments Only</option>
+              <option value="submitted">Posts Only</option>
             </select>
           </div>
-          <div class="form-group">
-            <label>Text Filter (Optional)</label>
-            <input type="text" id="text-filter" placeholder="e.g. test">
+          <div class="form-group toggle-group" style="margin-top: 10px;">
+            <div class="toggle-label">
+              <span class="toggle-title">Deep Scan</span>
+              <span class="toggle-subtitle">Unlimited pages (slower)</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="deep-scan">
+              <span class="slider"></span>
+            </label>
           </div>
-
+        
               <button id="scan-btn" class="dashboard-btn btn-scan" style="margin-top: 15px; justify-content: center;">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                 Scan History
               </button>
             </div>
-
+            
             <div class="results-panel">
               <div class="results-header">
                 <h4>Preview Results</h4>
@@ -99,7 +106,7 @@
             <div class="selected-channel-summary">
               <h4>Ready to delete?</h4>
               <p id="status-text">Items deleted will be unrecoverable.</p>
-              <p id="progress-text" style="color: #0085ff; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
+              <p id="progress-text" style="color: #FF4500; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
             </div>
             <div class="action-buttons">
               <button id="delete-btn" class="dashboard-btn btn-delete danger" disabled>
@@ -112,6 +119,6 @@
       </div>
     </div>
   </div>
-  <script src="bluesky-dashboard.bundle.js"></script>
+  <script src="dashboard-reddit.js"></script>
 </body>
 </html>

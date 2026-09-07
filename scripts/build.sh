@@ -31,7 +31,6 @@ node scripts/build-telegram.js
 # LICENSE ships for hygiene.
 ASSETS=(
   background.js
-  background
   content.js
   content.css
   popup.html
@@ -44,29 +43,7 @@ ASSETS=(
   icons
   fonts
   LICENSE
-  dashboard-reddit.html
-  dashboard-reddit.js
-  dashboard-reddit.css
-  dashboard-x.html
-  dashboard-x.js
-  dashboard-x.css
-  dashboard-mastodon.html
-  dashboard-mastodon.js
-  dashboard-mastodon.css
-  dashboard-teams.html
-  dashboard-teams.js
-  dashboard-teams.css
-  dashboard-bluesky.html
-  dashboard-bluesky.css
-  bluesky-popup.bundle.js
-  bluesky-popup.bundle.js.map
-  bluesky-dashboard.bundle.js
-  bluesky-dashboard.bundle.js.map
-  dashboard-telegram.html
-  dashboard-telegram.css
-  process-shim.js
-  telegram-popup.bundle.js
-  telegram-dashboard.bundle.js
+  platforms
 )
 
 copy_assets() {
@@ -78,6 +55,16 @@ copy_assets() {
     fi
     cp -r "$item" "$dest"/
   done
+
+  # platforms/ mixes each platform's shipped runtime files with bundler source
+  # (*.src.js, only esbuild/webpack ever load these), sourcemaps, and Bluesky's
+  # client-metadata.json (a doc-only reference copy of what's actually hosted --
+  # see that file's own comment). None of these three are loaded by the built
+  # extension, so prune them rather than list every platform's runtime files by
+  # hand the way ASSETS above does for everything outside platforms/.
+  find "$dest/platforms" -name '*.src.js' -delete
+  find "$dest/platforms" -name '*.bundle.js.map' -delete
+  rm -f "$dest/platforms/bluesky/client-metadata.json"
 }
 
 echo "Building Chrome/Chromium package (manifest.json)..."

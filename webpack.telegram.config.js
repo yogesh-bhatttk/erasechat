@@ -13,12 +13,12 @@ const NodePolyfillPlugin = require('node-polyfill-webpack-plugin');
 module.exports = {
   mode: 'production',
   entry: {
-    'telegram-popup.bundle': './telegram-popup.src.js',
-    'telegram-dashboard.bundle': './telegram-dashboard.src.js'
+    'telegram-popup.bundle': './platforms/telegram/telegram-popup.src.js',
+    'telegram-dashboard.bundle': './platforms/telegram/telegram-dashboard.src.js'
   },
   output: {
     filename: '[name].js',
-    path: path.resolve(__dirname)
+    path: path.resolve(__dirname, 'platforms/telegram')
   },
   resolve: {
     fallback: {

@@ -162,7 +162,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   dashboardBtn.addEventListener("click", () => {
-    chrome.tabs.create({ url: chrome.runtime.getURL("dashboard-bluesky.html") });
+    chrome.tabs.create({ url: chrome.runtime.getURL("platforms/bluesky/dashboard-bluesky.html") });
     window.close();
   });
 });

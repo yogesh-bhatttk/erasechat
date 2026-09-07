@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bulk Clean for Teams</title>
-  <link rel="stylesheet" href="dashboard-teams.css">
+  <title>Bulk Clean for Bluesky</title>
+  <link rel="stylesheet" href="dashboard-bluesky.css">
   <style>
     body {
       background: #000;
@@ -24,7 +24,7 @@
       opacity: 1;
       visibility: visible;
       pointer-events: auto;
-      background: url('icons/icon128.png') no-repeat center center fixed; 
+      background: url('/icons/icon128.png') no-repeat center center fixed;
       background-size: cover;
     }
     .dashboard-overlay::before {
@@ -54,8 +54,9 @@
       <div class="dashboard-header">
         <div class="header-left">
           <div class="brand-title">
-            <img src="icons/icon48.png" width="24" height="24" alt="logo" style="border-radius: 6px;">
-            <h2>Bulk Clean for Teams</h2>
+            <img src="/icons/icon48.png" width="24" height="24" alt="logo" style="border-radius: 6px;">
+            <h2>Bulk Clean for Bluesky</h2>
+            <span id="connected-as" style="font-size: 12px; color: #8e8e93; margin-left: 8px;"></span>
           </div>
         </div>
       </div>
@@ -64,28 +65,25 @@
           <div class="config-grid">
             <div class="panel-card filter-form">
               <h3 class="panel-title">1. Search Filters</h3>
-              
+
           <div class="form-group">
-            <label>Load Chats</label>
-            <button class="dashboard-btn btn-scan" id="load-chats-btn" style="width: 100%; justify-content: center;">Fetch My Chats</button>
-          </div>
-          <div class="form-group">
-            <label>Select Chat</label>
-            <select id="chat-select">
-              <option value="">-- Load chats first --</option>
+            <label>Include Replies?</label>
+            <select id="include-replies">
+              <option value="false">No (Posts Only)</option>
+              <option value="true">Yes</option>
             </select>
           </div>
           <div class="form-group">
             <label>Text Filter (Optional)</label>
-            <input type="text" id="text-filter" placeholder="e.g. password">
+            <input type="text" id="text-filter" placeholder="e.g. test">
           </div>
-        
+
               <button id="scan-btn" class="dashboard-btn btn-scan" style="margin-top: 15px; justify-content: center;">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                 Scan History
               </button>
             </div>
-            
+
             <div class="results-panel">
               <div class="results-header">
                 <h4>Preview Results</h4>
@@ -101,7 +99,7 @@
             <div class="selected-channel-summary">
               <h4>Ready to delete?</h4>
               <p id="status-text">Items deleted will be unrecoverable.</p>
-              <p id="progress-text" style="color: #6264A7; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
+              <p id="progress-text" style="color: #0085ff; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
             </div>
             <div class="action-buttons">
               <button id="delete-btn" class="dashboard-btn btn-delete danger" disabled>
@@ -114,6 +112,6 @@
       </div>
     </div>
   </div>
-  <script src="dashboard-teams.js"></script>
+  <script src="bluesky-dashboard.bundle.js"></script>
 </body>
 </html>

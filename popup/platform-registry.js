@@ -26,7 +26,7 @@ const PLATFORMS = [
     isTabMatch: (hostname) => hostname === "reddit.com" || hostname.endsWith(".reddit.com"),
     optionalHostPermissions: ["*://*.reddit.com/*"],
     optionalPermissions: ["cookies"],
-    dashboard: "dashboard-reddit.html",
+    dashboard: "platforms/reddit/dashboard-reddit.html",
     // Called after permission grant, before opening the dashboard tab. Defined in
     // popup/connect-reddit.js (loaded by popup.html alongside this registry).
     connect: () => connectReddit(),
@@ -40,7 +40,7 @@ const PLATFORMS = [
       hostname === "twitter.com" || hostname.endsWith(".twitter.com"),
     optionalHostPermissions: ["*://*.x.com/*", "*://*.twitter.com/*"],
     optionalPermissions: ["cookies"],
-    dashboard: "dashboard-x.html",
+    dashboard: "platforms/x/dashboard-x.html",
     connect: () => connectX(),
     ready: true
   },
@@ -54,7 +54,7 @@ const PLATFORMS = [
     // requires be declared in the manifest for that narrow request to be legal.
     isTabMatch: null,
     optionalHostPermissions: ["https://*/*"],
-    dashboard: "dashboard-mastodon.html",
+    dashboard: "platforms/mastodon/dashboard-mastodon.html",
     // Shown inline when the row is clicked, before any permission is requested --
     // there's nothing to request access to until the user names an instance.
     form: [
@@ -75,7 +75,7 @@ const PLATFORMS = [
     isTabMatch: (hostname) => hostname.endsWith(".teams.microsoft.com"),
     optionalHostPermissions: ["*://*.teams.microsoft.com/*", "*://*.msg.teams.microsoft.com/*"],
     optionalPermissions: ["webRequest"],
-    dashboard: "dashboard-teams.html",
+    dashboard: "platforms/teams/dashboard-teams.html",
     // No form, no cookie to check -- background/teams-webrequest.js passively
     // captures a token once permission is granted; this just waits for that.
     connect: () => connectTeams(),
@@ -93,7 +93,7 @@ const PLATFORMS = [
     isTabMatch: null,
     optionalHostPermissions: ["https://*/*"],
     optionalPermissions: ["identity"],
-    dashboard: "dashboard-bluesky.html",
+    dashboard: "platforms/bluesky/dashboard-bluesky.html",
     ready: true
   },
   {
@@ -106,7 +106,7 @@ const PLATFORMS = [
     // at all (see onPlatformRowClick's special case, same as Slack and Bluesky) --
     // telegram-popup.bundle.js manages its own multi-step login entirely.
     isTabMatch: null,
-    dashboard: "dashboard-telegram.html",
+    dashboard: "platforms/telegram/dashboard-telegram.html",
     ready: true
   }
 ];

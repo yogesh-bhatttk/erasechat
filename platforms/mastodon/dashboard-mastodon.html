@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Bulk Clean for Reddit</title>
-  <link rel="stylesheet" href="dashboard-reddit.css">
+  <title>Bulk Clean for Mastodon</title>
+  <link rel="stylesheet" href="dashboard-mastodon.css">
   <style>
     body {
       background: #000;
@@ -24,7 +24,7 @@
       opacity: 1;
       visibility: visible;
       pointer-events: auto;
-      background: url('icons/icon128.png') no-repeat center center fixed; 
+      background: url('/icons/icon128.png') no-repeat center center fixed; 
       background-size: cover;
     }
     .dashboard-overlay::before {
@@ -54,8 +54,8 @@
       <div class="dashboard-header">
         <div class="header-left">
           <div class="brand-title">
-            <img src="icons/icon48.png" width="24" height="24" alt="logo" style="border-radius: 6px;">
-            <h2>Bulk Clean for Reddit</h2>
+            <img src="/icons/icon48.png" width="24" height="24" alt="logo" style="border-radius: 6px;">
+            <h2>Bulk Clean for Mastodon</h2>
             <span id="connected-as" style="font-size: 12px; color: #8e8e93; margin-left: 8px;"></span>
           </div>
         </div>
@@ -67,22 +67,8 @@
               <h3 class="panel-title">1. Search Filters</h3>
               
           <div class="form-group">
-            <label>Target</label>
-            <select id="target-type">
-              <option value="all">Everything (Comments & Posts)</option>
-              <option value="comments">Comments Only</option>
-              <option value="submitted">Posts Only</option>
-            </select>
-          </div>
-          <div class="form-group toggle-group" style="margin-top: 10px;">
-            <div class="toggle-label">
-              <span class="toggle-title">Deep Scan</span>
-              <span class="toggle-subtitle">Unlimited pages (slower)</span>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="deep-scan">
-              <span class="slider"></span>
-            </label>
+            <label>Text Filter (Optional)</label>
+            <input type="text" id="text-filter" placeholder="e.g. testing">
           </div>
         
               <button id="scan-btn" class="dashboard-btn btn-scan" style="margin-top: 15px; justify-content: center;">
@@ -106,7 +92,7 @@
             <div class="selected-channel-summary">
               <h4>Ready to delete?</h4>
               <p id="status-text">Items deleted will be unrecoverable.</p>
-              <p id="progress-text" style="color: #FF4500; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
+              <p id="progress-text" style="color: #6364FF; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
             </div>
             <div class="action-buttons">
               <button id="delete-btn" class="dashboard-btn btn-delete danger" disabled>
@@ -119,6 +105,6 @@
       </div>
     </div>
   </div>
-  <script src="dashboard-reddit.js"></script>
+  <script src="dashboard-mastodon.js"></script>
 </body>
 </html>

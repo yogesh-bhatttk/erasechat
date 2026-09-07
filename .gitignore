@@ -26,11 +26,11 @@ dist/
 
 # Generated bundles (scripts/build-bluesky.js, scripts/build-telegram.js) --
 # rebuilt by `npm run build`, not committed source, same reasoning as dist/ above.
-bluesky-popup.bundle.js
-bluesky-popup.bundle.js.map
-bluesky-dashboard.bundle.js
-bluesky-dashboard.bundle.js.map
-telegram-popup.bundle.js
-telegram-popup.bundle.js.map
-telegram-dashboard.bundle.js
-telegram-dashboard.bundle.js.map
+platforms/bluesky/bluesky-popup.bundle.js
+platforms/bluesky/bluesky-popup.bundle.js.map
+platforms/bluesky/bluesky-dashboard.bundle.js
+platforms/bluesky/bluesky-dashboard.bundle.js.map
+platforms/telegram/telegram-popup.bundle.js
+platforms/telegram/telegram-popup.bundle.js.map
+platforms/telegram/telegram-dashboard.bundle.js
+platforms/telegram/telegram-dashboard.bundle.js.map

@@ -9,11 +9,11 @@ const esbuild = require("esbuild");
 async function build() {
   await esbuild.build({
     entryPoints: {
-      "bluesky-popup.bundle": "bluesky-popup.src.js",
-      "bluesky-dashboard.bundle": "bluesky-dashboard.src.js"
+      "bluesky-popup.bundle": "platforms/bluesky/bluesky-popup.src.js",
+      "bluesky-dashboard.bundle": "platforms/bluesky/bluesky-dashboard.src.js"
     },
     bundle: true,
-    outdir: ".",
+    outdir: "platforms/bluesky",
     minify: false,
     sourcemap: true,
     target: ["chrome109", "firefox109"],
