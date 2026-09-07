@@ -49,11 +49,24 @@ const PLATFORMS = [
     name: "Mastodon",
     accent: ["#6364FF", "#563ACC"],
     // Federated: no fixed hostname to auto-detect. The user's instance origin is
-    // resolved from what they type and requested narrowly at that point, not here.
+    // resolved from what they type (see resolveOrigin) and requested narrowly at
+    // that point -- optionalHostPermissions below is only the upper bound Chrome
+    // requires be declared in the manifest for that narrow request to be legal.
     isTabMatch: null,
     optionalHostPermissions: ["https://*/*"],
     dashboard: "dashboard-mastodon.html",
-    ready: false
+    // Shown inline when the row is clicked, before any permission is requested --
+    // there's nothing to request access to until the user names an instance.
+    form: [
+      { id: "instance-url", label: "Instance URL", type: "text", placeholder: "mastodon.social" },
+      { id: "access-token", label: "Access Token", type: "password", placeholder: "Personal access token" }
+    ],
+    resolveOrigin: (values) => {
+      const host = (values["instance-url"] || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
+      return host ? `https://${host}/*` : null;
+    },
+    connect: (values) => connectMastodon(values),
+    ready: true
   },
   {
     id: "teams",

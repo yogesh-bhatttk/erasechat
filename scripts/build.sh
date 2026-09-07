@@ -43,6 +43,9 @@ ASSETS=(
   dashboard-x.html
   dashboard-x.js
   dashboard-x.css
+  dashboard-mastodon.html
+  dashboard-mastodon.js
+  dashboard-mastodon.css
 )
 
 copy_assets() {

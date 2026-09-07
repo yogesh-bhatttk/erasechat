@@ -192,6 +192,49 @@ body {
   color: #ef4444;
 }
 
+/* Inline connect form (e.g. Mastodon's instance URL + token), shown right below
+   the platform row it belongs to. */
+.platform-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  margin: -2px 0 0;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--surface-subtle);
+  animation: fadeIn 0.2s ease;
+}
+
+.platform-form .label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+.platform-form .text-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.platform-form .text-input::placeholder { color: var(--text-muted); }
+
+.platform-form-connect {
+  margin-top: 8px;
+  border: none;
+  color: #fff;
+}
+
 /* Back-to-list control, shown above the Slack-specific states ------------ */
 .btn-back {
   display: flex;

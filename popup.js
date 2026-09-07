@@ -136,7 +136,69 @@ function onPlatformRowClick(platform) {
     enterSlackView();
     return;
   }
+  if (Array.isArray(platform.form)) {
+    togglePlatformForm(platform);
+    return;
+  }
   connectAndLaunchPlatform(platform);
+}
+
+// Platforms with no ambient session to check (federated/self-hosted services, or
+// anything OAuth-driven that needs a handle first) collect input inline, right
+// below their row, before anything is requested or connected -- there's nothing to
+// request permission for until the user names a target (see resolveOrigin).
+function togglePlatformForm(platform) {
+  const existing = document.querySelector(`.platform-form[data-platform="${platform.id}"]`);
+  if (existing) {
+    existing.remove();
+    return;
+  }
+  // Only one form open at a time.
+  document.querySelectorAll(".platform-form").forEach((el) => el.remove());
+  clearPlatformConnectError();
+
+  const row = document.querySelector(`.platform-row[data-platform="${platform.id}"]`);
+  if (!row) return;
+
+  const formEl = document.createElement("li");
+  formEl.className = "platform-form";
+  formEl.dataset.platform = platform.id;
+
+  for (const field of platform.form) {
+    const label = document.createElement("label");
+    label.className = "label";
+    label.textContent = field.label;
+    label.htmlFor = `platform-form-${platform.id}-${field.id}`;
+
+    const input = document.createElement("input");
+    input.type = field.type || "text";
+    input.id = `platform-form-${platform.id}-${field.id}`;
+    input.className = "text-input";
+    input.placeholder = field.placeholder || "";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.dataset.field = field.id;
+
+    formEl.append(label, input);
+  }
+
+  const connectBtn = document.createElement("button");
+  connectBtn.type = "button";
+  connectBtn.className = "btn btn-primary platform-form-connect";
+  connectBtn.textContent = t("popupConnect", "Connect");
+  connectBtn.style.background = `linear-gradient(135deg, ${platform.accent[0]}, ${platform.accent[1]})`;
+  connectBtn.addEventListener("click", () => {
+    const values = {};
+    formEl.querySelectorAll("input[data-field]").forEach((el) => {
+      values[el.dataset.field] = el.value;
+    });
+    connectAndLaunchPlatform(platform, values);
+  });
+  formEl.appendChild(connectBtn);
+
+  row.insertAdjacentElement("afterend", formEl);
+  const firstInput = formEl.querySelector("input");
+  if (firstInput) firstInput.focus();
 }
 
 function setPlatformRowStatus(platformId, text, { connecting = false } = {}) {
@@ -164,14 +226,30 @@ function clearPlatformConnectError() {
 // Request a platform's optional permission (from this click's user gesture, as
 // required), run its own connect step if it has one, then open its dashboard tab.
 // Every failure path resets the row rather than leaving it stuck on "Connecting...".
-function connectAndLaunchPlatform(platform) {
+//
+// formValues is only passed for platforms with a `form` (see togglePlatformForm) --
+// it's undefined for the cookie-session platforms that connect with no input.
+function connectAndLaunchPlatform(platform, formValues) {
   clearPlatformConnectError();
-  setPlatformRowStatus(platform.id, t("popupConnecting", "Connecting..."), { connecting: true });
 
-  const request = {
-    origins: platform.optionalHostPermissions || [],
-    permissions: platform.optionalPermissions || []
-  };
+  // A dynamic-origin platform (e.g. Mastodon's user-typed instance) resolves the
+  // one specific origin to request from the form values instead of using a fixed
+  // list -- optionalHostPermissions in that case is only the broad pattern Chrome
+  // requires be declared for the narrow, resolved request to be legal at runtime.
+  let origins = platform.optionalHostPermissions || [];
+  if (typeof platform.resolveOrigin === "function") {
+    const resolved = platform.resolveOrigin(formValues || {});
+    if (!resolved) {
+      showPlatformConnectError(t("popupConnectFailed", "Could not connect. Please try again."));
+      return;
+    }
+    origins = [resolved];
+  }
+
+  setPlatformRowStatus(platform.id, t("popupConnecting", "Connecting..."), { connecting: true });
+  document.querySelectorAll(".platform-form").forEach((el) => el.remove());
+
+  const request = { origins, permissions: platform.optionalPermissions || [] };
 
   chrome.permissions.request(request, (granted) => {
     void chrome.runtime.lastError;
@@ -192,7 +270,7 @@ function connectAndLaunchPlatform(platform) {
     };
 
     if (typeof platform.connect === "function") {
-      Promise.resolve(platform.connect()).then(afterConnect).catch((err) => {
+      Promise.resolve(platform.connect(formValues)).then(afterConnect).catch((err) => {
         setPlatformRowStatus(platform.id, "");
         showPlatformConnectError(String(err && err.message ? err.message : err));
       });

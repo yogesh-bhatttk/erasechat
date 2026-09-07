@@ -162,3 +162,87 @@ test('a granted permission and a real ct0 cookie opens the X dashboard tab', asy
     await context.close();
   }
 });
+
+test('clicking Mastodon shows an inline form instead of connecting immediately', async () => {
+  const { context, extensionId } = await launch();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    // No permission request should fire just from opening the form -- there's
+    // nothing to request access to until an instance is named.
+    let requested = false;
+    await page.evaluate(() => { chrome.permissions.request = () => { window.__requested = true; }; });
+
+    await page.locator('.platform-row[data-platform="mastodon"]').click();
+
+    const form = page.locator('.platform-form[data-platform="mastodon"]');
+    await expect(form).toBeVisible();
+    await expect(form.locator('#platform-form-mastodon-instance-url')).toBeVisible();
+    await expect(form.locator('#platform-form-mastodon-access-token')).toBeVisible();
+
+    requested = await page.evaluate(() => !!window.__requested);
+    expect(requested).toBe(false);
+
+    // Clicking the row again collapses the form without connecting.
+    await page.locator('.platform-row[data-platform="mastodon"]').click();
+    await expect(form).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
+test('submitting the Mastodon form requests permission for the exact typed instance, not a wildcard', async () => {
+  const { context, extensionId } = await launch();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    const requestedOrigins = await page.evaluate(() => {
+      return new Promise((resolve) => {
+        chrome.permissions.request = (req) => { resolve(req.origins); return Promise.resolve(false); };
+        document.querySelector('.platform-row[data-platform="mastodon"]').click();
+        document.getElementById('platform-form-mastodon-instance-url').value = 'https://example.social/';
+        document.getElementById('platform-form-mastodon-access-token').value = 'tok123';
+        document.querySelector('.platform-form-connect').click();
+      });
+    });
+
+    expect(requestedOrigins).toEqual(['https://example.social/*']);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a granted permission and valid credentials opens the Mastodon dashboard tab', async () => {
+  const { context, extensionId } = await launch();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    const created = await page.evaluate(() => {
+      return new Promise((resolve) => {
+        chrome.permissions.request = (_req, cb) => cb(true);
+        // verify_credentials response shape from a real Mastodon instance.
+        window.fetch = async () => ({ ok: true, json: async () => ({ id: '999', username: 'mstdnuser' }) });
+        chrome.tabs.create = (opts) => { resolve(opts); return Promise.resolve({}); };
+        window.close = () => {};
+
+        document.querySelector('.platform-row[data-platform="mastodon"]').click();
+        document.getElementById('platform-form-mastodon-instance-url').value = 'example.social';
+        document.getElementById('platform-form-mastodon-access-token').value = 'tok123';
+        document.querySelector('.platform-form-connect').click();
+      });
+    });
+
+    expect(created.url).toMatch(/dashboard-mastodon\.html$/);
+
+    const stored = await page.evaluate(() => chrome.storage.local.get(['mstdn_host', 'mstdn_token', 'mstdn_user_id', 'mstdn_username']));
+    expect(stored.mstdn_host).toBe('example.social');
+    expect(stored.mstdn_token).toBe('tok123');
+    expect(stored.mstdn_user_id).toBe('999');
+    expect(stored.mstdn_username).toBe('mstdnuser');
+  } finally {
+    await context.close();
+  }
+});
