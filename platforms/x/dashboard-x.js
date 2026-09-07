@@ -17,7 +17,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   const resultsCount = document.getElementById('results-count');
   const statusText = document.getElementById('status-text');
   const progressText = document.getElementById('progress-text');
-  
+
+  // See the matching comment in platforms/reddit/dashboard-reddit.js: this marker
+  // only informs the next session that a delete was interrupted -- it does not
+  // resume the delete itself, since a fresh scan is required to see current state.
+  const DELETE_PROGRESS_KEY = 'x_delete_progress';
+  const leftover = (await chrome.storage.local.get([DELETE_PROGRESS_KEY]))[DELETE_PROGRESS_KEY];
+  if (leftover) {
+    statusText.textContent = `A previous deletion was interrupted (${leftover.done} of ${leftover.total} processed). Scan again to see current state.`;
+    await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
+  }
+
   let currentResults = [];
   let userRestId = null;
 
@@ -79,7 +89,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function extractQueryIds() {
     try {
       statusText.textContent = "Fetching latest API signatures...";
-      const htmlRes = await fetchWithRetry("https://twitter.com/", { credentials: 'include' });
+      const htmlRes = await fetchWithRetry("https://x.com/", { credentials: 'include' });
       const html = await htmlRes.text();
       // Look for the main JS bundle which usually contains the query IDs
       const scriptMatches = [...html.matchAll(/<script[^>]+src="([^"]+main\.[a-z0-9]+\.js)"/g)];
@@ -101,7 +111,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Uses the UserByScreenName GraphQL query
     const variables = encodeURIComponent(JSON.stringify({ screen_name: screenName, withSafetyModeUserFields: true }));
     const features = encodeURIComponent(JSON.stringify({ hidden_profile_likes_enabled: false, responsive_web_graphql_exclude_directive_enabled: true, verified_phone_label_enabled: false, subscriptions_verification_info_is_identity_verified_enabled: true, subscriptions_verification_info_verified_since_enabled: true, highlights_tweets_tab_ui_enabled: true, creator_subscriptions_tweet_preview_api_enabled: true, responsive_web_graphql_skip_user_profile_image_extensions_enabled: false, responsive_web_graphql_timeline_navigation_enabled: true }));
-    const url = `https://twitter.com/i/api/graphql/${queryIds.UserByScreenName}/UserByScreenName?variables=${variables}&features=${features}`;
+    const url = `https://x.com/i/api/graphql/${queryIds.UserByScreenName}/UserByScreenName?variables=${variables}&features=${features}`;
     
     const res = await apiFetch(url);
     if (res && res.data && res.data.user && res.data.user.result) {
@@ -169,7 +179,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           responsive_web_enhance_cards_enabled: false
         };
 
-        const url = `https://twitter.com/i/api/graphql/${queryIds.UserTweets}/UserTweets?variables=${encodeURIComponent(JSON.stringify(variables))}&features=${encodeURIComponent(JSON.stringify(features))}`;
+        const url = `https://x.com/i/api/graphql/${queryIds.UserTweets}/UserTweets?variables=${encodeURIComponent(JSON.stringify(variables))}&features=${encodeURIComponent(JSON.stringify(features))}`;
         
         const res = await apiFetch(url);
         const instructions = res?.data?.user?.result?.timeline_v2?.timeline?.instructions || [];
@@ -198,18 +208,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         pageCount++;
         await delay(1000); // 1s delay between pagination requests
       }
-      
-      resultsCount.textContent = `${currentResults.length} items found`;
-      
+
+      // The loop can also exit because pageCount hit MAX_PAGES while X still had
+      // more pages (cursor truthy) -- distinguish that from a natural end (no
+      // entries, or no cursor) so "N items found" doesn't imply an exhaustive scan.
+      const truncated = pageCount >= MAX_PAGES && !!cursor;
+      resultsCount.textContent = truncated
+        ? `${currentResults.length} items found (stopped after ${MAX_PAGES} pages -- more may exist)`
+        : `${currentResults.length} items found`;
+
       if (currentResults.length > 0) {
         itemList.innerHTML = '';
         currentResults.forEach(tweet => {
           const div = document.createElement('div');
           div.className = 'post-item';
-          div.innerHTML = `
-            <div class="post-time">${new Date(tweet.time).toLocaleString()}</div>
-            <div>${tweet.text}</div>
-          `;
+
+          const timeDiv = document.createElement('div');
+          timeDiv.className = 'post-time';
+          timeDiv.textContent = new Date(tweet.time).toLocaleString();
+
+          const textDiv = document.createElement('div');
+          textDiv.textContent = tweet.text;
+
+          div.appendChild(timeDiv);
+          div.appendChild(textDiv);
           itemList.appendChild(div);
         });
         deleteBtn.disabled = false;
@@ -235,8 +257,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   deleteBtn.addEventListener('click', async () => {
-    const confirmation = prompt(`Type DELETE to permanently delete ${currentResults.length} tweets.`);
-    if (confirmation !== "DELETE") {
+    // Above LARGE_DELETE_THRESHOLD, a fixed literal like "DELETE" is the same
+    // low-friction confirm regardless of whether 2 or thousands of tweets are
+    // about to be permanently destroyed. Require typing the exact count
+    // instead, so the number is something the user has to actually notice and
+    // act on, not just habitually retype.
+    const count = currentResults.length;
+    const LARGE_DELETE_THRESHOLD = 100;
+    const isLarge = count > LARGE_DELETE_THRESHOLD;
+    const expected = isLarge ? String(count) : "DELETE";
+    const promptText = isLarge
+      ? `You are about to permanently delete ${count} tweets -- more than ${LARGE_DELETE_THRESHOLD}. Type the exact number ${count} to confirm.`
+      : `Type DELETE to permanently delete ${count} tweets.`;
+    const confirmation = prompt(promptText);
+    if (confirmation !== expected) {
       alert("Deletion cancelled.");
       return;
     }
@@ -252,56 +286,71 @@ document.addEventListener('DOMContentLoaded', async () => {
     const failures = []; // { id, message }
     let staleQueryIdSuspected = false;
 
-    for (const tweet of currentResults) {
-      try {
-        // GraphQL DeleteTweet mutation
-        const variables = { tweet_id: tweet.id, dark_request: false };
-        const queryId = queryIds.DeleteTweet;
-        const url = `https://twitter.com/i/api/graphql/${queryId}/DeleteTweet`;
+    try {
+      // The inner per-item try/catch below isolates one item's failure from the
+      // rest of the batch. This outer try/finally is separate: it guards the
+      // chrome.storage.local calls (progress marker) and everything else in this
+      // handler against an unexpected exception so the loop can never die
+      // silently, leaving scanBtn disabled and the progress marker stuck.
+      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
+      for (const tweet of currentResults) {
+        try {
+          // GraphQL DeleteTweet mutation
+          const variables = { tweet_id: tweet.id, dark_request: false };
+          const queryId = queryIds.DeleteTweet;
+          const url = `https://x.com/i/api/graphql/${queryId}/DeleteTweet`;
 
-        await apiFetch(url, 'POST', {
-          variables,
-          queryId
-        });
+          await apiFetch(url, 'POST', {
+            variables,
+            queryId
+          });
 
-        deletedCount++;
-      } catch (err) {
-        // Isolate this item's failure so a single bad tweet (400/403/network
-        // error) doesn't abort the rest of the batch.
-        console.error(`Failed to delete tweet ${tweet.id}:`, err);
-        failures.push({ id: tweet.id, message: err.message });
-        if (err.staleQueryId) staleQueryIdSuspected = true;
+          deletedCount++;
+        } catch (err) {
+          // Isolate this item's failure so a single bad tweet (400/403/network
+          // error) doesn't abort the rest of the batch.
+          console.error(`Failed to delete tweet ${tweet.id}:`, err);
+          failures.push({ id: tweet.id, message: err.message });
+          if (err.staleQueryId) staleQueryIdSuspected = true;
+        }
+
+        progressText.textContent = failures.length > 0
+          ? `Processed ${deletedCount + failures.length} of ${totalCount} (${deletedCount} deleted, ${failures.length} failed)`
+          : `Deleted ${deletedCount} of ${totalCount}`;
+        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: deletedCount + failures.length } });
+
+        // strict 2.5 second delay to avoid rate limits and account suspension flags
+        await delay(2500);
       }
+      await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
 
-      progressText.textContent = failures.length > 0
-        ? `Processed ${deletedCount + failures.length} of ${totalCount} (${deletedCount} deleted, ${failures.length} failed)`
-        : `Deleted ${deletedCount} of ${totalCount}`;
+      currentResults = [];
+      resultsCount.textContent = "0 items found";
 
-      // strict 2.5 second delay to avoid rate limits and account suspension flags
-      await delay(2500);
-    }
+      if (failures.length === 0) {
+        statusText.textContent = "Deletion Complete!";
+        statusText.style.color = "#10b981";
+        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
+      } else {
+        statusText.textContent = `Deletion finished: ${deletedCount} deleted, ${failures.length} failed.`;
+        statusText.style.color = "#ef4444";
+        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished (see error summary).</div>';
 
-    currentResults = [];
-    resultsCount.textContent = "0 items found";
-
-    if (failures.length === 0) {
-      statusText.textContent = "Deletion Complete!";
-      statusText.style.color = "#10b981";
-      itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
-    } else {
-      statusText.textContent = `Deletion finished: ${deletedCount} deleted, ${failures.length} failed.`;
+        const shown = failures.slice(0, 10).map(f => `#${f.id}: ${f.message}`).join('\n');
+        const more = failures.length > 10 ? `\n...and ${failures.length - 10} more (see console for full list)` : '';
+        const hint = staleQueryIdSuspected
+          ? "\n\nSome failures look like X.com rejected this extension's DeleteTweet query ID. " +
+            "X frequently rotates these; the extension may need an update with refreshed query IDs."
+          : '';
+        alert(`Delete failed for ${failures.length} of ${totalCount} tweet(s):\n\n${shown}${more}${hint}`);
+      }
+    } catch (err) {
+      console.error("X delete loop stopped unexpectedly:", err);
+      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} tweets were deleted before this happened.`);
+      statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
-      itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished (see error summary).</div>';
-
-      const shown = failures.slice(0, 10).map(f => `#${f.id}: ${f.message}`).join('\n');
-      const more = failures.length > 10 ? `\n...and ${failures.length - 10} more (see console for full list)` : '';
-      const hint = staleQueryIdSuspected
-        ? "\n\nSome failures look like X.com rejected this extension's DeleteTweet query ID. " +
-          "X frequently rotates these; the extension may need an update with refreshed query IDs."
-        : '';
-      alert(`Delete failed for ${failures.length} of ${totalCount} tweet(s):\n\n${shown}${more}${hint}`);
+    } finally {
+      scanBtn.disabled = false;
     }
-
-    scanBtn.disabled = false;
   });
 });

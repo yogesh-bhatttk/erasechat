@@ -8,6 +8,33 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const { teams_base_url: baseUrl } = data;
 
+  // The captured Bearer token is a JWT whose `oid` (or `sub`) claim is the signed-in
+  // user's own AAD object id. Teams' internal chatsvc API embeds that same GUID inside
+  // a message's `from` MRI string (e.g. "8:orgid:<oid>") regardless of exact MRI shape,
+  // so matching on the GUID substring is more robust than assuming a fixed prefix.
+  // This is the only reliable way to tell "my message" from "someone else's message" --
+  // `imdisplayname` is present on every message regardless of sender and must never be
+  // used as an ownership signal.
+  function base64UrlDecode(str) {
+    str = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (str.length % 4) str += '=';
+    return atob(str);
+  }
+
+  function getOwnUserId(bearerToken) {
+    try {
+      const jwt = bearerToken.replace(/^Bearer\s+/i, '');
+      const payload = jwt.split('.')[1];
+      if (!payload) return null;
+      const claims = JSON.parse(base64UrlDecode(payload));
+      return claims.oid || claims.sub || null;
+    } catch {
+      return null;
+    }
+  }
+
+  const ownUserId = getOwnUserId(data.teams_token);
+
   const loadChatsBtn = document.getElementById('load-chats-btn');
   const chatSelect = document.getElementById('chat-select');
   const scanBtn = document.getElementById('scan-btn');
@@ -17,7 +44,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   const resultsCount = document.getElementById('results-count');
   const statusText = document.getElementById('status-text');
   const progressText = document.getElementById('progress-text');
-  
+
+  // See the matching comment in platforms/reddit/dashboard-reddit.js: this marker
+  // only informs the next session that a delete was interrupted -- it does not
+  // resume the delete itself, since a fresh scan is required to see current state.
+  const DELETE_PROGRESS_KEY = 'teams_delete_progress';
+  const leftover = (await chrome.storage.local.get([DELETE_PROGRESS_KEY]))[DELETE_PROGRESS_KEY];
+  if (leftover) {
+    statusText.textContent = `A previous deletion was interrupted (${leftover.done} of ${leftover.total} processed). Scan again to see current state.`;
+    await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
+  }
+
   let currentResults = [];
 
   const delay = ms => new Promise(res => setTimeout(res, ms));
@@ -118,7 +155,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const filterText = filterInput.value.trim().toLowerCase();
     
     if (!chatId) return alert("Please select a chat first.");
-    
+    if (!ownUserId) {
+      return alert("Could not determine your own Teams identity from the captured token, so scanning was refused for safety (this would otherwise risk surfacing other participants' messages). Try reconnecting to Teams.");
+    }
+
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
     statusText.textContent = "Scanning...";
@@ -135,7 +175,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const messages = res.messages || [];
         
         for (const msg of messages) {
-          if (msg.from && (msg.from.includes('ME') || msg.imdisplayname) && msg.content && !msg.deleted) {
+          if (msg.from && msg.from.includes(ownUserId) && msg.content && !msg.deleted) {
             const text = msg.content.replace(/<[^>]+>/g, '') || '';
             
             if (!filterText || text.toLowerCase().includes(filterText)) {
@@ -159,10 +199,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         currentResults.forEach(msg => {
           const div = document.createElement('div');
           div.className = 'post-item';
-          div.innerHTML = `
-            <div class="post-time">${new Date(msg.time).toLocaleString()}</div>
-            <div>${msg.text}</div>
-          `;
+
+          const timeDiv = document.createElement('div');
+          timeDiv.className = 'post-time';
+          timeDiv.textContent = new Date(msg.time).toLocaleString();
+
+          const textDiv = document.createElement('div');
+          textDiv.textContent = msg.text;
+
+          div.appendChild(timeDiv);
+          div.appendChild(textDiv);
           itemList.appendChild(div);
         });
         deleteBtn.disabled = false;
@@ -181,8 +227,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   deleteBtn.addEventListener('click', async () => {
     const chatId = chatSelect.value;
-    const confirmation = prompt(`Type DELETE to permanently delete ${currentResults.length} messages.`);
-    if (confirmation !== "DELETE") {
+    // Above LARGE_DELETE_THRESHOLD, a fixed literal like "DELETE" is the same
+    // low-friction confirm regardless of whether 2 or hundreds of messages are
+    // about to be permanently destroyed. Require typing the exact count
+    // instead, so the number is something the user has to actually notice and
+    // act on, not just habitually retype.
+    const count = currentResults.length;
+    const LARGE_DELETE_THRESHOLD = 100;
+    const isLarge = count > LARGE_DELETE_THRESHOLD;
+    const expected = isLarge ? String(count) : "DELETE";
+    const promptText = isLarge
+      ? `You are about to permanently delete ${count} messages -- more than ${LARGE_DELETE_THRESHOLD}. Type the exact number ${count} to confirm.`
+      : `Type DELETE to permanently delete ${count} messages.`;
+    const confirmation = prompt(promptText);
+    if (confirmation !== expected) {
       alert("Deletion cancelled.");
       return;
     }
@@ -193,27 +251,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusText.style.color = "#ef4444";
     progressText.textContent = `Starting deletion...`;
     
+    let deletedCount = 0;
+    const failures = [];
     try {
-      let deletedCount = 0;
+      // The inner per-item try/catch below isolates one item's failure from the
+      // rest of the batch. This outer try/finally is separate: it guards the
+      // chrome.storage.local calls (progress marker) and everything else in this
+      // handler against an unexpected exception so the loop can never die
+      // silently, leaving scanBtn disabled and the progress marker stuck.
+      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: 0 } });
       for (const msg of currentResults) {
-        // DELETE /v1/users/ME/conversations/{chatId}/messages/{messageId}
-        const endpoint = `/v1/users/ME/conversations/${encodeURIComponent(chatId)}/messages/${msg.id}`;
-        await apiFetch(endpoint, 'DELETE');
-        
-        deletedCount++;
+        try {
+          // DELETE /v1/users/ME/conversations/{chatId}/messages/{messageId}
+          const endpoint = `/v1/users/ME/conversations/${encodeURIComponent(chatId)}/messages/${msg.id}`;
+          await apiFetch(endpoint, 'DELETE');
+          deletedCount++;
+        } catch (err) {
+          failures.push({ id: msg.id, message: err.message });
+        }
         progressText.textContent = `Deleted ${deletedCount} of ${currentResults.length}`;
-        
-        // Strict 2.5 second delay to avoid enterprise security alarms / rate limits
-        await delay(2500); 
-      }
+        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: deletedCount + failures.length } });
 
-      statusText.textContent = "Deletion Complete!";
-      statusText.style.color = "#10b981";
+        // Strict 2.5 second delay to avoid enterprise security alarms / rate limits
+        await delay(2500);
+      }
+      await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
+
+      if (failures.length === 0) {
+        statusText.textContent = "Deletion Complete!";
+        statusText.style.color = "#10b981";
+      } else {
+        statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${currentResults.length}.`;
+        statusText.style.color = "#ef4444";
+        console.warn("Teams delete failures:", failures);
+      }
       currentResults = [];
       itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
       resultsCount.textContent = "0 items found";
     } catch (err) {
-      alert("Deletion failed: " + err.message);
+      console.error("Teams delete loop stopped unexpectedly:", err);
+      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${currentResults.length} messages were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {

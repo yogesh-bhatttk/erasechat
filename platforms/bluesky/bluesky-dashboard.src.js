@@ -88,6 +88,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
+  // See the matching comment in platforms/reddit/dashboard-reddit.js: this marker
+  // only informs the next session that a delete was interrupted -- it does not
+  // resume the delete itself, since a fresh scan is required to see current state.
+  const DELETE_PROGRESS_KEY = 'bluesky_delete_progress';
+  const leftover = (await chrome.storage.local.get([DELETE_PROGRESS_KEY]))[DELETE_PROGRESS_KEY];
+  if (leftover) {
+    statusText.textContent = `A previous deletion was interrupted (${leftover.done} of ${leftover.total} processed). Scan again to see current state.`;
+    await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
+  }
+
   scanBtn.addEventListener('click', async () => {
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
@@ -153,17 +163,35 @@ document.addEventListener('DOMContentLoaded', async () => {
         pageCount++;
       }
 
-      resultsCount.textContent = `${currentResults.length} items found`;
-      
+      // hasMore stays true only when the loop stopped because it hit maxPages,
+      // not on a natural end (no cursor) -- so "N items found" doesn't imply an
+      // exhaustive scan when older posts may still exist.
+      const truncated = pageCount >= maxPages && hasMore;
+      resultsCount.textContent = truncated
+        ? `${currentResults.length} items found (stopped after ${maxPages} pages -- older posts may exist)`
+        : `${currentResults.length} items found`;
+
       if (currentResults.length > 0) {
         itemList.innerHTML = '';
         currentResults.forEach(item => {
           const div = document.createElement('div');
           div.className = 'post-item';
-          div.innerHTML = `
-            <div class="post-time">${new Date(item.time).toLocaleString()}</div>
-            <div>${item.text || '<i>[No text/Media only]</i>'}</div>
-          `;
+
+          const timeDiv = document.createElement('div');
+          timeDiv.className = 'post-time';
+          timeDiv.textContent = new Date(item.time).toLocaleString();
+
+          const textDiv = document.createElement('div');
+          if (item.text) {
+            textDiv.textContent = item.text;
+          } else {
+            const i = document.createElement('i');
+            i.textContent = '[No text/Media only]';
+            textDiv.appendChild(i);
+          }
+
+          div.appendChild(timeDiv);
+          div.appendChild(textDiv);
           itemList.appendChild(div);
         });
         deleteBtn.disabled = false;
@@ -181,8 +209,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   deleteBtn.addEventListener('click', async () => {
-    const confirmation = prompt(`Type DELETE to permanently delete ${currentResults.length} posts.`);
-    if (confirmation !== "DELETE") {
+    // Above LARGE_DELETE_THRESHOLD, a fixed literal like "DELETE" is the same
+    // low-friction confirm regardless of whether 2 or thousands of posts are
+    // about to be permanently destroyed. Require typing the exact count
+    // instead, so the number is something the user has to actually notice and
+    // act on, not just habitually retype.
+    const count = currentResults.length;
+    const LARGE_DELETE_THRESHOLD = 100;
+    const isLarge = count > LARGE_DELETE_THRESHOLD;
+    const expected = isLarge ? String(count) : "DELETE";
+    const promptText = isLarge
+      ? `You are about to permanently delete ${count} posts -- more than ${LARGE_DELETE_THRESHOLD}. Type the exact number ${count} to confirm.`
+      : `Type DELETE to permanently delete ${count} posts.`;
+    const confirmation = prompt(promptText);
+    if (confirmation !== expected) {
       alert("Deletion cancelled.");
       return;
     }
@@ -193,7 +233,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusText.style.color = "#ef4444";
     progressText.textContent = `Starting deletion of ${currentResults.length} items...`;
 
+    let deletedCount = 0;
+    const failedChunks = [];
     try {
+      // The inner per-chunk try/catch below isolates one chunk's failure from
+      // the rest of the batch. This outer try/finally is separate: it guards
+      // the chrome.storage.local calls (progress marker) and everything else in
+      // this handler against an unexpected exception so the loop can never die
+      // silently, leaving scanBtn disabled and the progress marker stuck.
+      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: 0 } });
       for (let i = 0; i < currentResults.length; i += BATCH_SIZE) {
         const chunk = currentResults.slice(i, i + BATCH_SIZE);
         const writes = chunk.map(item => {
@@ -205,22 +253,51 @@ document.addEventListener('DOMContentLoaded', async () => {
           };
         });
 
-        await executeWithRetry(() => agent.com.atproto.repo.applyWrites({
-          repo: agent.accountDid,
-          writes: writes
-        }));
+        try {
+          // applyWrites is transactional per call -- a failure here means NONE of
+          // this chunk's posts were deleted, not a partial chunk. Isolate it so one
+          // failed chunk (transient network/server error) doesn't abort every
+          // later chunk in the batch.
+          await executeWithRetry(() => agent.com.atproto.repo.applyWrites({
+            repo: agent.accountDid,
+            writes: writes
+          }));
+          deletedCount += chunk.length;
+        } catch (err) {
+          failedChunks.push({ count: chunk.length, message: err.message });
+        }
 
-        const deletedCount = Math.min(i + BATCH_SIZE, currentResults.length);
         progressText.textContent = `Deleted ${deletedCount} of ${currentResults.length}`;
+        const processedSoFar = deletedCount + failedChunks.reduce((sum, c) => sum + c.count, 0);
+        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: processedSoFar } });
       }
+      await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
 
-      statusText.textContent = "Deletion Complete!";
-      statusText.style.color = "#10b981";
       currentResults = [];
-      itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
       resultsCount.textContent = "0 items found";
+
+      if (failedChunks.length === 0) {
+        statusText.textContent = "Deletion Complete!";
+        statusText.style.color = "#10b981";
+        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
+      } else {
+        const failedCount = failedChunks.reduce((sum, c) => sum + c.count, 0);
+        statusText.textContent = `Deletion finished: ${deletedCount} deleted, ${failedCount} failed.`;
+        statusText.style.color = "#ef4444";
+        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished (see error summary).</div>';
+        console.warn("Bluesky delete chunk failures:", failedChunks);
+        alert(
+          `Delete failed for ${failedCount} of ${deletedCount + failedCount} post(s). ` +
+          `The Delete button will stay disabled -- please Scan again before retrying, ` +
+          `since some of the originally scanned posts may already be gone.`
+        );
+      }
+      // deleteBtn deliberately stays disabled: a rescan is required before another
+      // delete, since results that already succeeded (or partially changed) should
+      // not be re-submitted from stale in-memory state.
     } catch (err) {
-      alert("Deletion failed: " + err.message);
+      console.error("Bluesky delete loop stopped unexpectedly:", err);
+      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${currentResults.length} posts were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {

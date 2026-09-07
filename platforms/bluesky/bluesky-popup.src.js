@@ -32,6 +32,7 @@ const CLIENT_ID = "https://yogesh-bhatttk.github.io/bulk-clean-oauth/oauth-clien
 const REQUIRED_PERMISSIONS = { permissions: ["identity"], origins: ["https://*/*"] };
 
 let client = null;
+let currentSub = null;
 
 function buildClient() {
   const redirectUri = chrome.identity.getRedirectURL();
@@ -96,6 +97,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     try {
       const result = await client.init();
       if (result && result.session) {
+        currentSub = result.session.sub;
         showStatus(result.session.sub);
       }
     } catch (e) {
@@ -145,6 +147,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       const authResult = await client.initCallback(params, chrome.identity.getRedirectURL());
 
+      currentSub = authResult.session.sub;
       showStatus(authResult.session.sub);
     } catch (e) {
       showError(e.message);
@@ -155,7 +158,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   logoutBtn.addEventListener("click", async () => {
-    indexedDB.deleteDatabase("@atproto/oauth-client-browser");
+    // Use the library's own revoke path (server-side token revocation + clearing
+    // the stored session) rather than reaching into IndexedDB directly -- an
+    // earlier version of this handler called
+    // indexedDB.deleteDatabase("@atproto/oauth-client-browser"), which doesn't
+    // match the database name the library actually uses
+    // ("@atproto-oauth-client"), so it silently deleted nothing and the session
+    // survived, logging the user back in the next time the popup opened.
+    if (client && currentSub) {
+      try {
+        await client.revoke(currentSub);
+      } catch (e) {
+        console.error("Bluesky revoke error", e);
+      }
+    }
+    currentSub = null;
     loginSection.style.display = "block";
     statusSection.style.display = "none";
     handleInput.value = "";

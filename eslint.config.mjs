@@ -18,7 +18,8 @@ const browserGlobals = {
   clearInterval: "readonly",
   URL: "readonly",
   URLSearchParams: "readonly",
-  AbortController: "readonly"
+  AbortController: "readonly",
+  atob: "readonly"
 };
 
 // Provided by shared-filters.js, which loads before background.js in BOTH browsers
@@ -166,6 +167,8 @@ export default [
   },
   {
     // Injected dashboard (content script) and popup — full DOM available.
+    // content.js also has a small module.exports (matchesActiveWorkspaceChannel)
+    // for its own `node --test` coverage — see tests/content.test.js.
     files: ["content.js", "popup.js"],
     languageOptions: {
       ecmaVersion: 2022,
@@ -177,6 +180,7 @@ export default [
         localStorage: "readonly",
         requestAnimationFrame: "readonly",
         Blob: "readonly",
+        module: "writable",
         // Provided by popup/platform-registry.js, loaded before popup.js.
         PLATFORMS: "readonly"
       }
@@ -215,6 +219,7 @@ export default [
       sourceType: "script",
       globals: {
         module: "writable",
+        URL: "readonly",
         connectReddit: "readonly",
         connectX: "readonly",
         connectMastodon: "readonly",

@@ -16,7 +16,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   const resultsCount = document.getElementById('results-count');
   const statusText = document.getElementById('status-text');
   const progressText = document.getElementById('progress-text');
-  
+
+  // See the matching comment in platforms/reddit/dashboard-reddit.js: this marker
+  // only informs the next session that a delete was interrupted -- it does not
+  // resume the delete itself, since a fresh scan is required to see current state.
+  const DELETE_PROGRESS_KEY = 'mastodon_delete_progress';
+  const leftover = (await chrome.storage.local.get([DELETE_PROGRESS_KEY]))[DELETE_PROGRESS_KEY];
+  if (leftover) {
+    statusText.textContent = `A previous deletion was interrupted (${leftover.done} of ${leftover.total} processed). Scan again to see current state.`;
+    await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
+  }
+
   let currentResults = [];
 
   // Mastodon's delete rate limit (shared with un-reblog) is 30 requests per
@@ -103,24 +113,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       let maxId = '';
       let pageCount = 0;
+      let truncated = false;
       const MAX_PAGES = 10; // 40 items per page * 10 = 400 toots per scan
 
       while (pageCount < MAX_PAGES) {
         let endpoint = `/api/v1/accounts/${accountId}/statuses?limit=40`;
         if (maxId) endpoint += `&max_id=${maxId}`;
-        
+
         const statuses = await apiFetch(endpoint);
         if (!statuses || statuses.length === 0) break;
 
         for (const status of statuses) {
-          // Exclude reblogs if you only want to delete your own content, 
+          // Exclude reblogs if you only want to delete your own content,
           // but deleting a reblog (unreblogging) uses the same endpoint if it's the reblog ID.
           // The API returns the raw HTML in `content` for regular statuses.
-          
+
           let matches = true;
           if (filterText) {
+            // A boost/reblog wrapper status has an EMPTY `content` of its own --
+            // the real text lives on `status.reblog.content`. Without this
+            // fallback, typing any filter would always exclude every boost
+            // regardless of what the boosted post actually says, while leaving
+            // the filter blank would unconditionally pull in all boosts --
+            // silently inconsistent filter behavior.
+            const rawContent = status.content || status.reblog?.content || '';
             // strip HTML tags for simple text matching
-            const plainText = (status.content || '').replace(/<[^>]+>/g, '').toLowerCase();
+            const plainText = rawContent.replace(/<[^>]+>/g, '').toLowerCase();
             matches = plainText.includes(filterText);
           }
 
@@ -131,23 +149,48 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         maxId = statuses[statuses.length - 1].id;
         pageCount++;
-        
+        // Only a FULL page (limit=40) at the cap is real evidence more toots may
+        // exist -- a partial last page (< 40) is itself proof the account's
+        // history ended naturally on this exact page, even though it happens to
+        // be the MAX_PAGES-th one. Without this check, an account with e.g.
+        // exactly 385 toots would be reported as "may not be exhaustive" when
+        // the scan actually reached the true end.
+        truncated = pageCount >= MAX_PAGES && statuses.length === 40;
+
         // Slight delay to avoid hitting rate limits on scan
         await delay(500);
       }
-      
-      resultsCount.textContent = `${currentResults.length} items found`;
-      
+
+      // truncated stays true only when the loop stopped because it hit MAX_PAGES
+      // on a full page, not on a natural end (an empty or partial page) -- so
+      // "N items found" doesn't imply an exhaustive scan when older toots may
+      // still exist.
+      resultsCount.textContent = truncated
+        ? `${currentResults.length} items found (stopped after ${MAX_PAGES} pages -- older toots may exist)`
+        : `${currentResults.length} items found`;
+
       if (currentResults.length > 0) {
         itemList.innerHTML = '';
         currentResults.forEach(status => {
-          const plainText = (status.content || '').replace(/<[^>]+>/g, '');
+          const plainText = (status.content || status.reblog?.content || '').replace(/<[^>]+>/g, '');
           const div = document.createElement('div');
           div.className = 'post-item';
-          div.innerHTML = `
-            <div class="post-time">${new Date(status.created_at).toLocaleString()}</div>
-            <div>${plainText || '<i>[Media only / Reblog]</i>'}</div>
-          `;
+
+          const timeDiv = document.createElement('div');
+          timeDiv.className = 'post-time';
+          timeDiv.textContent = new Date(status.created_at).toLocaleString();
+
+          const textDiv = document.createElement('div');
+          if (plainText) {
+            textDiv.textContent = plainText;
+          } else {
+            const i = document.createElement('i');
+            i.textContent = '[Media only / Reblog]';
+            textDiv.appendChild(i);
+          }
+
+          div.appendChild(timeDiv);
+          div.appendChild(textDiv);
           itemList.appendChild(div);
         });
         deleteBtn.disabled = false;
@@ -165,8 +208,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   deleteBtn.addEventListener('click', async () => {
-    const confirmation = prompt(`Type DELETE to permanently delete ${currentResults.length} toots.`);
-    if (confirmation !== "DELETE") {
+    // Above LARGE_DELETE_THRESHOLD, a fixed literal like "DELETE" is the same
+    // low-friction confirm regardless of whether 2 or hundreds of toots are
+    // about to be permanently destroyed. Require typing the exact count
+    // instead, so the number is something the user has to actually notice and
+    // act on, not just habitually retype.
+    const count = currentResults.length;
+    const LARGE_DELETE_THRESHOLD = 100;
+    const isLarge = count > LARGE_DELETE_THRESHOLD;
+    const expected = isLarge ? String(count) : "DELETE";
+    const promptText = isLarge
+      ? `You are about to permanently delete ${count} toots -- more than ${LARGE_DELETE_THRESHOLD}. Type the exact number ${count} to confirm.`
+      : `Type DELETE to permanently delete ${count} toots.`;
+    const confirmation = prompt(promptText);
+    if (confirmation !== expected) {
       alert("Deletion cancelled.");
       return;
     }
@@ -177,30 +232,50 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusText.style.color = "#ef4444";
     progressText.textContent = `Starting deletion...`;
     
-    try {
-      // Mastodon does not support batch deletion. We must delete one by one.
-      // Deletes (shared with un-reblog) are capped at 30 per rolling 30-minute
-      // window, so we pace against that real limit instead of a flat delay.
-      deleteTimestamps = [];
+    // Mastodon does not support batch deletion. We must delete one by one.
+    // Deletes (shared with un-reblog) are capped at 30 per rolling 30-minute
+    // window, so we pace against that real limit instead of a flat delay.
+    deleteTimestamps = [];
 
-      let deletedCount = 0;
+    let deletedCount = 0;
+    const failures = [];
+    try {
+      // The inner per-item try/catch below isolates one item's failure from the
+      // rest of the batch. This outer try/finally is separate: it guards the
+      // chrome.storage.local calls (progress marker) and everything else in this
+      // handler against an unexpected exception so the loop can never die
+      // silently, leaving scanBtn disabled and the progress marker stuck.
+      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: 0 } });
       for (const status of currentResults) {
         await waitForDeleteRateLimit();
 
-        await apiFetch(`/api/v1/statuses/${status.id}`, 'DELETE');
-        deleteTimestamps.push(Date.now());
-        deletedCount++;
+        try {
+          await apiFetch(`/api/v1/statuses/${status.id}`, 'DELETE');
+          deleteTimestamps.push(Date.now());
+          deletedCount++;
+        } catch (err) {
+          failures.push({ id: status.id, message: err.message });
+        }
         progressText.textContent = `Deleted ${deletedCount} of ${currentResults.length}`;
+        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: deletedCount + failures.length } });
         await delay(DELETE_MIN_SPACING_MS);
       }
+      await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
 
-      statusText.textContent = "Deletion Complete!";
-      statusText.style.color = "#10b981";
+      if (failures.length === 0) {
+        statusText.textContent = "Deletion Complete!";
+        statusText.style.color = "#10b981";
+      } else {
+        statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${currentResults.length}.`;
+        statusText.style.color = "#ef4444";
+        console.warn("Mastodon delete failures:", failures);
+      }
       currentResults = [];
       itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
       resultsCount.textContent = "0 items found";
     } catch (err) {
-      alert("Deletion failed: " + err.message);
+      console.error("Mastodon delete loop stopped unexpectedly:", err);
+      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${currentResults.length} toots were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {
