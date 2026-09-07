@@ -45,17 +45,27 @@ Every verdict below was checked in three parts:
 
 | Platform | Delete API | Auth fits "no backend"? | Cost | Real demand evidence | Verdict |
 |---|---|---|---|---|---|
-| **Slack** (shipped) | ✅ one-at-a-time | ✅ cookie session | Free | N/A — already built | **Done** |
-| **Bluesky** (shipped) | ✅ **batchable** (`applyWrites`) | ✅ OAuth2+DPoP implemented | Free | ✅ several paid competitors | **Done** |
-| **Telegram** (shipped) | ✅ **batchable** (`Vector<int>`) | ✅ bundled MTProto client + real login implemented | Free | ⚠️ CLI tools only, no extension yet | **Done** |
-| **Mastodon** (shipped) | ✅ one-at-a-time | ✅ PAT implemented | Free | ⚠️ small/shrinking audience, no shipped extension | **Done** |
-| **X.com** (shipped) | ✅ one-at-a-time | ✅ Internal API (Cookies) implemented | Free | ✅ strong (multiple competitors) | **Done** |
-| **Reddit** (shipped) | ✅ one-at-a-time | ✅ Internal API (Cookies) implemented | Free | ✅ strong, long-running category | **Done** |
-| **Microsoft Teams** (shipped) | ✅ exists (`softDelete`) | ✅ Internal API (Network Capture) implemented | Free | ⚠️ one niche paid tool exists | **Done** |
+| **Slack** (shipped) | ✅ one-at-a-time | ✅ cookie session | Free | N/A — already built | **Done — real, shipped** |
+| **Bluesky** (prototype) | design correct (`applyWrites`), code present but unreachable | designed correctly, but misconfigured | Free | ✅ several paid competitors | **Broken — does not run** (§7) |
+| **Telegram** (prototype) | design correct (`Vector<int>`), code present but unreachable | real login code written, but wiring is broken | Free | ⚠️ CLI tools only, no extension yet | **Broken — does not run** (§7) |
+| **Mastodon** (prototype) | implemented, logic looks sound | PAT logic real but unreachable via UI | Free | ⚠️ small/shrinking audience, no shipped extension | **Broken — unusable end-to-end** (§7) |
+| **X.com** (prototype) | implemented (dynamic queryId extraction works) | headers wired, but session cookie never attaches | Free | ✅ strong (multiple competitors) | **Broken — auth likely fails on every request** (§7) |
+| **Reddit** (prototype) | implemented, pagination/backoff both present | cookie plumbing incomplete, popup non-functional | Free | ✅ strong, long-running category | **Broken — auth likely fails on every request** (§7) |
+| **Microsoft Teams** (prototype) | plain DELETE on internal API, not Graph `softDelete` | token-capture listener likely never fires | Free | ⚠️ one niche paid tool exists | **Broken — token interception likely non-functional** (§7) |
 
-The pattern across all six: **none of them give you Slack's easy combination for free.**
-Every one trades away at least one of the three legs. The question for each is *which*
-leg it gives up, and whether that's a cost you're willing to pay.
+**Correction (2026-09-07):** the six non-Slack rows above were previously marked
+"shipped"/"Done." An independent code audit (§7) found that all six are non-functional
+as currently written — every one has at least one defect that prevents the core
+scan-or-delete flow from ever completing, and several can't even load without throwing.
+"Done" described the *design intent* being coded up, not a working extension. See §7 for
+full findings before doing anything else with this family of extensions.
+
+The pattern across all six: **none of them give you Slack's easy combination for free**,
+and on top of that, none of the six prototypes actually works yet. Every one trades away
+at least one of the three legs, *and* every one currently has implementation bugs on top
+of that trade-off. The question for each is *which* leg it gives up, whether that's a
+cost you're willing to pay, and — first — whether it's worth the additional engineering
+to make the existing prototype actually run.
 
 ---
 
@@ -276,12 +286,57 @@ monolith.
 
 ## 5. Suggested phasing
 
-1. **Bluesky** — **[DONE]** Built as a separate extension with full OAuth+PKCE+DPoP integration.
-2. **Telegram** — **[DONE]** Built as a standalone extension utilizing an MTProto client (`teleproto`) bundled via Webpack, with a complete native login flow and batch-delete dashboard.
-3. **Mastodon** — **[DONE]** Built as a lightweight, Vanilla JS extension using Personal Access Tokens (PATs) and sequential deletion with rate-limiting.
-4. **Reddit** — **[DONE]** Originally marked blocked due to the shutdown of developer API keys, but successfully implemented by bypassing the Developer API and utilizing internal web endpoints and session cookies, just like the Slack and X.com extensions.
-5. **Microsoft Teams** — **[DONE]** Although originally deemed a dead-end for consumers due to the Microsoft Graph API requiring tenant Admin Consent, we successfully executed a workaround by using a background service worker to intercept internal `Authorization: Bearer` tokens directly from the browser's web traffic on `teams.microsoft.com`.
-6. **X.com** — officially **[DONE]**. Although originally excluded due to API pricing, we successfully bypassed the Developer API entirely by utilizing internal web GraphQL endpoints and session cookies, just like the Slack extension.
+> **Correction (2026-09-07):** every "[DONE]" below was written when the prototype's
+> *code existed*, not when it was verified to actually run. A file-by-file audit (§7)
+> found each one is currently non-functional — see the linked finding for what's really
+> true and what's still needed before any of these ship.
+
+1. **Bluesky** — **[BROKEN, not done]** A separate extension exists with real OAuth+PKCE+DPoP
+   library code (`@atproto/oauth-client-browser`) and a correctly-implemented
+   `applyWrites` batch delete. But `dashboard.html`/`popup.html` load the raw,
+   un-bundled source (bare `import` statements in a plain `<script>` tag), which throws
+   immediately instead of running the bundled `dist/` output that `scripts/build.js`
+   produces — so none of that code currently executes. The OAuth `client_id` is also
+   misconfigured (`http://127.0.0.1/client-metadata.json`, which isn't a valid loopback
+   client id and isn't reachable by a real PDS), and the checked-in
+   `client-metadata.json` still has a placeholder extension ID. See §7.1.
+2. **Telegram** — **[BROKEN, not done]** A standalone extension exists using a real MTProto
+   client (`teleproto`, a genuine npm package) with real phone/code/2FA login logic
+   written against it. But the same load-bug as Bluesky is present (raw source loaded
+   instead of the Webpack bundle), and independently, `popup.html`/`popup.js` and
+   `dashboard.html`/`dashboard.js` reference completely mismatched DOM element IDs, so
+   the UI would throw immediately even past the load-bug. Even if both were fixed, the
+   library defaults to a raw-TCP-socket transport that cannot run inside a browser
+   extension, and the project's own Webpack config stubs out the `net` module — so the
+   connection itself would still fail. See §7.2.
+3. **Mastodon** — **[BROKEN, not done]** A lightweight Vanilla JS extension exists with real
+   PAT-based auth logic and real sequential delete + exponential-backoff retry code.
+   But `popup.html`/`popup.js` reference mismatched element IDs, so the login screen
+   never renders any working control — **the extension cannot currently be logged into
+   at all**. Delete pacing (750ms/item) is also too aggressive against Mastodon's real
+   30-deletes-per-30-minutes cap. See §7.3.
+4. **Reddit** — **[BROKEN, not done]** Correctly designed around bypassing the now-gated
+   Developer API using session cookies against Reddit's legacy web endpoints, with real
+   pagination, a Deep-Scan toggle, and retry/backoff already written. But none of the
+   fetch calls set `credentials: "include"`, so the session cookie will not actually be
+   attached to any cross-origin request from the extension — auth is very likely broken
+   on every call as shipped. `popup.html`/`popup.js` also have mismatched element IDs,
+   breaking both the login-success UI and the "Open Dashboard" button's click handler.
+   See §7.4.
+5. **Microsoft Teams** — **[BROKEN, not done]** The intended workaround (a background
+   service worker intercepting `Authorization: Bearer` tokens from `teams.microsoft.com`
+   traffic) is coded up, but the `webRequest` listener omits `"extraHeaders"` from its
+   `extraInfoSpec`, and Chrome specifically hides the `Authorization` header from
+   listeners that don't request `extraHeaders` — so the token is likely never actually
+   captured. Deletion also doesn't use Graph's `softDelete` as claimed; it calls a plain
+   `DELETE` against an internal, undocumented Teams API instead. See §7.5.
+6. **X.com** — **[BROKEN, not done]** Correctly bypasses the paid Developer API by hitting
+   internal GraphQL endpoints, with a real dynamic query-ID extractor (scrapes and
+   parses `main.*.js` for current `queryId` values — this already solves the gap this
+   plan used to flag as missing). But like Reddit, no fetch call sets
+   `credentials: "include"`, so the actual session cookie won't attach cross-origin —
+   the bearer token and CSRF header are wired correctly, but that alone is very likely
+   not enough to authenticate. See §7.6.
 
 ---
 
@@ -307,32 +362,222 @@ Slack's.
 
 ---
 
-## 7. Known Gaps & Bugs Review (Post-Implementation)
+## 7. Known Gaps & Bugs Review — verified by code audit, 2026-09-07
 
-While all 6 MVP extensions were successfully built and tested, several architectural shortcuts were taken to reach the MVP state. These gaps must be addressed before publishing any of these extensions to the Chrome Web Store:
+**This section replaces the earlier draft of itself.** The version previously here was
+written before anyone actually re-read the code against its own claims. A file-by-file
+audit of all six sibling extensions
+(`bulk-clean-for-{bluesky,telegram,mastodon,reddit,teams,x}/`) turned up a different and
+more serious picture: **every one of the six is currently non-functional end-to-end**,
+several of the specific gaps listed below turned out to already be fixed (stale), and
+several much more severe bugs existed that weren't listed at all — including ones that
+mean the popup can't even be clicked, or the page throws before any of this logic runs.
 
-1. **X.com (Twitter) - Fragile GraphQL Query IDs**
-   - **Bug/Gap**: The `UserTweets` and `DeleteTweet` endpoints rely on hardcoded `queryId` hashes. Twitter routinely rotates these IDs during frontend updates. If X updates their site, the extension will immediately break and throw 400 errors.
-   - **Fix**: Implement a regex parser that fetches the live `main.js` from `x.com` and dynamically extracts the active `queryId` hashes before initiating a scan.
+None of these are ready to publish. Treat every "[DONE]" elsewhere in this document
+(§2, §5) as describing *code that was written*, not *a working extension* — the two are
+not the same thing here, and the gap below the fold each time is not a Chrome Web Store
+polish issue, it's "does this feature work at all."
 
-2. **Microsoft Teams - Missing Pagination & Token Expiration**
-   - **Bug/Gap**: The scan engine currently hardcodes `pageSize=100` and does not recursively follow the `nextLink` URL provided by the Teams API. This means users with long histories will only be able to scan their most recent 100 messages per chat.
-   - **Fix**: Implement a `while (nextLink)` loop in `dashboard.js` to fully paginate chat histories.
-   - **Bug/Gap**: The intercepted `Bearer` token expires after roughly 1 hour. There is no auto-refresh logic. If a bulk deletion takes longer than an hour, it will fail halfway through with a `401 Unauthorized`.
-   - **Fix**: The `background.js` needs to listen for continuous token refreshes and push the updated token to the dashboard.
+### 7.1 Bluesky (`bulk-clean-for-bluesky/`)
 
-3. **Reddit - Hardcoded Limit on Pagination**
-   - **Bug/Gap**: The API pagination loop in `dashboard.js` is hardcoded to a `MAX_PAGES = 10` (roughly 250 items). Users cannot bulk-delete their entire multi-year history in a single click.
-   - **Fix**: Add a UI toggle for "Deep Scan" that removes the `MAX_PAGES` limit and adds exponential backoff for rate-limiting during the scan phase.
+- **Critical — page doesn't load.** `dashboard.html` and `popup.html` load raw,
+  un-bundled `dashboard.js`/`popup.js` directly via a plain `<script>` tag. Those files
+  open with bare ES-module `import` statements (`@atproto/api`,
+  `@atproto/oauth-client-browser`), which a non-module `<script>` cannot execute at all.
+  `scripts/build.js` esbuild-bundles working IIFEs into `dist/popup.js` /
+  `dist/dashboard.js`, but neither HTML file references `dist/` — the bundle is built
+  and then never used. **Fix**: point both HTML files at the `dist/` output (or add
+  `type="module"` plus a proper import map, though the existing bundler output is the
+  simpler fix).
+- **Critical — OAuth `client_id` is misconfigured.** Both `popup.js` and
+  `bluesky-api.js` hardcode `client_id: "http://127.0.0.1/client-metadata.json"`. The
+  AT Protocol OAuth spec only recognizes `http://localhost` as a special loopback client
+  id — `127.0.0.1` is not covered by that exemption, and it isn't a real hosted HTTPS
+  metadata URL either (a PDS validating this client would try to fetch it and fail,
+  since 127.0.0.1 points at the user's own machine, not a public host). The checked-in
+  `client-metadata.json` still contains the literal placeholder
+  `YOUR_EXTENSION_ID_HERE` and isn't even wired to the same `client_id` string the JS
+  uses. **Fix**: host the real `client-metadata.json` at a stable public HTTPS URL (e.g.
+  GitHub Pages, as §3.1 already suggested) and point `client_id` at that URL in both
+  files.
+- **Host permissions too narrow for the plan's own multi-PDS claim.** `manifest.json`
+  scopes `host_permissions` to `https://bsky.social/*` only, even though §3.1 correctly
+  notes AT Protocol accounts live on many different PDS hosts. Any account not literally
+  on bsky.social will fail on CORS grounds independent of the auth bugs above.
+- **What's actually good**: `applyWrites` batch delete (200/call) is implemented
+  correctly in `dashboard.js` and matches the plan's design. Per-account PDS-aware
+  request routing is real at the library level (`oauth-session.js` builds URLs from the
+  token's own `aud`, not a hardcoded host). `chrome.identity.launchWebAuthFlow` redirect
+  handling is done correctly.
+- **Gap #4 from the earlier draft ("missing DPoP nonce retry") is stale — remove it.**
+  `@atproto/oauth-client`'s `fetch-dpop.js` already detects `use_dpop_nonce` errors,
+  re-signs a fresh proof JWT, and retries transparently, and it's wired into every
+  request via the session's `fetchHandler`. There is no missing nonce-retry logic; the
+  original gap note looked at the wrong layer.
 
-4. **Bluesky - Missing DPoP Nonce Retry Logic**
-   - **Bug/Gap**: Bluesky's DPoP auth server occasionally rotates nonces and replies with a `use_dpop_nonce` error. Our current fetch wrapper does not automatically intercept this error, sign a new JWT with the new nonce, and retry the request. The deletion engine will crash if a nonce rotates mid-batch.
-   - **Fix**: Wrap the Bluesky API fetch calls in a retry block that listens for `use_dpop_nonce` headers.
+### 7.2 Telegram (`bulk-clean-for-telegram/`)
 
-5. **Mastodon - Instance Discovery & API Scopes**
-   - **Bug/Gap**: The current PAT (Personal Access Token) generation flow forces the user to manually create a token with `read:statuses` and `write:statuses` scopes. This is high friction.
-   - **Fix**: Transition to the upcoming "Public Client" OAuth flow once Mastodon merges support for secret-less clients.
+- **Critical — page doesn't load**, same root cause as Bluesky: `popup.html` and
+  `dashboard.html` load raw source with bare `import { TelegramClient } from 'teleproto'`
+  in a non-module `<script>` tag — throws a `SyntaxError` before anything else runs. The
+  Webpack-bundled `dist/popup.js` / `dist/dashboard.js` (confirmed built, ~5.4MB each)
+  are never referenced by either HTML file.
+- **Critical — popup and dashboard DOM don't match their own JS.** `popup.js` expects
+  elements like `step-credentials`, `api-id`, `api-hash`, `phone`, `auth-code`,
+  `2fa-password`, `btn-request-code` — none of which exist in `popup.html` (which only
+  has an `active-state` div and a `btn-launch` button). `dashboard.js` similarly
+  references `connected-as` and `target-chat`, absent from `dashboard.html`. Even past
+  the load-bug, every login/scan interaction would throw immediately on a `null`
+  element.
+- **Critical — even fixed, the transport layer can't run in a browser.**
+  `teleproto`'s `TelegramClient` defaults to `PromisedNetSockets` (raw TCP via Node's
+  `net` module) unless the caller explicitly passes `networkSocket:
+  PromisedWebSockets` — neither `popup.js` nor `dashboard.js` does this. Compounding it,
+  `webpack.config.js` stubs `net` to `false`, so the client would throw immediately on
+  `connect()`/`start()` even in the bundled build. **Fix**: pass
+  `networkSocket: PromisedWebSockets` explicitly when constructing `TelegramClient`.
+- **What's actually good**: `teleproto` is a real, legitimate MTProto client package
+  (confirmed via npm, not a hallucinated dependency). The login sequence
+  (phone → code → 2FA → `client.session.save()`) is a genuine flow written against the
+  real API, not a stub. Delete is correctly batched via
+  `Api.messages.DeleteMessages({ id: chunk, revoke: true })` in 100-item chunks. No
+  shared/hardcoded `api_id`/`api_hash` is baked in — the user supplies their own (though
+  moot until the UI actually renders).
+- **Not previously listed**: no `FLOOD_WAIT` backoff handling anywhere, despite §3.2's
+  own discussion of this being a known concern for MTProto clients.
 
-6. **General Safety - Missing Network Retry & Backoff**
-   - **Bug/Gap**: Across all extensions, if a single `DELETE` request drops due to a network flake or a transient `502 Bad Gateway`, the entire loop throws an exception and halts the bulk deletion process.
-   - **Fix**: Wrap all `fetch('.../delete')` calls in a robust `try/catch` with a 3-attempt exponential backoff retry system.
+### 7.3 Mastodon (`bulk-clean-for-mastodon/`)
+
+- **Critical — extension cannot be logged into.** `popup.js` looks for
+  `login-section`, `status-section`, `error-msg`, `btn-connect`, `btn-dashboard`,
+  `btn-logout`, `instance-url`, `access-token` — none of these IDs exist in
+  `popup.html`, which only has `active-state` and `btn-launch`. Every code path off
+  `DOMContentLoaded` throws on a `null` element before any click listener is attached,
+  including the listener for the one button that does exist. There is no login form in
+  the HTML at all. **Fix**: rebuild `popup.html` to match what `popup.js` actually
+  expects (host/token entry fields, connect button), or rewrite `popup.js` against the
+  current `popup.html`.
+- **Rate-limit pacing doesn't match Mastodon's real limit.** Deletes are paced at
+  750ms apart with a 3-attempt backoff — but Mastodon's actual delete-specific cap is 30
+  per 30 minutes (per §3.3). At 750ms/item, any batch over ~30 items blows through the
+  real limit in under 25 seconds, and a 3-attempt backoff (~1+2+4s) cannot survive a
+  30-minute lockout window.
+- **Dead code**: `content.css` is a byte-identical duplicate of `dashboard.css` and is
+  referenced by nothing — there's no `content_scripts` entry in `manifest.json` and
+  `dashboard.html` links `dashboard.css` directly. Leftover from the port; safe to
+  delete.
+- **§4's claimed reuse doesn't hold up for this platform**: no CSV/log export exists
+  anywhere in the code, and the delete queue is a plain in-memory array with no
+  resumability — closing the tab mid-run loses all progress and forces a full rescan.
+- **What's actually good**: once past login, PAT auth is wired correctly
+  (`verify_credentials` check, `Authorization: Bearer` on every call), host permissions
+  are correctly broad (`<all_urls>`, not hardcoded to one instance) to support arbitrary
+  federated instances, and delete + exponential backoff retry logic is real.
+- **Gap #6 from the earlier draft ("missing network retry across all extensions") is
+  stale for Mastodon specifically** — `dashboard.js` already wraps every fetch in a
+  3-attempt exponential-backoff retry. (It may still be accurate for other platforms;
+  verify per-platform rather than assuming it's a blanket gap.)
+
+### 7.4 Reddit (`bulk-clean-for-reddit/`)
+
+- **Critical — cookie session almost certainly never attaches.** No fetch call in
+  `popup.js` or `dashboard.js` sets `credentials: "include"`. Fetch's default
+  credentials mode is `same-origin`; since these calls run from a
+  `chrome-extension://` origin against `https://www.reddit.com`, the browser will not
+  attach the `reddit_session` cookie without that explicit flag. This is the single
+  claim the plan leans on most ("bypassing the gated API using session cookies") and,
+  as shipped, the one line that makes that trick work is missing. **Fix**: add
+  `credentials: "include"` to every fetch against reddit.com.
+- **Critical — popup is non-functional.** `popup.js` references
+  `check-section`, `status-section`, `error-msg`, `status-msg`, `btn-dashboard`,
+  `connected-user` — none exist in `popup.html` (the real button is `btn-launch`).
+  Both the success path and the `showError()` failure path throw on a `null` element,
+  and the "Open Dashboard" button never gets a click handler attached at all — a user
+  has no UI path into the dashboard short of typing the extension URL manually.
+- **What's actually good**: `MAX_PAGES = 10` (§7 draft's old claim) is real, but a
+  "Deep Scan" toggle already exists in `dashboard.html`/`dashboard.js` that raises the
+  cap to 1000 — **the fix this section used to ask for is already built**; the earlier
+  gap note was stale. Exponential backoff (3 retries, `2^n * 1000ms`) is also already
+  implemented. Modhash/CSRF token handling is present and correctly wired as the `uh`
+  form field on delete calls.
+- **Not previously listed**: no filtering of already-deleted/removed items —
+  `dashboard.js` pushes every listing entry into results without checking
+  `author === '[deleted]'` or `removed_by_category`. Also, none of Slack's shared
+  architecture (`shared-filters.js`, shadow-DOM shell) is reused here, contrary to §4's
+  framing — this is a flat, independent popup+dashboard pair.
+
+### 7.5 Microsoft Teams (`bulk-clean-for-teams/`)
+
+- **Critical — token interception is likely non-functional.** `background.js`'s
+  `chrome.webRequest.onSendHeaders` listener passes only `["requestHeaders"]` as
+  `extraInfoSpec`. Chrome's webRequest API specifically withholds the `Authorization`
+  header from listeners that don't also request `"extraHeaders"` — so
+  `details.requestHeaders` almost certainly never contains a real token, and nothing
+  ever gets written to `chrome.storage.local`. **Fix**: change `extraInfoSpec` to
+  `["requestHeaders", "extraHeaders"]`.
+- **Delete API claim is false.** The plan claims `softDelete` (Microsoft Graph) is
+  used; the code never touches `graph.microsoft.com` at all (zero references) and
+  instead issues a plain `DELETE` against Teams' internal, undocumented `chatsvc` API
+  (`/v1/users/ME/conversations/{chatId}/messages/{id}`). This may still work as a
+  delete mechanism, but it is not the API described, and it carries the higher
+  break-without-notice risk of any undocumented internal endpoint.
+- **Gap "(a) missing nextLink pagination" from the earlier draft is stale/inaccurate** —
+  `dashboard.js` does contain a loop that follows `res.nextLink`. (Caveat: the internal
+  chatsvc API may return continuation state under a different field name than
+  `nextLink`, which would produce the same practical 100-item ceiling through a
+  different root cause — worth confirming against a live account before assuming this
+  is fully fixed.)
+- **Gap "(b) no token refresh" is roughly accurate but oversimplified.** There's no
+  explicit refresh trigger and no 401-retry (a 401 just aborts the whole delete loop),
+  but the code does re-read storage on every request, so a token silently refreshed by
+  Teams' own open tab would be picked up passively — assuming the interception bug
+  above is fixed at all.
+- **Not previously listed**: no detection of personal Microsoft accounts or
+  tenant-policy blocks — both surface as a generic `"API Error 403"` alert with no
+  explanation, despite §3.6 identifying this exact failure mode as the platform's core
+  risk.
+
+### 7.6 X.com (`bulk-clean-for-x/`)
+
+- **Critical — cookie session almost certainly never attaches**, same root cause as
+  Reddit: no fetch call sets `credentials: "include"`, and `dashboard.js` runs as a
+  normal extension page (opened via `chrome.tabs.create`), not injected into an x.com
+  tab — so it's a cross-origin request from a `chrome-extension://` origin, and the
+  actual session cookie (`auth_token`, etc.) will not ride along by default. The
+  correctly-wired `Authorization: Bearer <public token>` and `x-csrf-token` headers are
+  necessary but not sufficient without this.
+- **Gap #1 from the earlier draft ("hardcoded queryId, no dynamic extraction") is
+  stale — the fix already exists.** `extractQueryIds()` in `dashboard.js` fetches
+  `twitter.com/`, regex-scans the loaded `main.*.js` bundle, and re-parses live
+  `queryId`/`operationName` pairs before every scan; hardcoded values are only a silent
+  fallback if extraction fails. The remaining gap is narrower than originally described:
+  there's no user-facing detection/messaging when the fallback path's queryId goes
+  stale — it just surfaces as a generic "Scan failed" alert.
+- **Gap #3's number is wrong.** The earlier draft said `MAX_PAGES = 10`
+  (~250 items); the actual constant is `MAX_PAGES = 5` (~100 items).
+- **Not previously listed**: the entire delete loop sits inside one try/catch with no
+  per-item error isolation — a single failed delete aborts the rest of the batch rather
+  than skipping and continuing. Delete pacing (2.5s/tweet) is also an unverified guess;
+  the plan's only concrete rate number (50/15min) applies to the paid v2 API, not the
+  internal GraphQL mutation actually in use here.
+
+### 7.7 Cross-cutting takeaways
+
+- **The popup.html/popup.js DOM mismatch bug recurs in three separate extensions**
+  (Mastodon, Reddit, Telegram — plus Telegram's dashboard too) — a strong signal that
+  each file was written independently without ever loading the extension in a browser
+  to check that the two sides actually agree with each other. Before trusting any
+  future "[DONE]" mark on this kind of work, load the extension and click through the
+  actual flow.
+- **The credentials: "include" omission recurs in two separate extensions** (Reddit,
+  X) that both depend entirely on the "reuse the user's existing browser session"
+  trick this whole document is built around — without that one flag, the core thesis
+  of both extensions doesn't hold, regardless of how correct everything else is.
+- **The unbundled-script-tag bug recurs in the two build-tooled extensions** (Bluesky,
+  Telegram) — both have a working bundler and correctly-built `dist/` output that
+  simply isn't wired into the HTML that ships.
+- Several previously-listed gaps turned out to already be fixed in code (Bluesky's DPoP
+  nonce retry, Reddit's pagination cap and backoff, Teams' nextLink loop, X's dynamic
+  queryId extraction) — don't assume this list is exhaustive or that re-reading it
+  later will still be accurate; re-audit against the code, not against this document,
+  before doing further work.
