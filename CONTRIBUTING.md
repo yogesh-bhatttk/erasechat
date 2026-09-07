@@ -48,7 +48,7 @@ Load unpacked for manual testing — see the [README](README.md#install). Chrome
 3. Run `npm test` (must be green) and syntax-check any changed JS
    (`node --check <file>`).
 4. If you touched a manifest, re-validate: `google-chrome --pack-extension` (Chrome) and
-   `npx addons-linter dist/bulk-clean-for-slack-firefox-*.zip` (Firefox) must report no
+   `npx addons-linter dist/erasechat-firefox-*.zip` (Firefox) must report no
    errors.
 5. Update [CHANGELOG.md](CHANGELOG.md) with a short entry.
 6. Open a PR describing the change and, for anything touching deletion, the concrete

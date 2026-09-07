@@ -54,11 +54,11 @@ resolved before submitting; **(you)** require your action outside this repo.
 
 - [x] Hosted at a public HTTPS URL. The repo went public, so the file's own GitHub URL
       satisfies Chrome's requirement with no new infrastructure:
-      `https://github.com/yogesh-bhatttk/bulk-clean-for-slack/blob/main/PRIVACY_POLICY.md`
+      `https://github.com/yogesh-bhatttk/erasechat/blob/main/PRIVACY_POLICY.md`
       (verified HTTP 200).
 - [x] AMO accepts pasted policy text and does not need a URL at all.
 - [ ] (Optional upgrade) Serve it as a real page instead of a file view by enabling GitHub
-      Pages on `main` → `https://yogesh-bhatttk.github.io/bulk-clean-for-slack/privacy.html`.
+      Pages on `main` → `https://yogesh-bhatttk.github.io/erasechat/privacy.html`.
       `privacy.html` is self-contained, so it works as-is.
 - [x] The in-extension popup already links to the bundled `privacy.html`.
 
@@ -73,8 +73,8 @@ Or run them individually:
 - [ ] `npm test` → 84/84 green (unit + packaging gates)
 - [ ] `npm run test:e2e` → 12/12 green (needs `npx playwright install chromium`; extensions
       require headful Chromium, so use `xvfb-run` on a headless machine)
-- [ ] `npm run build` → produces `dist/bulk-clean-for-slack-chrome-<v>.zip` and
-      `dist/bulk-clean-for-slack-firefox-<v>.zip`
+- [ ] `npm run build` → produces `dist/erasechat-chrome-<v>.zip` and
+      `dist/erasechat-firefox-<v>.zip`
 - [ ] Manifests validate:
       - Chrome: `google-chrome --pack-extension=<dir>` succeeds (valid `.crx`)
       - Firefox: `npm run validate:firefox` → 0 errors
@@ -90,13 +90,13 @@ zips as build artifacts, so a green CI run is equivalent to this section.
 > paste literal asterisks into a description field that renders as plain text.
 
 - [ ] Developer account (one-time $5 fee, 2-Step Verification required, contact email verified)
-- [ ] Upload `dist/bulk-clean-for-slack-chrome-<v>.zip` — the **chrome** zip, not the firefox one
+- [ ] Upload `dist/erasechat-chrome-<v>.zip` — the **chrome** zip, not the firefox one
 - [ ] Store listing: name, summary, plain-text description, category (Workflow & Planning),
       5 screenshots, 440×280 promo tile, homepage + support URLs
 - [ ] Privacy practices: single purpose, four permission justifications, remote-code = No,
       all data-type boxes unchecked, three certifications checked
 - [ ] Privacy policy URL — the repo is public, so
-      `https://github.com/yogesh-bhatttk/bulk-clean-for-slack/blob/main/PRIVACY_POLICY.md`
+      `https://github.com/yogesh-bhatttk/erasechat/blob/main/PRIVACY_POLICY.md`
       works today (Chrome will not accept pasted text the way AMO does)
 - [ ] Submit for review
 

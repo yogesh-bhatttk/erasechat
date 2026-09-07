@@ -172,8 +172,8 @@ no 512 slot; do not try to force it into one.
 | Field | Value |
 |---|---|
 | Official URL | **None** — see below |
-| Homepage URL | `https://github.com/yogesh-bhatttk/bulk-clean-for-slack` |
-| Support URL | `https://github.com/yogesh-bhatttk/bulk-clean-for-slack/issues` |
+| Homepage URL | `https://github.com/yogesh-bhatttk/erasechat` |
+| Support URL | `https://github.com/yogesh-bhatttk/erasechat/issues` |
 | Mature content | **Off** |
 | Item support | **On** (visible) |
 
@@ -306,13 +306,13 @@ is local-only.
 
 ### Privacy policy URL
 ```
-https://github.com/yogesh-bhatttk/bulk-clean-for-slack/blob/main/PRIVACY_POLICY.md
+https://github.com/yogesh-bhatttk/erasechat/blob/main/PRIVACY_POLICY.md
 ```
 Verified reachable (HTTP 200). Chrome requires a hosted HTTPS page here and, unlike AMO,
 will **not** accept pasted policy text.
 
 If you would rather serve it as a real page than a GitHub file view, enable GitHub Pages on
-`main` and use `https://yogesh-bhatttk.github.io/bulk-clean-for-slack/privacy.html` —
+`main` and use `https://yogesh-bhatttk.github.io/erasechat/privacy.html` —
 `privacy.html` is fully self-contained (inline CSS, no external requests), so it works as-is.
 Either URL satisfies the requirement; the GitHub one needs no new infrastructure.
 
@@ -387,7 +387,7 @@ extension-pages CSP is "script-src 'self'; object-src 'none'".
 
 SOURCE
 Unminified and readable exactly as shipped; there is no build step that transforms it.
-Public source: https://github.com/yogesh-bhatttk/bulk-clean-for-slack
+Public source: https://github.com/yogesh-bhatttk/erasechat
 
 DATA COLLECTION
 None. Nothing leaves the user's device except the calls to Slack's own API listed above.

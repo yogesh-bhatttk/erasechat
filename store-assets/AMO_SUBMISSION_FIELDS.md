@@ -110,7 +110,7 @@ yogeshb@prosperix.com
 
 ## Support website
 ```
-https://github.com/yogesh-bhatttk/bulk-clean-for-slack/issues
+https://github.com/yogesh-bhatttk/erasechat/issues
 ```
 
 > Updated 2026-08-02. This field previously said to leave it blank because the repo was

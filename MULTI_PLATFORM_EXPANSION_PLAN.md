@@ -766,7 +766,8 @@ running the extension.
 ### 7.10 Bluesky OAuth hosting blocker — resolved (2026-09-07)
 
 By this point all seven platforms had been merged into one unified extension (this
-repo, `bulk-clean-for-slack`) rather than shipping as seven separate installs — see the
+repo, `erasechat`, then still named `bulk-clean-for-slack`) rather than shipping as seven
+separate installs — see the
 per-platform ports and the manifest/popup/dashboard restructuring already committed
 ahead of this section for that migration. Bluesky's OAuth flow uses that unified
 extension's own pinned id (`aakjpapmmdfbfhaialkekbobcfhnieep`, via manifest.json's

@@ -145,8 +145,8 @@ rules the server actually enforces.
 ## Build / package for the stores
 
 ```bash
-npm run build             # produces dist/bulk-clean-for-slack-chrome-<version>.zip
-                          #      and dist/bulk-clean-for-slack-firefox-<version>.zip
+npm run build             # produces dist/erasechat-chrome-<version>.zip
+                          #      and dist/erasechat-firefox-<version>.zip
 npm run validate:firefox  # addons-linter on the Firefox zip (must be 0 errors)
 ```
 
