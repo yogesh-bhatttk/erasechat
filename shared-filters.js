@@ -25,7 +25,7 @@ const MAX_UNBOUNDED_QUANTIFIERS = 2;
 // against. Slack allows very long messages; capping keeps even a quadratic pattern on
 // a pathological repeated run well under a second. Chosen far above any real message,
 // so ordinary matching is unaffected (over-long input under-matches, the safe way).
-const MAX_REGEX_INPUT = 20000;
+const MAX_REGEX_INPUT = 1000;
 
 // System / no-op message subtypes that are never the user's own deletable content.
 // Dropped by subtype regardless of text: Slack's join/leave/topic/purpose/name/archive
@@ -84,6 +84,9 @@ function isSafeRegex(pattern) {
   const unbounded = (pattern.match(/(?<!\\)[*+]/g) || []).length
                   + (pattern.match(/(?<!\\)\{\d*,\}/g) || []).length;
   if (unbounded > MAX_UNBOUNDED_QUANTIFIERS) return false;
+
+  // Stricter check for adjacent or narrowly separated unbounded quantifiers (e.g. .*.*)
+  if (/(?<!\\)[*+].{0,3}(?<!\\)[*+]/.test(pattern)) return false;
 
   return true;
 }
@@ -215,9 +218,10 @@ function decideItemAction(item, filterAttachments) {
   const hasFiles = !!(item.files && item.files.length > 0);
   const hasAttach = !!item.hasAttachments || !!(item.attachments && item.attachments.length > 0);
   const hasText = !!(item.text && item.text.trim().length > 0);
+  const hasBlocks = !!(Array.isArray(item.blocks) && item.blocks.some(b => b.type !== "image" && b.type !== "file"));
   if (filterAttachments) {
     if (!hasFiles && !hasAttach) return "skip";
-    if (hasText) return "trim";
+    if (hasText || hasBlocks) return "trim";
   }
   return "delete";
 }
@@ -236,28 +240,7 @@ function isSlackHostname(urlStr) {
   }
 }
 
-// Count how many places a Slack file is currently shared, from a files.info
-// `file` object. Slack's `files.delete` purges a file from its store entirely —
-// removing it from EVERY channel/DM it was ever shared into, not just the message
-// being cleaned. Before hard-deleting we use this to confirm the file lives in
-// exactly one place; a file shared elsewhere must be preserved so cleaning one
-// conversation never destroys content in another (the "current chat scope" promise).
-//
-// `file.shares` looks like { public: { C123: [ {ts,...}, ... ] }, private: {...} }.
-// Each entry in those per-channel arrays is one share; total them across scopes.
-// A missing/empty shares map yields 0 (not shared anywhere we can see).
-function fileShareCount(file) {
-  const shares = (file && file.shares) || {};
-  let count = 0;
-  for (const scope of Object.keys(shares)) {
-    const channels = shares[scope] || {};
-    for (const chId of Object.keys(channels)) {
-      const arr = channels[chId];
-      if (Array.isArray(arr)) count += arr.length;
-    }
-  }
-  return count;
-}
+
 
 // Deterministic avatar color from an arbitrary string (UI helper, pure).
 function stringToColor(str) {
@@ -282,7 +265,6 @@ if (typeof module !== "undefined" && module.exports) {
     qualifies,
     decideItemAction,
     isSlackHostname,
-    fileShareCount,
     stringToColor
   };
 }

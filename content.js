@@ -398,6 +398,23 @@ if (!window.slackCleanInitialized) {
       }
     }
 
+    // Resolves a user's name from cache, or fetches it dynamically if missing
+    async function getUserName(userId) {
+      if (!userId) return "Unknown";
+      if (userCache[userId]) return userCache[userId];
+      try {
+        const res = await slackAPICallWithRetry("users.info", { user: userId });
+        if (res && res.ok && res.user) {
+          const name = res.user.profile?.display_name || res.user.real_name || res.user.name;
+          userCache[userId] = name;
+          return name;
+        }
+      } catch (err) {
+        console.warn(`SlackClean: Failed to fetch user profile for ${userId}`, err);
+      }
+      return null;
+    }
+
     // Fetch metadata of the active target conversation
     async function loadActiveChannel(channelId) {
       // Record the intended target SYNCHRONOUSLY (before the await below reassigns
@@ -416,7 +433,8 @@ if (!window.slackCleanInitialized) {
 
           if (ch.is_im) {
             type = "Direct Message";
-            name = userCache[ch.user] ? `@${userCache[ch.user]}` : `@${ch.user || "User"}`;
+            const fetchedName = await getUserName(ch.user);
+            name = fetchedName ? `@${fetchedName}` : `@${ch.user || "User"}`;
           } else if (ch.is_mpim) {
             type = "Group DM";
             name = ch.purpose?.value || domName || "Group DM";
@@ -1085,6 +1103,13 @@ if (!window.slackCleanInitialized) {
           channelId: activeChannel.id
         }, (response) => {
           if (chrome.runtime.lastError) return;
+
+          if (response && response.otherJob && response.otherJob.isPaused) {
+            showCustomAlert(
+              "Paused Job in Another Channel",
+              `You have a paused bulk clean in another conversation (${response.otherJob.channelId}). Switch to that channel to resume or cancel it.`
+            );
+          }
 
           if (response && response.exists) {
             const state = response.job;
@@ -1948,7 +1973,20 @@ if (!window.slackCleanInitialized) {
             ? " (5,000-result limit reached — narrow your filters for more)"
             : (moreAvailable ? " (scan depth limit reached — older messages were NOT examined)" : "");
           logConsole(`Scan complete. Matches found: ${scanResults.length}${note}`, truncated ? "warn" : "info");
-          renderScanResults();
+          
+          // Pre-fetch any unknown users so the UI renders real names instead of raw IDs
+          const unknownUsers = new Set();
+          scanResults.forEach(msg => {
+            if (msg.user && !userCache[msg.user]) unknownUsers.add(msg.user);
+          });
+          if (unknownUsers.size > 0) {
+            logConsole(`Fetching names for ${unknownUsers.size} unknown users...`, "info");
+            Promise.all(Array.from(unknownUsers).map(uid => getUserName(uid))).then(() => {
+              renderScanResults();
+            });
+          } else {
+            renderScanResults();
+          }
 
           if (wasCapped) {
             showCustomAlert(
@@ -2080,6 +2118,13 @@ if (!window.slackCleanInitialized) {
             threadBadge.className = "msg-badge-thread";
             threadBadge.textContent = "Thread Reply";
             meta.appendChild(threadBadge);
+          } else if (msg.replyCount > 0) {
+            const rootBadge = document.createElement("span");
+            rootBadge.className = "msg-badge-thread";
+            rootBadge.style.backgroundColor = "var(--color-pink)";
+            rootBadge.style.color = "white";
+            rootBadge.textContent = `Thread Root (${msg.replyCount} replies will be deleted!)`;
+            meta.appendChild(rootBadge);
           }
 
           wrapper.appendChild(meta);
@@ -2159,6 +2204,11 @@ if (!window.slackCleanInitialized) {
 
         if (deleteQueue.length === 0) return;
 
+        const hasThreadRoots = deleteQueue.some(msg => msg.replyCount > 0);
+        const warningPrefix = hasThreadRoots
+          ? `CRITICAL WARNING: You have selected one or more Thread Roots. Slack will permanently delete ALL replies by other users in those threads! `
+          : `WARNING: `;
+
         // Pin this queue to the channel it was built against. startDeletionProcess
         // re-checks this before dispatching, so a channel switch during the
         // (non-blocking) confirmation modal can't misroute the delete.
@@ -2173,14 +2223,24 @@ if (!window.slackCleanInitialized) {
 
         if (deleteQueue.length > LARGE_DELETE_THRESHOLD) {
           const verifyModal = shadowRoot.getElementById("sc-verify-modal");
-          shadowRoot.getElementById("sc-verify-count-label").innerText = deleteQueue.length;
+          const verifyDesc = verifyModal.querySelector(".sc-verify-desc");
+          if (verifyDesc) {
+            if (hasThreadRoots) {
+              verifyDesc.innerHTML = 'You are about to delete more than 100 messages (<span id="sc-verify-count-label"></span> messages). <br><br><strong style="color:var(--color-pink)">CRITICAL WARNING: You have selected one or more Thread Roots. Slack will permanently delete ALL replies by other users in those threads!</strong><br><br>To confirm this operation, type the word <strong class="sc-verify-emphasis">DELETE</strong> below:';
+            } else {
+              verifyDesc.innerHTML = 'You are about to delete more than 100 messages (<span id="sc-verify-count-label"></span> messages). To confirm this operation, type the word <strong class="sc-verify-emphasis">DELETE</strong> below:';
+            }
+            shadowRoot.getElementById("sc-verify-count-label").innerText = deleteQueue.length;
+          } else {
+            shadowRoot.getElementById("sc-verify-count-label").innerText = deleteQueue.length;
+          }
           shadowRoot.getElementById("sc-verify-confirm-btn").disabled = true;
           verifyModal.classList.remove("hidden");
           shadowRoot.getElementById("sc-verify-input").focus();
         } else {
           showCustomConfirm(
             "Confirm Deletion",
-            `WARNING: You are about to permanently delete ${deleteQueue.length} messages in channel "${activeChannel.name}". This action cannot be undone.`,
+            `${warningPrefix}You are about to permanently delete ${deleteQueue.length} messages in channel "${activeChannel.name}". This action cannot be undone.`,
             "Start Deleting",
             "Go Back",
             (confirmed) => {
@@ -2277,7 +2337,8 @@ if (!window.slackCleanInitialized) {
           isThreadReply: msg.isThreadReply,
           parentTs: msg.parentTs,
           hasAttachments: (msg.attachments || []).length > 0,
-          files: (msg.files || []).map(f => ({ id: f.id, name: f.name }))
+          files: (msg.files || []).map(f => ({ id: f.id, name: f.name })),
+          blocks: msg.blocks || []
         })),
         deleteIndex: 0,
         throttleDelay: throttleDelay,

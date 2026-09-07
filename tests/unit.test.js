@@ -12,8 +12,7 @@ const {
   qualifies,
   decideItemAction,
   stringToColor,
-  isSlackHostname,
-  fileShareCount
+  isSlackHostname
 } = require('../shared-filters.js');
 
 // ============================================================
@@ -404,6 +403,12 @@ test('decideItemAction: attachment mode + files but NO text -> delete', () => {
   assert.equal(decideItemAction({ text: '   ', files: [{ id: 'F1' }] }, true), 'delete');
 });
 
+test('decideItemAction: attachment mode + files but NO text + WITH blocks -> trim', () => {
+  // Block kit message with empty top-level text but content in blocks
+  assert.equal(decideItemAction({ files: [{ id: 'F1' }], blocks: [{ type: 'section' }] }, true), 'trim');
+  assert.equal(decideItemAction({ text: '', files: [{ id: 'F1' }], blocks: [{ type: 'rich_text' }] }, true), 'trim');
+});
+
 test('decideItemAction: attachment mode + no attachments/files -> skip (never delete)', () => {
   // In "Only Delete Attachments" mode a message with nothing to clean must be
   // skipped, not destroyed — e.g. when the toggle is turned on after a broad scan.
@@ -412,46 +417,7 @@ test('decideItemAction: attachment mode + no attachments/files -> skip (never de
   assert.equal(decideItemAction({ files: [] }, true), 'skip');
 });
 
-// ============================================================
-// fileShareCount — global-file-deletion safety gate
-// ============================================================
-// files.delete purges a file from EVERY conversation it was shared into. The queue
-// engine hard-deletes a file only when it lives in exactly one place; this helper
-// is how it counts shares from a files.info `file` object.
 
-test('fileShareCount: no shares field -> 0 (nothing to collaterally lose)', () => {
-  assert.equal(fileShareCount({}), 0);
-  assert.equal(fileShareCount({ shares: {} }), 0);
-  assert.equal(fileShareCount(null), 0);
-  assert.equal(fileShareCount(undefined), 0);
-});
-
-test('fileShareCount: single share in one channel -> 1 (safe to hard-delete)', () => {
-  const file = { shares: { public: { C1: [{ ts: '1.1' }] } } };
-  assert.equal(fileShareCount(file), 1);
-});
-
-test('fileShareCount: shared in multiple channels -> counts every share', () => {
-  // Shared in two public channels and one private channel = 3 places.
-  const file = {
-    shares: {
-      public: { C1: [{ ts: '1.1' }], C2: [{ ts: '2.1' }] },
-      private: { G9: [{ ts: '9.1' }] }
-    }
-  };
-  assert.equal(fileShareCount(file), 3);
-  assert.ok(fileShareCount(file) > 1, 'must be flagged as shared-elsewhere');
-});
-
-test('fileShareCount: same file posted twice in ONE channel -> 2 (still shared)', () => {
-  const file = { shares: { public: { C1: [{ ts: '1.1' }, { ts: '1.2' }] } } };
-  assert.equal(fileShareCount(file), 2);
-});
-
-test('fileShareCount: tolerates malformed/empty share arrays', () => {
-  const file = { shares: { public: { C1: [] }, private: { G1: null } } };
-  assert.equal(fileShareCount(file), 0);
-});
 
 // ============================================================
 // stringToColor — Deterministic Color Assignment

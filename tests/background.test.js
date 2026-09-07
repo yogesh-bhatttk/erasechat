@@ -580,3 +580,88 @@ test("queueKeyFor: job-progress and queue keys never collide across channels", (
   // shared it would be misread as a job record.
   assert.ok(!a.startsWith("slackclean_state_"));
 });
+
+test("GET_JOB_STATUS: returns otherJob if there is a job in another channel", async () => {
+  const { handlers, context } = loadBackground();
+  const activeJobs = vm.runInContext("activeJobs", context);
+  activeJobs["slackclean_state_T1_C2"] = {
+    teamId: "T1",
+    channelId: "C2",
+    isPaused: true,
+    isRunning: false
+  };
+
+  const res = await sendMessage(handlers, { type: "GET_JOB_STATUS", teamId: "T1", channelId: "C1" });
+  assert.strictEqual(res.exists, false);
+  assert.ok(res.otherJob);
+  assert.strictEqual(res.otherJob.channelId, "C2");
+  assert.strictEqual(res.otherJob.isPaused, true);
+});
+
+test("executeQueue: trim mode preserves structural blocks while removing files and images", async () => {
+  let updateCalled = false;
+  let sentBlocks = null;
+  const stub = makeSlackFetch({
+    "chat.update": (params) => {
+      updateCalled = true;
+      sentBlocks = params.blocks;
+      return { ok: true };
+    }
+  });
+
+  const { context } = loadBackground({
+    fetchImpl: stub.fetch,
+    sessionTokens: { sc_token_T1: "xoxc-test" }
+  });
+
+  const activeJobs = vm.runInContext("activeJobs", context);
+  activeJobs["slackclean_state_T1_C1"] = {
+    teamId: "T1",
+    channelId: "C1",
+    token: "xoxc-test",
+    isRunning: true,
+    isPaused: false,
+    deleteQueue: [{
+      ts: "123",
+      action: "trim",
+      text: "hello",
+      blocks: [
+        { type: "section", text: { type: "mrkdwn", text: "hello" } },
+        { type: "image", image_url: "http" },
+        { type: "file", file_id: "F123" }
+      ]
+    }],
+    deleteIndex: 0,
+    stats: { success: 0, fail: 0, skipped: 0, total: 1 }
+  };
+
+  // Mock processingKeys to allow execution
+  const _processingKeys = vm.runInContext("processingKeys", context);
+  
+  const executeQueue = vm.runInContext("executeQueue", context);
+  await executeQueue("slackclean_state_T1_C1");
+
+  assert.strictEqual(updateCalled, true);
+  const blocks = JSON.parse(sentBlocks);
+  assert.strictEqual(blocks.length, 1);
+  assert.strictEqual(blocks[0].type, "section");
+});
+
+test("isAutoResumeAllowed: prevents resumption on cold boot (session storage cleared)", async () => {
+  const { context } = loadBackground();
+  const isAutoResumeAllowed = vm.runInContext("isAutoResumeAllowed", context);
+
+  // Default mock in test harness for session.get returns {} (empty), simulating cold boot
+  const coldBoot = await isAutoResumeAllowed("slackclean_state_T1_C1");
+  assert.strictEqual(coldBoot, false, "Must default to false if run token is missing");
+});
+
+test("isAutoResumeAllowed: permits resumption after SW suspension (session storage persists)", async () => {
+  const { sandbox, context } = loadBackground();
+  // Simulate session storage persisting across an idle-death
+  sandbox.chrome.storage.session.get = async () => ({ "sc_run_slackclean_state_T1_C1": true });
+  const isAutoResumeAllowed = vm.runInContext("isAutoResumeAllowed", context);
+
+  const warmWake = await isAutoResumeAllowed("slackclean_state_T1_C1");
+  assert.strictEqual(warmWake, true, "Must permit resumption if run token survived in session storage");
+});

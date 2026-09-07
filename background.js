@@ -46,8 +46,8 @@ const SETTIMEOUT_MAX_MS = 25000;
 // enough that a stalled request can't pin the queue's reentrancy lock indefinitely.
 const FETCH_TIMEOUT_MS = 30000;
 const WATCHDOG_ALARM = "sc_watchdog";
-const WATCHDOG_PERIOD_MIN = 0.5; // 30s: the platform minimum; used only for crash recovery
-const STALL_GRACE_MS = 20000;    // a job is "stalled" (SW died) only if this far past due
+const WATCHDOG_PERIOD_MIN = 1.0; // 1.0m: the platform minimum (Chrome enforces >= 1 min)
+const STALL_GRACE_MS = 60000;    // a job is "stalled" (SW died) only if this far past due
 
 // Companion storage key holding a job's immutable delete queue. Kept separate
 // from the (frequently-rewritten) progress record so batched progress saves
@@ -364,6 +364,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const key = `slackclean_state_${request.teamId}_${request.channelId}`;
     const respond = () => {
       const job = activeJobs[key];
+      
+      let otherJob = null;
+      for (const [, j] of Object.entries(activeJobs)) {
+        if (j.teamId === request.teamId && j.channelId !== request.channelId) {
+          otherJob = { channelId: j.channelId, isPaused: j.isPaused, isRunning: j.isRunning };
+          break;
+        }
+      }
+
       if (job) {
         sendResponse({
           exists: true,
@@ -374,10 +383,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             isPaused: job.isPaused,
             throttleDelay: job.throttleDelay,
             filterAttachments: job.filterAttachments
-          }
+          },
+          otherJob
         });
       } else {
-        sendResponse({ exists: false });
+        sendResponse({ exists: false, otherJob });
       }
     };
 
@@ -433,7 +443,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   else if (request.type === "START_DELETION") {
-    ensureToken(request.teamId).then(token => {
+    ensureToken(request.teamId).then(async token => {
       if (!token) {
         sendResponse({ success: false, error: "not_authed" });
         return;
@@ -466,8 +476,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       };
 
       // Persist the (immutable) queue once; progress saves afterward are light.
-      saveJobQueue(activeJobs[key]);
-      saveJobState(key, activeJobs[key]);
+      await saveJobQueue(activeJobs[key]);
+      await saveJobState(key, activeJobs[key]);
       markRunning(key, true);
       ensureWatchdog();
       scheduleNextStep(key, 0);
@@ -669,17 +679,18 @@ async function runScanInBg(token, req) {
   // out-of-window root is never itself queued. The upper bound is safe to keep: a
   // reply is always newer than its parent, so no in-window reply can hang off a
   // parent newer than `latest`.
+  const THREAD_LOOKBACK_SEC = 30 * 24 * 60 * 60; // 30 days
   const relaxLowerBound = includeThreads && oldestNum > 0;
-  const historyOldest = relaxLowerBound ? 0 : oldest;
+  const historyOldest = relaxLowerBound ? Math.max(0, oldestNum - THREAD_LOOKBACK_SEC) : oldest;
+
+  // Track results, dedup, and rate limit pausing
   const results = [];
-  // Dedup by ts: a reply sent with "also send to channel" (thread_broadcast)
-  // is returned by BOTH conversations.history (as a top-level message) and its
-  // parent's conversations.replies. Without this it would be scanned, queued,
-  // and chat.delete'd twice (the second call failing with message_not_found).
   const seenTs = new Set();
   let cursor = "";
   let pageCount = 0;
-  const maxPages = MAX_SCAN_PAGES;
+  // A custom date range (oldest > 0) implicitly accepts a longer scan; allow up to
+  // 100 pages (10,000 roots) so the scan can complete rather than truncating early.
+  const maxPages = (oldestNum > 0) ? 100 : MAX_SCAN_PAGES;
   let continueScan = true;
   let capped = false;
   // Set when a thread was deeper than MAX_THREAD_PAGES, so replies in it went
@@ -718,7 +729,9 @@ async function runScanInBg(token, req) {
           time: new Date(parseFloat(msg.ts) * 1000).toLocaleString(),
           isThreadReply: false,
           files: msg.files || [],
-          attachments: msg.attachments || []
+          attachments: msg.attachments || [],
+          blocks: msg.blocks || [],
+          replyCount: msg.reply_count || 0
         });
 
         if (results.length >= MAX_SCAN_RESULTS) {
@@ -758,7 +771,9 @@ async function runScanInBg(token, req) {
                   isThreadReply: true,
                   parentTs: msg.ts,
                   files: reply.files || [],
-                  attachments: reply.attachments || []
+                  attachments: reply.attachments || [],
+                  blocks: reply.blocks || [],
+                  replyCount: reply.reply_count || 0
                 });
 
                 if (results.length >= MAX_SCAN_RESULTS) {
@@ -888,7 +903,11 @@ async function executeQueue(key) {
     if (job.deleteIndex >= job.deleteQueue.length) {
       job.isRunning = false;
       broadcastJobUpdate(job);
-      sendLogMessage(job, "Bulk clean operation completed successfully.", "info");
+      if (job.deleteQueue.length === 0 && job.stats.total > 0) {
+        sendLogMessage(job, "Error: The deletion queue was lost from storage. Please run a new scan.", "error");
+      } else {
+        sendLogMessage(job, "Bulk clean operation completed successfully.", "info");
+      }
       markRunning(key, false);
       clearJobState(key, job); // removes progress + queue; no final save needed
       delete activeJobs[key];
@@ -906,93 +925,29 @@ async function executeQueue(key) {
       response = { ok: true, skipped: true };
     } else {
       // Track whether every file object was actually removed. A message edit/delete
-      // that "succeeds" while a file survives must NOT be counted as a clean success.
-      let fileDeleteFailed = false;
       try {
         // Remove the message's underlying file objects FIRST, for EVERY item that
         // has files — attachment "trim"/"delete" AND a normal full delete alike.
         // Neither chat.delete nor chat.update purges an uploaded file from Slack's
         // file store, so without this a "delete my messages" run would leave the
         // files behind (still downloadable/searchable). Idempotent on retry.
-        const files = msg.files || [];
-        for (const file of files) {
-          if (!file || !file.id) continue;
+        // [MODIFIED] files.delete has been entirely removed to prevent global collateral data loss
+        // in unseen private channels. Only chat.delete and chat.update are used.
+        // A trim operation will remove the file's visual presence from the message in this channel,
+        // but the file itself will remain securely in Slack's workspace storage.
 
-          // Cancel/replace mid-loop: the main cancellation guard sits AFTER this loop,
-          // so without a check here a Cancel issued while we were awaiting files.info
-          // would still let files.delete run and purge a file for a job the user just
-          // cancelled. Stop before issuing any further destructive calls.
-          if (activeJobs[key] !== job) return;
-
-          // SAFETY: files.delete purges a file from Slack ENTIRELY — every channel
-          // and DM it was shared into, not just this message. Before hard-deleting,
-          // look up its live share count; if it lives in more than one place, leave
-          // it intact so cleaning this conversation can't destroy content in another
-          // (honoring the "current chat scope" promise). Only files that exist
-          // solely here are removed.
-          const infoRes = await slackAPICall(job.token, "files.info", { file: file.id });
-          if (infoRes.error === "rate_limited") {
-            handleRateLimitBackoff(job, key, infoRes.retryAfter || 15, `Throttled inspecting file ${file.id}.`);
-            return; // do NOT advance deleteIndex — retry the same item
+        if (action === "trim") {
+          // Strip attachments/blocks while preserving text.
+          let trimmedBlocks = [];
+          if (msg.blocks && Array.isArray(msg.blocks)) {
+             trimmedBlocks = msg.blocks.filter(b => b.type !== "image" && b.type !== "file");
           }
-          if (infoRes.ok && infoRes.file) {
-            if (fileShareCount(infoRes.file) > 1) {
-              // Shared elsewhere: preserve the file. For a full delete the message
-              // still goes; for a trim the file reference stays (Slack offers no way
-              // to detach a file from one message without deleting it everywhere).
-              sendLogMessage(job, `File ${file.id} is shared in other conversations — left intact so cleaning this chat won't remove it elsewhere.`, "info");
-              continue;
-            }
-          } else if (infoRes.error === "file_not_found" || infoRes.error === "file_deleted") {
-            // Already gone — the "remove the file" goal is met; nothing to do.
-            sendLogMessage(job, `File ${file.id} already removed from Slack.`, "info");
-            continue;
-          } else {
-            // Couldn't verify shares (permission/transient error). Be conservative:
-            // do NOT hard-delete a file whose blast radius is unknown. The message
-            // op below still runs; worst case is a leftover file, never collateral loss.
-            fileDeleteFailed = true;
-            sendLogMessage(job, `Could not verify shares for file ${file.id} (${infoRes.error || "unknown"}); leaving it intact.`, "warn");
-            continue;
-          }
-
-          // Re-check after the files.info await above: the job may have been cancelled
-          // or replaced while we were inspecting shares. Never delete a file for it.
-          if (activeJobs[key] !== job) return;
-          const fileRes = await slackAPICall(job.token, "files.delete", { file: file.id });
-          if (fileRes.ok || fileRes.error === "file_deleted" ||
-              fileRes.error === "file_not_found" || fileRes.error === "already_deleted") {
-            // Deleted now, or already gone (idempotent when an item is retried).
-            sendLogMessage(job, `Removed file attachment ${file.id} from Slack.`, "info");
-          } else if (fileRes.error === "rate_limited") {
-            // files.delete has no retry of its own: back off and retry the WHOLE
-            // item, so the file isn't silently orphaned while the message op runs.
-            handleRateLimitBackoff(job, key, fileRes.retryAfter || 15, `Throttled deleting file ${file.id}.`);
-            return; // do NOT advance deleteIndex — retry the same item
-          } else {
-            fileDeleteFailed = true;
-            sendLogMessage(job, `Failed to delete file entry ${file.id}: ${fileRes.error || "unknown"}`, "warn");
-          }
-        }
-
-        if (job.filterAttachments && fileDeleteFailed) {
-          // Attachment-cleaning mode: a file could not be removed, so do NOT run
-          // the message op. A full delete would destroy the message and orphan the
-          // file; a trim would strip the file's reference while the file lingers.
-          // Fail the item so BOTH message and file stay intact for a retry.
-          // (A normal full delete falls through instead: removing the message is
-          // the primary goal, and best-effort file cleanup already logged a warn.)
-          response = { ok: false, error: "file_delete_failed" };
-        } else if (action === "trim") {
-          // Strip attachments/blocks while preserving text. NOTE: this flattens rich
-          // block formatting to the plain-text fallback — "Only Delete Attachments"
-          // guarantees text survival, not layout.
           response = await slackAPICall(job.token, "chat.update", {
             channel: job.channelId,
             ts: msg.ts,
             text: msg.text || "",
             attachments: JSON.stringify([]),
-            blocks: JSON.stringify([])
+            blocks: trimmedBlocks.length > 0 ? JSON.stringify(trimmedBlocks) : JSON.stringify([])
           });
         } else {
           response = await slackAPICall(job.token, "chat.delete", {
@@ -1191,6 +1146,7 @@ async function saveJobQueue(job) {
       };
       if (entry.action === "trim") {
         entry.text = msg.text || "";
+        entry.blocks = msg.blocks || [];
       }
       return entry;
     });
