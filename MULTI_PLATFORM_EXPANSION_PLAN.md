@@ -46,26 +46,36 @@ Every verdict below was checked in three parts:
 | Platform | Delete API | Auth fits "no backend"? | Cost | Real demand evidence | Verdict |
 |---|---|---|---|---|---|
 | **Slack** (shipped) | ✅ one-at-a-time | ✅ cookie session | Free | N/A — already built | **Done — real, shipped** |
-| **Bluesky** (prototype) | design correct (`applyWrites`), code present but unreachable | designed correctly, but misconfigured | Free | ✅ several paid competitors | **Broken — does not run** (§7) |
-| **Telegram** (prototype) | design correct (`Vector<int>`), code present but unreachable | real login code written, but wiring is broken | Free | ⚠️ CLI tools only, no extension yet | **Broken — does not run** (§7) |
-| **Mastodon** (prototype) | implemented, logic looks sound | PAT logic real but unreachable via UI | Free | ⚠️ small/shrinking audience, no shipped extension | **Broken — unusable end-to-end** (§7) |
-| **X.com** (prototype) | implemented (dynamic queryId extraction works) | headers wired, but session cookie never attaches | Free | ✅ strong (multiple competitors) | **Broken — auth likely fails on every request** (§7) |
-| **Reddit** (prototype) | implemented, pagination/backoff both present | cookie plumbing incomplete, popup non-functional | Free | ✅ strong, long-running category | **Broken — auth likely fails on every request** (§7) |
-| **Microsoft Teams** (prototype) | plain DELETE on internal API, not Graph `softDelete` | token-capture listener likely never fires | Free | ⚠️ one niche paid tool exists | **Broken — token interception likely non-functional** (§7) |
+| **Telegram** (fixed) | `Vector<int>` batch delete | login form renders correctly in a real browser; real login not attempted | Free | ⚠️ CLI tools only, no extension yet | **Loads and renders correctly** (§7.8) |
+| **Mastodon** (fixed) | implemented | popup + dashboard render correctly with seeded fake credentials in a real browser; real account login not attempted | Free | ⚠️ small/shrinking audience, no shipped extension | **Loads and renders correctly** (§7.8) |
+| **Reddit** (fixed) | implemented, pagination/backoff both present | popup + dashboard render correctly (both the real "no session" error path and a seeded logged-in state) in a real browser | Free | ✅ strong, long-running category | **Loads and renders correctly** (§7.8) |
+| **Microsoft Teams** (fixed) | DELETE on internal chat API | popup + dashboard render correctly with a seeded fake token in a real browser; real token capture not attempted | Free | ⚠️ one niche paid tool exists | **Loads and renders correctly** (§7.8) |
+| **X.com** (fixed) | implemented (dynamic queryId extraction works) | popup + dashboard render correctly (both the real "no session" error path and a seeded logged-in state) in a real browser | Free | ✅ strong (multiple competitors) | **Loads and renders correctly** (§7.8) |
+| **Bluesky** (fixed load bug; OAuth blocked) | design correct (`applyWrites`) | loads and renders correctly, but **real login is confirmed rejected** by bsky.social's own server | Free | ✅ several paid competitors | **Blocked on OAuth hosting, not a code bug** (§7.8) |
 
-**Correction (2026-09-07):** the six non-Slack rows above were previously marked
-"shipped"/"Done." An independent code audit (§7) found that all six are non-functional
-as currently written — every one has at least one defect that prevents the core
-scan-or-delete flow from ever completing, and several can't even load without throwing.
-"Done" described the *design intent* being coded up, not a working extension. See §7 for
-full findings before doing anything else with this family of extensions.
+**Correction (2026-09-07):** the six non-Slack rows above were originally marked
+"shipped"/"Done," which an independent code audit (§7.1–§7.6) found to be false — none
+of the six ran correctly as first built. A fix pass (§7.7) addressed the audit's
+findings, and a second pass that actually loaded each extension into a real browser
+(§7.8) caught five further bugs the static fixes had missed (mostly the same
+`popup.html`/`popup.js` DOM-mismatch class recurring in files the original audit hadn't
+scoped in). As of now: **all six load and render without console errors in a real
+browser**, verified with seeded/fake credentials standing in for a real account (a real
+login was not performed for Telegram, Mastodon, Reddit, Teams, or X — only for Bluesky,
+where it was necessary to confirm the OAuth blocker empirically rather than
+theoretically). **Bluesky's real login is confirmed blocked** by an architectural
+mismatch between its OAuth pattern and Chrome's extension redirect mechanism — this
+needs a small hosting step (§7.8), not more code. The other five platforms' actual
+scan/delete network calls against a real, live account remain untested by this pass —
+"renders correctly with fake data" is not the same claim as "successfully deletes a real
+post," and that gap should be closed with real accounts before shipping. See §7 for full
+findings and §7.7/§7.8 for exactly what changed and how it was verified, before doing
+anything else with this family of extensions.
 
-The pattern across all six: **none of them give you Slack's easy combination for free**,
-and on top of that, none of the six prototypes actually works yet. Every one trades away
-at least one of the three legs, *and* every one currently has implementation bugs on top
-of that trade-off. The question for each is *which* leg it gives up, whether that's a
-cost you're willing to pay, and — first — whether it's worth the additional engineering
-to make the existing prototype actually run.
+The pattern across all six: **none of them give you Slack's easy combination for free**
+— every one trades away at least one of the three legs (batching, backend-less auth, or
+zero cost/friction). Five of the six now at least run correctly; Bluesky's remaining gap
+is a one-time hosting/config decision, not an engineering unknown.
 
 ---
 
@@ -164,7 +174,7 @@ to make the existing prototype actually run.
 
 ### 3.4 X.com — excluded (kept for reference)
 
-> **Excluded from the active roadmap per the free-only project constraint (§0).** Retained
+> **Excluded from the roadmap per the free-only project constraint (§0).** Retained
 > below because the research is still useful if this decision is ever revisited, but
 > this is not something to build under the current constraint.
 
@@ -619,14 +629,119 @@ as a diff against the broken state documented above. Verified status per platfor
   until it's done, do not assume Bluesky login actually completes end-to-end even though
   the code no longer crashes.
 
-### 7.8 Cross-cutting takeaways
+### 7.8 Runtime verification pass — 2026-09-07 (same day, after §7.7)
 
-- **The popup.html/popup.js DOM mismatch bug recurs in three separate extensions**
-  (Mastodon, Reddit, Telegram — plus Telegram's dashboard too) — a strong signal that
-  each file was written independently without ever loading the extension in a browser
-  to check that the two sides actually agree with each other. Before trusting any
-  future "[DONE]" mark on this kind of work, load the extension and click through the
-  actual flow.
+§7.7's fix pass was verified by reading diffs and re-running static checks (`node -c`,
+grep, rebuilding bundles) — it never actually loaded any of the six extensions into a
+real browser. That gap turned out to matter: **loading all six into a real, headful
+Chrome via Playwright (`chromium.launchPersistentContext` with `--load-extension`,
+the same mechanism `tests/extension.spec.js` already uses for the Slack extension in
+this repo) surfaced five additional, previously-undetected bugs that static review had
+missed entirely** — several of them fatal (the extension fails to load, or the popup
+throws before attaching any click handler). All five are now fixed and re-verified by
+reloading the extension and confirming zero console/page errors. Each extension's own
+git history has the corresponding commit.
+
+- **Bluesky — fatal load failure, now fixed.** The extension didn't just fail to run
+  correctly, it **failed to load into Chrome at all**: a leftover `_locales/` folder
+  (copied from this Slack extension's own template, complete with stale "Bulk Clean for
+  Slack" message text) existed without a matching `"default_locale"` key in
+  `manifest.json`. Chrome's extension loader refuses to load *any* extension with this
+  combination — confirmed via Chrome's own verbose loader log: `Failed to load extension
+  ...: Localization used, but default_locale wasn't specified in the manifest.` Since
+  `manifest.json` never actually uses `__MSG_*__` placeholders, the folder was dead
+  weight from the start (none of the other five sibling extensions have one). Fixed by
+  deleting `_locales/` entirely.
+  - **Once loading was fixed, the popup itself had the same DOM-mismatch bug found
+    everywhere else** (see below) — `popup.js` expected a full login form
+    (`login-section`, `handle`, `login-btn`, `error-msg`, `status-section`,
+    `connected-handle`, `dashboard-btn`, `logout-btn`), none of which existed in
+    `popup.html`. Rebuilt to match.
+  - **With the popup finally working, the OAuth login flow was tested against the real,
+    live `bsky.social` authorization server** (using a real, public handle, read-only —
+    no credentials were entered or needed to reach this point). This **empirically
+    confirmed** the architectural gap flagged in §7.7 as a live rejection, not a
+    theoretical one:
+    ```
+    HTTP 400 https://bsky.social/oauth/par
+    {"error":"invalid_request","error_description":"Invalid redirect_uri https://<extension-id>.chromiumapp.org/"}
+    ```
+    This also incidentally confirmed the DPoP nonce-retry logic works correctly in
+    practice — the flow transparently got past an initial `use_dpop_nonce` error before
+    hitting this real, final blocker. **Bluesky login remains blocked until a real
+    `client-metadata.json` is hosted at a stable public HTTPS URL**, exactly as §7.7
+    already concluded from reading the library source — this just upgrades that
+    conclusion from "very likely" to "confirmed against the real server."
+- **Telegram — fatal load failure, now fixed.** Both `popup.html` and `dashboard.html`
+  crashed immediately with `ReferenceError: process is not defined`, thrown from deep
+  inside a bundled `readable-stream` polyfill (a transitive dependency of `teleproto`)
+  that reads `process.browser`/`process.version` at module top level. `webpack.config.js`
+  already has `NodePolyfillPlugin`, which correctly injects a `process` shim into most
+  bundled modules (confirmed 42 such injections in the bundle) — but not this one,
+  for reasons not worth fully root-causing. Fixed with a small **external**
+  `process-shim.js` file loaded via `<script src="process-shim.js">` before the bundle
+  in both HTML files (an inline `<script>` was tried first and rejected by MV3's
+  extension-page CSP, which blocks inline script execution unconditionally — so the
+  shim must be a real file, not an inline tag). After this fix, both the popup's full
+  4-step login form and the dashboard render with zero console errors. A live MTProto
+  login/connect was **not** attempted (would need a real, crafted session string and a
+  real phone-verified account) — the fix is verified at the "loads and renders
+  correctly" level, not "completes a real Telegram login."
+- **Mastodon — dashboard would have crashed immediately after a successful login.**
+  Beyond what §7.7 already fixed, `dashboard.js` calls
+  `document.getElementById('connected-as').textContent = ...` as literally its first
+  action after confirming stored login data — but `connected-as` didn't exist anywhere
+  in `dashboard.html`. This would have thrown immediately, before `scanBtn`/`deleteBtn`
+  even got their click listeners attached, making the dashboard unusable right after a
+  user successfully logged in. Fixed by adding the missing element next to the title.
+  Re-verified with seeded `chrome.storage.local` data simulating a real login: the
+  dashboard now renders "Bulk Clean for Mastodon (Connected: @testuser)" correctly with
+  zero console errors.
+- **Reddit — identical bug, same fix.** `dashboard.js` also referenced a nonexistent
+  `connected-as` element as its first action after login, which would have crashed the
+  dashboard the same way. Fixed identically (added the missing element to
+  `dashboard.html`'s header) and re-verified the same way — zero errors with seeded
+  login data.
+- **Microsoft Teams — popup was completely non-functional, never audited before now.**
+  §7.5's fix only touched `background.js`/`dashboard.js`; `popup.js` was never checked
+  against `popup.html`, and it turned out to have the exact same DOM-mismatch bug found
+  in Mastodon/Reddit/Telegram: it expected `check-section`, `status-section`, and
+  `btn-dashboard`, none of which existed in `popup.html` (still the leftover
+  `active-state`/`btn-launch` template). Every code path threw on a null element before
+  any click listener was attached — the popup was unusable regardless of whether the
+  background.js token-capture fix worked. Rebuilt `popup.html`/`popup.css` to match;
+  re-verified with a seeded fake token showing the "Connected to Teams" state renders
+  correctly with zero errors.
+- **X.com — same bug, never audited before now.** §7.6's fix only touched
+  `dashboard.js`; `popup.js` expected `check-section`, `status-section`, `error-msg`,
+  `status-msg`, `btn-dashboard`, none of which existed in `popup.html` (leftover
+  template again). Rebuilt to match, re-verified with zero errors in both the
+  logged-out (real error message shown correctly, since this browser genuinely isn't
+  logged into x.com) and seeded logged-in states.
+
+**Why this matters beyond the individual bugs**: §7.7's fixes were all correct on their
+own terms, but every one of them was scoped to the specific file(s) the original audit
+happened to flag (§7.1–7.6 only ever looked at `dashboard.js`/`background.js` for
+Teams and X, for instance — never their `popup.js`/`popup.html` pair). Static,
+scope-limited code review cannot substitute for actually loading the extension and
+clicking through it, because the bug class that kept recurring — a `popup.js`/
+`dashboard.js` written against a `popup.html`/`dashboard.html` that was never actually
+opened next to it — is by definition invisible to reading one file at a time. Treat
+"fixed" claims about this codebase family the same skepticism this whole document now
+recommends for the original "[Done]" claims, until they've been confirmed by actually
+running the extension.
+
+### 7.9 Cross-cutting takeaways
+
+- **The popup.html/popup.js DOM mismatch bug recurs in six separate places** across all
+  six extensions (Mastodon, Reddit, Telegram popup *and* dashboard, Teams, X, Bluesky) —
+  a strong signal that each file was written independently without ever loading the
+  extension in a browser to check that the two sides actually agree with each other.
+  Three of these six were only found by the §7.9 runtime pass, after the §7.1–7.7 static
+  audit and fix rounds had already declared those files fixed — **static code review
+  alone did not catch this bug class reliably; only actually loading the extension did.**
+  Before trusting any future "[DONE]" or "fixed" mark on this kind of work, load the
+  extension into a real browser and click through the actual flow — see §7.9's method.
 - **The credentials: "include" omission recurs in two separate extensions** (Reddit,
   X) that both depend entirely on the "reuse the user's existing browser session"
   trick this whole document is built around — without that one flag, the core thesis
@@ -634,8 +749,14 @@ as a diff against the broken state documented above. Verified status per platfor
 - **The unbundled-script-tag bug recurs in the two build-tooled extensions** (Bluesky,
   Telegram) — both have a working bundler and correctly-built `dist/` output that
   simply isn't wired into the HTML that ships.
+- **A fatal, load-blocking bug can exist even when every individual file looks
+  reasonable in isolation** — Bluesky's missing `default_locale` and Telegram's missing
+  `process` global only manifest as "the extension doesn't even load" or "throws before
+  anything renders," which no amount of reading `dashboard.js` in isolation would ever
+  catch. Both were only found by actually loading the extension.
 - Several previously-listed gaps turned out to already be fixed in code (Bluesky's DPoP
-  nonce retry, Reddit's pagination cap and backoff, Teams' nextLink loop, X's dynamic
-  queryId extraction) — don't assume this list is exhaustive or that re-reading it
-  later will still be accurate; re-audit against the code, not against this document,
-  before doing further work.
+  nonce retry — since confirmed working against the real server, see §7.9 — Reddit's
+  pagination cap and backoff, Teams' nextLink loop, X's dynamic queryId extraction) —
+  don't assume this list is exhaustive or that re-reading it later will still be
+  accurate; re-audit against the code, not against this document, before doing further
+  work.
