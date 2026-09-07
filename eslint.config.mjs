@@ -63,11 +63,10 @@ const correctnessRules = {
 export default [
   {
     // Generated output, not hand-written and not committed (see .gitignore):
-    // scripts/build-bluesky.js's bundles at repo root, and scripts/build.sh's
-    // full packaged copies under dist/. Linting bundled/packaged third-party
-    // code is neither useful nor meaningful.
+    // scripts/build-telegram.js's bundles, and scripts/build.sh's full packaged
+    // copies under dist/. Linting bundled/packaged third-party code is neither
+    // useful nor meaningful.
     ignores: [
-      "platforms/bluesky/bluesky-popup.bundle.js", "platforms/bluesky/bluesky-dashboard.bundle.js",
       "platforms/telegram/telegram-popup.bundle.js", "platforms/telegram/telegram-dashboard.bundle.js",
       "dist/**"
     ]
@@ -100,28 +99,10 @@ export default [
     rules: correctnessRules
   },
   {
-    // Bluesky's popup/dashboard source, pre-bundle (see scripts/build-bluesky.js).
-    // Unlike every other file here, these use real ES-module import statements --
-    // esbuild resolves them at build time, so sourceType must be "module" for
-    // ESLint to parse them at all.
-    files: ["platforms/bluesky/bluesky-popup.src.js", "platforms/bluesky/bluesky-dashboard.src.js"],
-    languageOptions: {
-      ecmaVersion: 2022,
-      sourceType: "module",
-      globals: {
-        ...browserGlobals,
-        window: "readonly",
-        document: "readonly",
-        indexedDB: "readonly",
-        alert: "readonly",
-        prompt: "readonly"
-      }
-    },
-    rules: correctnessRules
-  },
-  {
     // Telegram's popup/dashboard source, pre-bundle (see
-    // webpack.telegram.config.js). Same ES-module situation as Bluesky's above.
+    // webpack.telegram.config.js). Unlike every other file here, these use real
+    // ES-module import statements -- webpack resolves them at build time, so
+    // sourceType must be "module" for ESLint to parse them at all.
     files: ["platforms/telegram/telegram-popup.src.js", "platforms/telegram/telegram-dashboard.src.js"],
     languageOptions: {
       ecmaVersion: 2022,

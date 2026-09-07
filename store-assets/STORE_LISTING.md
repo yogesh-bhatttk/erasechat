@@ -2,7 +2,7 @@
 
 > **⚠️ Also stale on the multi-platform question (2026-09-07):** this file, and both
 > submission sheets it points to below, still describe Slack only. The extension now also
-> offers six optional platforms (Reddit, X, Mastodon, Microsoft Teams, Bluesky, Telegram),
+> offers five optional platforms (Reddit, X, Mastodon, Microsoft Teams, Telegram),
 > each connected explicitly from the popup. `CWS_SUBMISSION_FIELDS.md`'s §2 has been
 > updated for this; `AMO_SUBMISSION_FIELDS.md` has a matching reviewer-notes addendum but
 > its Description is still Slack-only. Neither file's Description/Screenshots reflect the

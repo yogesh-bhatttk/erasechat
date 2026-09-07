@@ -31,7 +31,7 @@
   "footerLocalOnly": { "message": "Traitement local uniquement" },
 
   "onboardingTitle": { "message": "👋 Bienvenue dans Erasechat !" },
-  "onboardingIntro": { "message": "Supprimez en masse vos propres publications et messages sur Slack, Reddit, X, Mastodon, Microsoft Teams, Bluesky et Telegram — choisissez une plateforme ci-dessous pour commencer." },
+  "onboardingIntro": { "message": "Supprimez en masse vos propres publications et messages sur Slack, Reddit, X, Mastodon, Microsoft Teams et Telegram — choisissez une plateforme ci-dessous pour commencer." },
   "onboardingBullet1": { "message": "🔒 Tout le traitement se fait localement dans votre navigateur" },
   "onboardingBullet2": { "message": "📋 Analysez et prévisualisez avant de supprimer quoi que ce soit" },
   "onboardingBullet3": { "message": "🗑️ Les suppressions sont définitives — vérifiez bien avant" },

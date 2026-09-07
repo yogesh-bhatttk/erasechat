@@ -193,7 +193,7 @@ body {
 }
 
 /* Standalone form controls, used both by the inline .platform-form (below) and by
-   custom platform views like Bluesky's login form (#bluesky-view). */
+   custom platform views. */
 .text-input {
   width: 100%;
   font-family: inherit;
@@ -266,14 +266,6 @@ body {
   font-size: 11px;
   color: var(--text-muted);
   line-height: 1.45;
-}
-
-/* Bluesky view: status-section starts hidden -- bluesky-popup.bundle.js toggles
-   both sections' display directly via inline styles once client.init()/login
-   resolves (see showStatus() in bluesky-popup.src.js). Without this default, both
-   sections render at once on first load. */
-#status-section {
-  display: none;
 }
 
 /* Inline connect form (e.g. Mastodon's instance URL + token), shown right below

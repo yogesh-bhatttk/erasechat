@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+#### Removed Bluesky platform support
+
+Bluesky was the only platform requiring a separate, externally-hosted OAuth
+`client_id` metadata document (AT Protocol's discoverable-client spec requires the
+`client_id` URL's path to be exactly `/oauth-client-metadata.json` at the origin
+root — GitHub Pages project sites can't serve that without a second repo or a custom
+domain). Rather than maintain a second repo just for this one platform, Bluesky support
+is dropped entirely: `platforms/bluesky/` (popup/dashboard source, bundles, and the
+`client-metadata.json` reference copy), its `scripts/build-bluesky.js` esbuild step, its
+`popup/platform-registry.js` entry and `popup.js`/`popup.html`/`popup.css` view wiring,
+its `identity` optional permission (unused by every other platform), its
+`@atproto/api`/`@atproto/oauth-client-browser` dependencies, its three
+`tests/platform-connect.spec.js` e2e tests, and every mention across the locales,
+`PRIVACY_POLICY.md`, `privacy.html`, and the store submission docs. The extension is now
+a six-platform tool: Slack plus optional Reddit, X, Mastodon, Microsoft Teams, and
+Telegram. The external `bulk-clean-oauth` GitHub Pages repo this depended on is no longer
+referenced by the extension.
+
 Four filter/UX additions on top of the 1.0.0 safety model, none of which touch the
 delete path itself: two are new scan-time qualification options in the single shared
 decision function, one is a client-side convenience, one is translation.

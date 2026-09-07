@@ -48,7 +48,7 @@
   "footerLocalOnly": { "message": "Local-Only Processing", "description": "Footer tagline" },
 
   "onboardingTitle": { "message": "👋 Welcome to Erasechat!", "description": "Onboarding heading" },
-  "onboardingIntro": { "message": "Bulk delete your own posts and messages across Slack, Reddit, X, Mastodon, Microsoft Teams, Bluesky, and Telegram — pick a platform below to get started.", "description": "Onboarding intro" },
+  "onboardingIntro": { "message": "Bulk delete your own posts and messages across Slack, Reddit, X, Mastodon, Microsoft Teams, and Telegram — pick a platform below to get started.", "description": "Onboarding intro" },
   "onboardingBullet1": { "message": "🔒 All processing happens locally in your browser", "description": "Onboarding bullet" },
   "onboardingBullet2": { "message": "📋 Scan & preview before deleting anything", "description": "Onboarding bullet" },
   "onboardingBullet3": { "message": "🗑️ Deletions are permanent — review carefully first", "description": "Onboarding bullet" },

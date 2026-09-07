@@ -821,3 +821,16 @@ fundamentally incompatible with `chrome.identity.launchWebAuthFlow()`'s
 **Bluesky is no longer blocked at the protocol/hosting level.** The remaining gap for
 Bluesky is the same one open for the other five non-Slack platforms: a full run against
 a real, logged-in account.
+
+### 7.11 Bluesky dropped (2026-09-07)
+
+Everything above this point in §7.10 is left as-is for the historical record of how the
+hosting blocker was actually resolved. That resolution required a second, externally
+maintained GitHub repo (`bulk-clean-oauth`) purely to satisfy AT Protocol's
+discoverable-client requirement that `client_id` resolve to a document at exactly
+`/oauth-client-metadata.json` on the origin root — not achievable from this repo's own
+GitHub Pages project site without a custom domain. Rather than keep maintaining a repo
+outside `erasechat` for one platform, Bluesky support was removed from the extension
+entirely (see CHANGELOG.md's "Removed Bluesky platform support" entry for the full list
+of files touched). The extension is now a six-platform tool: Slack plus optional Reddit,
+X, Mastodon, Microsoft Teams, and Telegram.

@@ -1,7 +1,5 @@
-// Runs webpack.telegram.config.js. Separate from scripts/build-bluesky.js (esbuild)
-// because Telegram's dependency (teleproto, a real MTProto client) needs webpack's
-// Node-polyfill plugin -- esbuild has no equivalent. See webpack.telegram.config.js
-// for why the two bundlers run side by side rather than being unified.
+// Runs webpack.telegram.config.js. Telegram's dependency (teleproto, a real MTProto
+// client) needs webpack's Node-polyfill plugin.
 const { execFileSync } = require("node:child_process");
 const path = require("node:path");
 

@@ -20,9 +20,6 @@ DIST="$ROOT/dist"
 rm -rf "$DIST"
 mkdir -p "$DIST/chrome" "$DIST/firefox"
 
-echo "Bundling Bluesky's OAuth client (esbuild)..."
-node scripts/build-bluesky.js
-
 echo "Bundling Telegram's MTProto client (webpack)..."
 node scripts/build-telegram.js
 
@@ -57,14 +54,12 @@ copy_assets() {
   done
 
   # platforms/ mixes each platform's shipped runtime files with bundler source
-  # (*.src.js, only esbuild/webpack ever load these), sourcemaps, and Bluesky's
-  # client-metadata.json (a doc-only reference copy of what's actually hosted --
-  # see that file's own comment). None of these three are loaded by the built
-  # extension, so prune them rather than list every platform's runtime files by
-  # hand the way ASSETS above does for everything outside platforms/.
+  # (*.src.js, only esbuild/webpack ever load these) and sourcemaps. Neither is
+  # loaded by the built extension, so prune them rather than list every
+  # platform's runtime files by hand the way ASSETS above does for everything
+  # outside platforms/.
   find "$dest/platforms" -name '*.src.js' -delete
   find "$dest/platforms" -name '*.bundle.js.map' -delete
-  rm -f "$dest/platforms/bluesky/client-metadata.json"
 }
 
 echo "Building Chrome/Chromium package (manifest.json)..."

@@ -9,8 +9,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const stepCode = document.getElementById('step-code');
   const stepPassword = document.getElementById('step-password');
   const stepSuccess = document.getElementById('step-success');
-  // Renamed from 'error-msg' to avoid colliding with Bluesky's own element of the
-  // same original id -- both views' markup now lives in the same document.
   const errorMsg = document.getElementById('error-msg-telegram');
 
   const btnRequest = document.getElementById('btn-request-code');
@@ -117,8 +115,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnLogout.addEventListener('click', async () => {
     // Merely forgetting the session locally leaves it valid on Telegram's own
     // servers indefinitely (visible/revocable only from Telegram's own "Active
-    // Sessions" settings) -- the same class of bug already fixed for Bluesky's
-    // logout. Connect with the stored session and call auth.LogOut so the
+    // Sessions" settings). Connect with the stored session and call auth.LogOut so the
     // session is actually invalidated server-side, then clear local storage
     // either way (a network failure here shouldn't trap the user unable to log
     // out of the extension itself).

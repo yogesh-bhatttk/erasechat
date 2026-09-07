@@ -24,8 +24,7 @@
   ],
   "optional_permissions": [
     "cookies",
-    "webRequest",
-    "identity"
+    "webRequest"
   ],
   "optional_host_permissions": [
     "*://*.reddit.com/*",

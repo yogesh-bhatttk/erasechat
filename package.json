@@ -10,9 +10,9 @@
   },
   "scripts": {
     "lint": "eslint .",
-    "test": "node scripts/build-bluesky.js && node scripts/build-telegram.js && node --test \"tests/*.test.js\"",
-    "test:unit": "node scripts/build-bluesky.js && node scripts/build-telegram.js && node --test \"tests/*.test.js\"",
-    "test:e2e": "node scripts/build-bluesky.js && node scripts/build-telegram.js && playwright test",
+    "test": "node scripts/build-telegram.js && node --test \"tests/*.test.js\"",
+    "test:unit": "node scripts/build-telegram.js && node --test \"tests/*.test.js\"",
+    "test:e2e": "node scripts/build-telegram.js && playwright test",
     "build": "bash scripts/build.sh",
     "version:set": "bash scripts/set-version.sh",
     "hooks:install": "git config core.hooksPath .githooks && echo \"pre-push guard active (main: no force-push, no deletion, gate must pass)\"",
@@ -20,8 +20,6 @@
     "verify": "npm run lint && npm test && npm run test:e2e && npm run build && npm run validate:firefox"
   },
   "dependencies": {
-    "@atproto/api": "^0.20.42",
-    "@atproto/oauth-client-browser": "^0.5.4",
     "teleproto": "^1.229.0"
   },
   "devDependencies": {

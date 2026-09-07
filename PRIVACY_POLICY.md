@@ -4,11 +4,11 @@
 
 ## Overview
 
-Erasechat is a browser extension that helps users bulk-delete their own content across seven platforms: **Slack** (built in, always available) and six **optional** platforms the user can connect one at a time from the extension's popup: **Reddit, X, Mastodon, Microsoft Teams, Bluesky, and Telegram**. This privacy policy describes what data the extension accesses for each platform, how it is used, and how it is stored.
+Erasechat is a browser extension that helps users bulk-delete their own content across six platforms: **Slack** (built in, always available) and five **optional** platforms the user can connect one at a time from the extension's popup: **Reddit, X, Mastodon, Microsoft Teams, and Telegram**. This privacy policy describes what data the extension accesses for each platform, how it is used, and how it is stored.
 
 ## Data Collection
 
-Erasechat does **NOT** collect, transmit, sell, or share any user data with third parties, on any platform. All data processing happens entirely within your browser on your local device. There is no developer-operated backend server anywhere in this extension — every network request goes directly from your browser to the platform you're managing (or, for Bluesky, to the AT Protocol server your account actually lives on).
+Erasechat does **NOT** collect, transmit, sell, or share any user data with third parties, on any platform. All data processing happens entirely within your browser on your local device. There is no developer-operated backend server anywhere in this extension — every network request goes directly from your browser to the platform you're managing.
 
 Connecting a platform beyond Slack is always something you do explicitly, one click at a time, from the popup's platform picker — nothing beyond Slack is ever contacted automatically.
 
@@ -57,15 +57,6 @@ Because Mastodon is federated, host permission is requested narrowly for the **o
 
 Teams token capture requires the optional `webRequest` permission and only activates once you grant it for the Teams platform specifically; it is never active for any other site.
 
-**Bluesky** (optional, connected on request)
-
-| Data Type | Purpose | Storage Location | Retention |
-|---|---|---|---|
-| OAuth 2.0 + PKCE + DPoP session (access/refresh tokens, DPoP signing key) | Authenticate scan/delete calls to your account's AT Protocol server (PDS) | Managed entirely by the official `@atproto/oauth-client-browser` library in the browser's IndexedDB — not in `chrome.storage` | Until you log out (which now correctly revokes the session server-side) or the token naturally expires |
-| Post/repost text and timestamps | Shown in the scan-results preview before you confirm a delete | Browser memory only, for the current dashboard tab | Cleared when the tab closes or a new scan runs |
-
-Bluesky login uses `chrome.identity.launchWebAuthFlow` against the real, publicly-hosted OAuth client metadata this project maintains (see `client-metadata.json`) — no separate developer server is involved beyond that static, publicly-auditable metadata file.
-
 **Telegram** (optional, connected on request)
 
 | Data Type | Purpose | Storage Location | Retention |
@@ -77,7 +68,7 @@ Telegram communication happens directly between your browser and Telegram's own 
 
 ### A note on delete-progress markers
 
-For all six non-Slack platforms, a small marker (just two numbers — how many items were processed and the total) is written to `chrome.storage.local` while a deletion is actively running, so that if the browser tab is closed or crashes mid-delete, the next time you open that platform's dashboard you're told a previous run was interrupted rather than being left with no idea what happened. This marker never contains message content, is cleared automatically when a deletion finishes, and cannot be used to resume a delete without you running a fresh scan first.
+For all five non-Slack platforms, a small marker (just two numbers — how many items were processed and the total) is written to `chrome.storage.local` while a deletion is actively running, so that if the browser tab is closed or crashes mid-delete, the next time you open that platform's dashboard you're told a previous run was interrupted rather than being left with no idea what happened. This marker never contains message content, is cleared automatically when a deletion finishes, and cannot be used to resume a delete without you running a fresh scan first.
 
 ### Data the Extension Does NOT Access, On Any Platform
 
@@ -91,14 +82,14 @@ All data accessed by Erasechat, on every platform, is used exclusively for that 
 
 ## Data Storage
 
-- **No data is transmitted to external servers.** Every network call goes directly from your browser to the platform being managed (Slack, reddit.com, x.com, your chosen Mastodon instance, teams.microsoft.com, your account's Bluesky PDS, or Telegram's own MTProto servers).
+- **No data is transmitted to external servers.** Every network call goes directly from your browser to the platform being managed (Slack, reddit.com, x.com, your chosen Mastodon instance, teams.microsoft.com, or Telegram's own MTProto servers).
 - **Slack session tokens are never written to disk** — stored only in `chrome.storage.session`, cleared when the browser closes.
-- **The other six platforms' credentials** (Reddit modhash, X CSRF token, Mastodon access token, Teams Bearer token, Telegram session string) are stored in `chrome.storage.local` so you don't have to reconnect every time you open the extension — this is standard, expected behavior for a browser extension and stays entirely on your device (`chrome.storage.local` is never synced to any account or server by this extension). Bluesky is the one exception: its OAuth session lives in IndexedDB, managed by the official AT Protocol client library, not by this extension's own code.
+- **The other five platforms' credentials** (Reddit modhash, X CSRF token, Mastodon access token, Teams Bearer token, Telegram session string) are stored in `chrome.storage.local` so you don't have to reconnect every time you open the extension — this is standard, expected behavior for a browser extension and stays entirely on your device (`chrome.storage.local` is never synced to any account or server by this extension).
 - **Deletion queue state and user-name caches** are temporarily persisted where noted above and are automatically cleared on completion, cancellation, or (for the name cache) after 24 hours.
 
 ## Data Sharing
 
-Erasechat does **not**, on any of the seven platforms:
+Erasechat does **not**, on any of the six platforms:
 - Transmit any data to third-party servers
 - Include any analytics, telemetry, or tracking code
 - Use advertising networks or data brokers
@@ -108,15 +99,14 @@ Erasechat does **not**, on any of the seven platforms:
 
 | Permission | Justification |
 |---|---|
-| `storage` | Store deletion queue state, user name cache, and (for the six non-Slack platforms) connection credentials, all locally |
+| `storage` | Store deletion queue state, user name cache, and (for the five non-Slack platforms) connection credentials, all locally |
 | `scripting` | Inject the dashboard UI into the Slack web client tab |
 | `alarms` | Schedule Slack deletion queue processing in the background |
 | `host_permissions: *.slack.com`, `slack.com` | Inject the content script and call Slack's REST API |
 | `optional_permissions: cookies` | Read the Reddit/X session cookie already present in your browser, only after you choose to connect that specific platform |
 | `optional_permissions: webRequest` | Passively observe your own Microsoft Teams web-client traffic to capture an auth token, only after you choose to connect Teams |
-| `optional_permissions: identity` | Run Bluesky's OAuth login flow (`chrome.identity.launchWebAuthFlow`), only after you choose to connect Bluesky |
 | `optional_host_permissions: *.reddit.com`, `*.x.com`, `*.twitter.com`, `*.teams.microsoft.com`, `*.msg.teams.microsoft.com` | Call each platform's own API, requested only when you connect that specific platform |
-| `optional_host_permissions: https://*/*` | The declared upper bound Chrome requires so a **narrow, runtime-resolved** request can be legal: Mastodon requests only the exact instance you typed, and Bluesky requests only what its OAuth library resolves for your account's actual PDS — this permission is never granted broadly, and nothing is requested from it until you connect Mastodon or Bluesky specifically |
+| `optional_host_permissions: https://*/*` | The declared upper bound Chrome requires so a **narrow, runtime-resolved** request can be legal: Mastodon requests only the exact instance you typed — this permission is never granted broadly, and nothing is requested from it until you connect Mastodon specifically |
 
 Telegram needs no host permission at all — it communicates over its own native MTProto/WebSocket transport, not ordinary web requests.
 
@@ -124,7 +114,7 @@ Telegram needs no host permission at all — it communicates over its own native
 
 - You can **pause, resume, or cancel** any Slack deletion operation at any time.
 - You can **close a dashboard tab** to stop all operations for that platform.
-- You can **disconnect any of the six optional platforms** independently — connecting one never affects the others, and none of them are required to use Slack.
+- You can **disconnect any of the five optional platforms** independently — connecting one never affects the others, and none of them are required to use Slack.
 - You can **uninstall the extension** at any time, which clears all stored data across every platform.
 - Deletion operations require explicit confirmation on every platform, including a stricter "type the exact count" verification step for large batches (more than 100 items) rather than a fixed one-word confirmation.
 

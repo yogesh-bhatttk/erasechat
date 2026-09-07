@@ -5,14 +5,14 @@ Kept separate from `STORE_LISTING.md` because that file is written against the *
 Web Store's taxonomy, which does not match AMO's (see Categories below).
 
 > **⚠️ Stale as of 2026-09-07.** This file was written before the extension grew from
-> Slack-only into a 7-platform tool (Slack plus optional Reddit, X, Mastodon, Microsoft
-> Teams, Bluesky, and Telegram, each connected explicitly from the popup). The
+> Slack-only into a 6-platform tool (Slack plus optional Reddit, X, Mastodon, Microsoft
+> Teams, and Telegram, each connected explicitly from the popup). The
 > `data_collection_permissions: ["none"]` claim below still holds — nothing is
-> transmitted to the developer on any of the seven platforms, only stored locally on the
+> transmitted to the developer on any of the six platforms, only stored locally on the
 > user's own device — but the Description and Notes for Reviewer text still describe
 > Slack only. Before a real submission, at minimum add a paragraph to Notes for Reviewer
 > along the lines of the "OPTIONAL PLATFORMS BEYOND SLACK" addendum in
-> `CWS_SUBMISSION_FIELDS.md`, and update the Description to mention the six optional
+> `CWS_SUBMISSION_FIELDS.md`, and update the Description to mention the five optional
 > platforms exist. Screenshots further down are also Slack-only and unchanged.
 
 ---
@@ -204,8 +204,8 @@ None. Declared in the manifest as
 browser_specific_settings.gecko.data_collection_permissions.required: ["none"].
 
 OPTIONAL PLATFORMS BEYOND SLACK
-The popup also offers six further platforms — Reddit, X, Mastodon, Microsoft Teams,
-Bluesky, and Telegram — each connected explicitly, one at a time, from the popup's
+The popup also offers five further platforms — Reddit, X, Mastodon, Microsoft Teams,
+and Telegram — each connected explicitly, one at a time, from the popup's
 platform picker. None is required to use Slack, and none is contacted until the user
 clicks it. Each follows the same scan-preview-confirm-delete safety model as Slack, using
 that platform's own existing session/login (or, for Mastodon/Telegram, credentials the

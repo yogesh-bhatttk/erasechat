@@ -108,28 +108,13 @@ const PLATFORMS = [
     ready: true
   },
   {
-    id: "bluesky",
-    name: "Bluesky",
-    accent: ["#0085ff", "#10b981"],
-    // Account's PDS host varies per user and is resolved internally by
-    // @atproto/oauth-client-browser, not here. Listed for documentation --
-    // bluesky-popup.bundle.js requests these itself; popup.js's generic
-    // connectAndLaunchPlatform() is not used for this platform at all (see
-    // onPlatformRowClick's special case, same as Slack).
-    isTabMatch: null,
-    optionalHostPermissions: ["https://*/*"],
-    optionalPermissions: ["identity"],
-    dashboard: "platforms/bluesky/dashboard-bluesky.html",
-    ready: true
-  },
-  {
     id: "telegram",
     name: "Telegram",
     accent: ["#2AABEE", "#229ED9"],
     // Native MTProto client, not a web origin -- nothing to auto-detect or match,
     // and no host permission needed (it talks over its own WebSocket transport).
     // popup.js's generic connectAndLaunchPlatform() is not used for this platform
-    // at all (see onPlatformRowClick's special case, same as Slack and Bluesky) --
+    // at all (see onPlatformRowClick's special case, same as Slack) --
     // telegram-popup.bundle.js manages its own multi-step login entirely.
     isTabMatch: null,
     dashboard: "platforms/telegram/dashboard-telegram.html",

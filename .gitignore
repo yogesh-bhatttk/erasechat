@@ -24,12 +24,8 @@ Thumbs.db
 web-ext-artifacts/
 dist/
 
-# Generated bundles (scripts/build-bluesky.js, scripts/build-telegram.js) --
+# Generated bundles (scripts/build-telegram.js) --
 # rebuilt by `npm run build`, not committed source, same reasoning as dist/ above.
-platforms/bluesky/bluesky-popup.bundle.js
-platforms/bluesky/bluesky-popup.bundle.js.map
-platforms/bluesky/bluesky-dashboard.bundle.js
-platforms/bluesky/bluesky-dashboard.bundle.js.map
 platforms/telegram/telegram-popup.bundle.js
 platforms/telegram/telegram-popup.bundle.js.map
 platforms/telegram/telegram-dashboard.bundle.js

@@ -1,5 +1,5 @@
 // Tracks whether the user has navigated away from the platform-picker list (into
-// the Slack/Bluesky/Telegram special views) while a connectAndLaunchPlatform()
+// the Slack/Telegram special views) while a connectAndLaunchPlatform()
 // call for some OTHER platform is still in flight, so that call's eventual
 // afterConnect() can tell it should no longer yank the user into a newly-opened
 // dashboard tab with the popup closed out from under them.
@@ -85,7 +85,6 @@ document.addEventListener("DOMContentLoaded", () => {
   renderPlatformList();
 
   document.getElementById("btn-back-to-platforms").addEventListener("click", showPlatformList);
-  document.getElementById("btn-back-to-platforms-bluesky").addEventListener("click", showPlatformList);
   document.getElementById("btn-back-to-platforms-telegram").addEventListener("click", showPlatformList);
 
   // Auto-skip the picker only when the active tab is unambiguously Slack's --
@@ -155,11 +154,6 @@ function onPlatformRowClick(platform) {
   if (platform.id === "slack") {
     leftPlatformPicker = true; // see connectAndLaunchPlatform's afterConnect guard
     enterSlackView();
-    return;
-  }
-  if (platform.id === "bluesky") {
-    leftPlatformPicker = true;
-    enterBlueskyView();
     return;
   }
   if (platform.id === "telegram") {
@@ -343,7 +337,6 @@ function connectAndLaunchPlatform(platform, formValues) {
 function showPlatformList() {
   document.getElementById("platform-list-state").classList.remove("hidden");
   document.getElementById("slack-view").classList.add("hidden");
-  document.getElementById("bluesky-view").classList.add("hidden");
   document.getElementById("telegram-view").classList.add("hidden");
   const badge = document.getElementById("brand-badge");
   if (badge) badge.textContent = t("brandTag", "Choose a platform");
@@ -353,24 +346,13 @@ function showPlatformList() {
 }
 
 // Telegram's multi-step login flow (credentials -> code -> 2FA -> success) is
-// managed entirely by telegram-popup.bundle.js, same reasoning as
-// enterBlueskyView() above -- this only handles which view is visible.
+// managed entirely by telegram-popup.bundle.js -- this only handles which view
+// is visible.
 function enterTelegramView() {
   document.getElementById("platform-list-state").classList.add("hidden");
   document.getElementById("telegram-view").classList.remove("hidden");
   const badge = document.getElementById("brand-badge");
   if (badge) badge.textContent = "Telegram";
-}
-
-// Bluesky's own login/status states are managed entirely by bluesky-popup.bundle.js
-// (already listening on these elements since page load -- see that file's own
-// DOMContentLoaded handler and the comment on its <script> tag in popup.html). This
-// just handles which view is visible, matching enterSlackView() below.
-function enterBlueskyView() {
-  document.getElementById("platform-list-state").classList.add("hidden");
-  document.getElementById("bluesky-view").classList.remove("hidden");
-  const badge = document.getElementById("brand-badge");
-  if (badge) badge.textContent = "Bluesky";
 }
 
 function enterSlackView() {

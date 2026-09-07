@@ -4,9 +4,9 @@ A single place to track everything needed to publish. Items marked **(blocker)**
 resolved before submitting; **(you)** require your action outside this repo.
 
 > **⚠️ Stale on the multi-platform question (2026-09-07).** This checklist predates the
-> merge that added six optional platforms (Reddit, X, Mastodon, Microsoft Teams, Bluesky,
+> merge that added five optional platforms (Reddit, X, Mastodon, Microsoft Teams,
 > Telegram) alongside Slack. Add, before submitting: (1) a real scan-and-delete run against
-> a live account for each of the six, not just Slack — none has been verified end-to-end
+> a live account for each of the five, not just Slack — none has been verified end-to-end
 > against a real logged-in account yet (see `MULTI_PLATFORM_EXPANSION_PLAN.md` §7.10's
 > closing note); (2) confirmation that new screenshots/description covering the platform
 > picker were added (see the same note in `STORE_LISTING.md`); (3) re-verification of the

@@ -35,7 +35,7 @@ test('should load popup page and render the platform picker by default', async (
   const platformList = page.locator('#platform-list-state');
   await expect(platformList).not.toHaveClass(/hidden/);
   const rows = page.locator('.platform-row');
-  await expect(rows).toHaveCount(7);
+  await expect(rows).toHaveCount(6);
   await expect(page.locator('.platform-row[data-platform="slack"]')).toBeVisible();
 
   await context.close();

@@ -340,7 +340,7 @@ test("optional permissions are pinned to exactly the multi-platform surface", ()
   // These are inert until a specific platform's flow requests them via
   // chrome.permissions.request() at runtime (see popup/platform-registry.js) --
   // pinning the list here still catches an unreviewed permission sneaking in.
-  const expectedOptionalPermissions = ["cookies", "webRequest", "identity"];
+  const expectedOptionalPermissions = ["cookies", "webRequest"];
   const expectedOptionalHosts = [
     "*://*.reddit.com/*",
     "*://*.x.com/*",
