@@ -168,9 +168,12 @@ test("background wiring matches each browser's supported form", () => {
 
   assert.ok(Array.isArray(firefoxManifest.background.scripts), "Firefox needs background.scripts");
   assert.ok(!firefoxManifest.background.service_worker, "Firefox must not use service_worker");
-  // shared-filters.js must load BEFORE background.js: Firefox has no importScripts, so
-  // ordering here is the only thing that defines qualifies()/decideItemAction().
-  assert.deepStrictEqual(firefoxManifest.background.scripts, ["shared-filters.js", "background.js"]);
+  // shared-filters.js and every background/*.js listener must load BEFORE
+  // background.js: Firefox has no importScripts, so ordering here is the only thing
+  // that defines qualifies()/decideItemAction() and registers listeners like Teams'
+  // webRequest one before background.js itself runs.
+  assert.deepStrictEqual(firefoxManifest.background.scripts,
+    ["shared-filters.js", "background/teams-webrequest.js", "background.js"]);
 });
 
 test("shared-filters.js reaches the background in both browsers", () => {

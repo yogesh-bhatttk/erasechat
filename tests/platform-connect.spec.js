@@ -246,3 +246,51 @@ test('a granted permission and valid credentials opens the Mastodon dashboard ta
     await context.close();
   }
 });
+
+test('Teams opens straight to its dashboard when a token is already stored from a prior session', async () => {
+  const { context, extensionId } = await launch();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    const created = await page.evaluate(() => {
+      return new Promise((resolve) => {
+        chrome.permissions.request = (_req, cb) => cb(true);
+        chrome.tabs.create = (opts) => { resolve(opts); return Promise.resolve({}); };
+        window.close = () => {};
+
+        chrome.storage.local.set({ teams_token: 'Bearer abc', teams_base_url: 'https://teams.microsoft.com' }, () => {
+          document.querySelector('.platform-row[data-platform="teams"]').click();
+        });
+      });
+    });
+
+    expect(created.url).toMatch(/dashboard-teams\.html$/);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Teams times out with an actionable error when background.js never captures a token', async () => {
+  test.setTimeout(20000); // connectTeams' own poll loop runs up to 15s
+  const { context, extensionId } = await launch();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.evaluate(() => {
+      chrome.permissions.request = (_req, cb) => cb(true);
+      // Shrink the poll loop so this test doesn't actually wait 15 real seconds --
+      // exercises the exact same timeout/error path with a friendlier duration.
+      const platform = PLATFORMS.find((p) => p.id === 'teams');
+      platform.connect = () => connectTeams({ timeoutMs: 300, pollIntervalMs: 50 });
+    });
+
+    await page.locator('.platform-row[data-platform="teams"]').click();
+
+    await expect(page.locator('#platform-connect-error')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('#platform-connect-error')).toContainText(/teams\.microsoft\.com/i);
+  } finally {
+    await context.close();
+  }
+});

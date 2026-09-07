@@ -76,7 +76,10 @@ const PLATFORMS = [
     optionalHostPermissions: ["*://*.teams.microsoft.com/*", "*://*.msg.teams.microsoft.com/*"],
     optionalPermissions: ["webRequest"],
     dashboard: "dashboard-teams.html",
-    ready: false
+    // No form, no cookie to check -- background/teams-webrequest.js passively
+    // captures a token once permission is granted; this just waits for that.
+    connect: () => connectTeams(),
+    ready: true
   },
   {
     id: "bluesky",

@@ -25,6 +25,7 @@ mkdir -p "$DIST/chrome" "$DIST/firefox"
 # LICENSE ships for hygiene.
 ASSETS=(
   background.js
+  background
   content.js
   content.css
   popup.html
@@ -46,6 +47,9 @@ ASSETS=(
   dashboard-mastodon.html
   dashboard-mastodon.js
   dashboard-mastodon.css
+  dashboard-teams.html
+  dashboard-teams.js
+  dashboard-teams.css
 )
 
 copy_assets() {

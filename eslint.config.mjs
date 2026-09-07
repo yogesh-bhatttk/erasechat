@@ -76,6 +76,18 @@ export default [
     rules: correctnessRules
   },
   {
+    // Per-platform background listeners, pulled into background.js via
+    // importScripts on Chrome or manifest.firefox.json's background.scripts on
+    // Firefox (see background.js's own comment on that split).
+    files: ["background/*.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      globals: { ...browserGlobals, self: "readonly" }
+    },
+    rules: correctnessRules
+  },
+  {
     // Standalone per-platform dashboard pages (opened via chrome.tabs.create,
     // unlike Slack's shadow-DOM overlay in content.js) — full DOM available.
     files: ["dashboard-*.js"],
@@ -141,7 +153,13 @@ export default [
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "script",
-      globals: { module: "writable", connectReddit: "readonly", connectX: "readonly", connectMastodon: "readonly" }
+      globals: {
+        module: "writable",
+        connectReddit: "readonly",
+        connectX: "readonly",
+        connectMastodon: "readonly",
+        connectTeams: "readonly"
+      }
     },
     rules: correctnessRules
   },
@@ -183,6 +201,18 @@ export default [
         hasSlackAccess: "readonly",
         showPermissionRequiredState: "readonly",
         showActiveState: "readonly"
+      }
+    }
+  },
+  {
+    // Same page.evaluate() page-scope situation as tests/permissions.spec.js above,
+    // for the identifiers this spec's callbacks reach for: the platform registry
+    // itself and the connect-<platform>.js function under test.
+    files: ["tests/platform-connect.spec.js"],
+    languageOptions: {
+      globals: {
+        PLATFORMS: "readonly",
+        connectTeams: "readonly"
       }
     }
   }
