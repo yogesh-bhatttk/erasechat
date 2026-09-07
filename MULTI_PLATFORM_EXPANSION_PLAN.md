@@ -561,7 +561,65 @@ polish issue, it's "does this feature work at all."
   the plan's only concrete rate number (50/15min) applies to the paid v2 API, not the
   internal GraphQL mutation actually in use here.
 
-### 7.7 Cross-cutting takeaways
+### 7.7 Fix pass — 2026-09-07
+
+All six extensions received a targeted fix pass addressing the critical bugs in
+§7.1–7.6. Each directory is now a local git repo (was previously untracked) with a
+`Baseline: pre-fix prototype state (audited broken)` commit, so every fix is reviewable
+as a diff against the broken state documented above. Verified status per platform:
+
+- **Telegram** — **fixed and verified.** Load-bug (unbundled script), full
+  popup/dashboard DOM rebuild (4-step login flow matching popup.js exactly),
+  `networkSocket: extensions.PromisedWebSockets` forced on both `TelegramClient`
+  constructions, and `FLOOD_WAIT` retry/backoff added. Rebuilt the webpack bundle and
+  confirmed a clean build with every referenced DOM id now present in both HTML files.
+- **Mastodon** — **fixed and verified.** Login popup rebuilt to match popup.js's
+  expected DOM, real 30-per-30-minute rolling-window rate-limit pacing added (on top of
+  the existing retry/backoff), dead `content.css` removed. A follow-up pass also fixed
+  two additional ID mismatches the fix agent found but correctly left out of its
+  assigned scope: `dashboard.js` referenced a nonexistent `connected-as` element (would
+  have crashed the dashboard script immediately after login) and a `text-filter`/
+  `filter-input` id typo — both now corrected and cross-checked (every `getElementById`
+  call in both popup.js and dashboard.js now resolves to a real element).
+- **Reddit** — **fixed and verified.** Added `credentials: "include"` to every
+  reddit.com fetch (the missing piece that made the whole cookie-session premise not
+  work), rebuilt the non-functional popup to match popup.js's expected DOM, and added a
+  filter to skip already-deleted/removed items during scan.
+- **X.com** — **fixed and verified.** Added `credentials: "include"` to every
+  twitter.com/x.com fetch, moved the delete loop's try/catch inside the loop body so one
+  failed item no longer aborts the whole batch, and added user-facing messaging for the
+  case where a stale queryId is the likely cause of a failure.
+- **Microsoft Teams** — **fixed and verified.** `webRequest` listener's `extraInfoSpec`
+  now includes `"extraHeaders"` (without it, Chrome was almost certainly withholding the
+  `Authorization` header from ever reaching the listener), added a 401-retry path that
+  re-reads storage for a fresher token before giving up, and improved 403 error messaging
+  to explain the work/school-account + messaging-policy requirement.
+- **Bluesky — partially fixed; one architectural gap remains, likely still blocks real
+  login.** The load-crash bug (unbundled script) is fixed, and the previously
+  syntactically-invalid `client_id` (`http://127.0.0.1/...`) is now a well-formed AT
+  Protocol "loopback client" id. **However**, checking the actual
+  `@atproto/oauth-types` library this code depends on turned up a deeper problem the fix
+  doesn't resolve: the loopback-client pattern's own schema
+  (`oauthLoopbackClientRedirectUriSchema`) only accepts a literal loopback address
+  (`127.0.0.1` or `[::1]`) as a valid embedded redirect URI — even `localhost` is
+  explicitly rejected, let alone `https://<extension-id>.chromiumapp.org/...`, which is
+  what `chrome.identity.launchWebAuthFlow()` actually redirects to. Since the
+  authorization server can't reach `http://localhost` to fetch real metadata, it very
+  likely derives the client's valid redirect URIs purely by parsing the client_id string
+  server-side (defaulting to the two loopback URIs when none are embedded) — meaning the
+  real authorization request's redirect_uri almost certainly won't match what the server
+  expects, and the login would likely be rejected server-side even though nothing in the
+  extension's own code throws. **The loopback client_id pattern is very likely
+  fundamentally incompatible with a Chrome extension's OAuth redirect mechanism, not
+  just previously misconfigured.** The only durable fix is the one already flagged as an
+  unmissable TODO in `client-metadata.json`: host that file at a real, stable HTTPS URL
+  (e.g. GitHub Pages) with the actual `chromiumapp.org` redirect URI declared in
+  `redirect_uris`, and point `client_id` at that hosted URL instead of the loopback
+  pattern. This is a small one-time hosting/config step, not further code work — but
+  until it's done, do not assume Bluesky login actually completes end-to-end even though
+  the code no longer crashes.
+
+### 7.8 Cross-cutting takeaways
 
 - **The popup.html/popup.js DOM mismatch bug recurs in three separate extensions**
   (Mastodon, Reddit, Telegram — plus Telegram's dashboard too) — a strong signal that
