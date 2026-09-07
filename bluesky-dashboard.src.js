@@ -1,12 +1,13 @@
 import { Agent } from '@atproto/api';
 import { BrowserOAuthClient } from '@atproto/oauth-client-browser';
 
-// AT Protocol "loopback client" pattern -- see the matching comment in
+// Hosted "discoverable client" id -- see the matching comment in
 // bluesky-popup.src.js for the full explanation. Must stay in sync with that file
-// since both need to resolve to the same client_id/session for
-// @atproto/oauth-client-browser's shared IndexedDB session store to work.
+// (both the CLIENT_ID value itself and this whole clientMetadata shape) since both
+// need to resolve to the same client identity for @atproto/oauth-client-browser's
+// shared IndexedDB session store to recognize a session popup.js created.
 const OAUTH_SCOPE = "atproto transition:generic";
-const LOOPBACK_CLIENT_ID = `http://localhost?scope=${encodeURIComponent(OAUTH_SCOPE)}`;
+const CLIENT_ID = "https://yogesh-bhatttk.github.io/bulk-clean-oauth/oauth-client-metadata.json";
 
 // Built lazily, inside the DOMContentLoaded handler's own try/catch below, not at
 // module top-level -- identity is an OPTIONAL permission here (unlike the
@@ -21,15 +22,15 @@ function buildClient() {
   return new BrowserOAuthClient({
     handleResolver: 'https://bsky.social',
     clientMetadata: {
-      client_id: LOOPBACK_CLIENT_ID,
-      client_name: "Bulk Clean for Bluesky",
-      client_uri: "https://github.com/bulk-clean",
+      client_id: CLIENT_ID,
+      client_name: "Bulk Clean",
+      client_uri: "https://yogesh-bhatttk.github.io/bulk-clean-oauth/",
       redirect_uris: [redirectUri],
       scope: OAUTH_SCOPE,
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
-      application_type: "native",
+      application_type: "web",
       dpop_bound_access_tokens: true
     }
   });

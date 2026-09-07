@@ -11,20 +11,24 @@
 // instead of happening at module load time.
 import { BrowserOAuthClient } from '@atproto/oauth-client-browser';
 
-// AT Protocol "loopback client" pattern for public clients that don't host a
-// client-metadata.json (see @atproto/oauth-types' oauth-client-id-loopback.js:
-// LOOPBACK_CLIENT_ID_ORIGIN === "http://localhost"). Only "http://localhost" is a
-// recognized loopback client_id origin, and it must not be used as if it were a
-// fetchable metadata URL.
+// This extension's client_id is a "discoverable client" -- a real, hosted, public
+// HTTPS URL the authorization server fetches directly to get the client's
+// authoritative metadata (redirect_uris included), rather than trusting anything
+// this code claims about itself. That fetch is the actual security boundary, so
+// this local object matters less than keeping it consistent with what's hosted.
 //
-// IMPORTANT: this loopback client_id is only valid for local/dev testing -- the
-// AT Protocol authorization server rejects it for anything but a literal loopback
-// redirect_uri (127.0.0.1/[::1]), which chrome.identity.launchWebAuthFlow's
-// *.chromiumapp.org redirect is not (confirmed against the real bsky.social server
-// during this platform's audit). Real login requires the hosted client-metadata.json
-// URL described in that file's own "_comment" field, used as client_id instead.
+// Previously used the AT Protocol "loopback client" pattern instead (client_id =
+// http://localhost?scope=...) to avoid needing any hosting -- confirmed against
+// the real bsky.social server that it doesn't work here: the loopback pattern only
+// accepts a literal loopback redirect_uri (127.0.0.1/[::1]), and
+// chrome.identity.launchWebAuthFlow's *.chromiumapp.org redirect isn't one. See
+// MULTI_PLATFORM_EXPANSION_PLAN.md §7.8 for that finding's HTTP 400 evidence.
+//
+// client-metadata.json in this repo is kept in sync with what's actually hosted at
+// CLIENT_ID below -- see that file if this ever needs to change (e.g. redirect_uris
+// only changes if the extension's own id, pinned via manifest.json's "key", does).
 const OAUTH_SCOPE = "atproto transition:generic";
-const LOOPBACK_CLIENT_ID = `http://localhost?scope=${encodeURIComponent(OAUTH_SCOPE)}`;
+const CLIENT_ID = "https://yogesh-bhatttk.github.io/bulk-clean-oauth/oauth-client-metadata.json";
 const REQUIRED_PERMISSIONS = { permissions: ["identity"], origins: ["https://*/*"] };
 
 let client = null;
@@ -34,15 +38,15 @@ function buildClient() {
   return new BrowserOAuthClient({
     handleResolver: "https://bsky.social",
     clientMetadata: {
-      client_id: LOOPBACK_CLIENT_ID,
-      client_name: "Bulk Clean for Bluesky",
-      client_uri: "https://github.com/bulk-clean",
+      client_id: CLIENT_ID,
+      client_name: "Bulk Clean",
+      client_uri: "https://yogesh-bhatttk.github.io/bulk-clean-oauth/",
       redirect_uris: [redirectUri],
       scope: OAUTH_SCOPE,
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
-      application_type: "native",
+      application_type: "web",
       dpop_bound_access_tokens: true
     }
   });

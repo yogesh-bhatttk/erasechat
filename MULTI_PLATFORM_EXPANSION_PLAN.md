@@ -51,7 +51,7 @@ Every verdict below was checked in three parts:
 | **Reddit** (fixed) | implemented, pagination/backoff both present | popup + dashboard render correctly (both the real "no session" error path and a seeded logged-in state) in a real browser | Free | ✅ strong, long-running category | **Loads and renders correctly** (§7.8) |
 | **Microsoft Teams** (fixed) | DELETE on internal chat API | popup + dashboard render correctly with a seeded fake token in a real browser; real token capture not attempted | Free | ⚠️ one niche paid tool exists | **Loads and renders correctly** (§7.8) |
 | **X.com** (fixed) | implemented (dynamic queryId extraction works) | popup + dashboard render correctly (both the real "no session" error path and a seeded logged-in state) in a real browser | Free | ✅ strong (multiple competitors) | **Loads and renders correctly** (§7.8) |
-| **Bluesky** (fixed load bug; OAuth blocked) | design correct (`applyWrites`) | loads and renders correctly, but **real login is confirmed rejected** by bsky.social's own server | Free | ✅ several paid competitors | **Blocked on OAuth hosting, not a code bug** (§7.8) |
+| **Bluesky** (fixed) | design correct (`applyWrites`) | OAuth hosting now live; real PAR request against bsky.social succeeds and reaches the genuine `bsky.social/oauth/authorize` login page | Free | ✅ several paid competitors | **OAuth hosting blocker resolved** (§7.10) |
 
 **Correction (2026-09-07):** the six non-Slack rows above were originally marked
 "shipped"/"Done," which an independent code audit (§7.1–§7.6) found to be false — none
@@ -63,19 +63,21 @@ scoped in). As of now: **all six load and render without console errors in a rea
 browser**, verified with seeded/fake credentials standing in for a real account (a real
 login was not performed for Telegram, Mastodon, Reddit, Teams, or X — only for Bluesky,
 where it was necessary to confirm the OAuth blocker empirically rather than
-theoretically). **Bluesky's real login is confirmed blocked** by an architectural
-mismatch between its OAuth pattern and Chrome's extension redirect mechanism — this
-needs a small hosting step (§7.8), not more code. The other five platforms' actual
-scan/delete network calls against a real, live account remain untested by this pass —
-"renders correctly with fake data" is not the same claim as "successfully deletes a real
-post," and that gap should be closed with real accounts before shipping. See §7 for full
-findings and §7.7/§7.8 for exactly what changed and how it was verified, before doing
-anything else with this family of extensions.
+theoretically). **Bluesky's OAuth hosting blocker is now resolved (§7.10)**: the
+required `oauth-client-metadata.json` is hosted at a stable public HTTPS URL, and a real
+PAR request against bsky.social now succeeds and reaches the genuine
+`bsky.social/oauth/authorize` login page — confirmed against the live server, not just
+by reading the library source. The other five platforms' actual scan/delete network
+calls against a real, live account remain untested by this pass — "renders correctly
+with fake data" is not the same claim as "successfully deletes a real post," and that
+gap should be closed with real accounts before shipping. See §7 for full findings and
+§7.7/§7.8/§7.10 for exactly what changed and how it was verified, before doing anything
+else with this family of extensions.
 
 The pattern across all six: **none of them give you Slack's easy combination for free**
 — every one trades away at least one of the three legs (batching, backend-less auth, or
-zero cost/friction). Five of the six now at least run correctly; Bluesky's remaining gap
-is a one-time hosting/config decision, not an engineering unknown.
+zero cost/friction). All six now at least run correctly through to their respective
+login/auth step; none has had a full real-account scan-and-delete run performed yet.
 
 ---
 
@@ -760,3 +762,61 @@ running the extension.
   don't assume this list is exhaustive or that re-reading it later will still be
   accurate; re-audit against the code, not against this document, before doing further
   work.
+
+### 7.10 Bluesky OAuth hosting blocker — resolved (2026-09-07)
+
+By this point all seven platforms had been merged into one unified extension (this
+repo, `bulk-clean-for-slack`) rather than shipping as seven separate installs — see the
+per-platform ports and the manifest/popup/dashboard restructuring already committed
+ahead of this section for that migration. Bluesky's OAuth flow uses that unified
+extension's own pinned id (`aakjpapmmdfbfhaialkekbobcfhnieep`, via manifest.json's
+`"key"`), not the standalone id an earlier attempt in this project had generated before
+the merge decision.
+
+§7.8 confirmed against the real server that the loopback `client_id` pattern is
+fundamentally incompatible with `chrome.identity.launchWebAuthFlow()`'s
+`*.chromiumapp.org` redirect, and that the only durable fix is hosting a real
+`client_id` metadata document. That hosting is now done:
+
+- A new public repo, [`bulk-clean-oauth`](https://github.com/yogesh-bhatttk/bulk-clean-oauth),
+  hosts the client metadata via GitHub Pages, live at
+  `https://yogesh-bhatttk.github.io/bulk-clean-oauth/oauth-client-metadata.json`.
+- `bluesky-popup.src.js` and `bluesky-dashboard.src.js` now point `CLIENT_ID` at that
+  hosted URL (a "discoverable client," per the AT Protocol OAuth spec) instead of the
+  loopback pattern. `client-metadata.json` in this repo is kept only as the source-of-
+  truth reference for what's hosted, not shipped as part of the extension.
+- Getting the hosted document actually accepted took two more real-server-confirmed
+  fixes beyond "just host it somewhere":
+  - **Filename**: `@atproto/oauth-types`' `conventionalOAuthClientIdSchema` requires a
+    discoverable client's URL path to be exactly `/oauth-client-metadata.json` — an
+    initial `client-metadata.json` (matching this repo's own local reference filename)
+    was rejected. Renamed the hosted file to match the required convention.
+  - **`client_uri` origin**: the AT Protocol spec requires `client_uri` to share the
+    same origin as `client_id`. `client_uri` was initially
+    `https://github.com/yogesh-bhatttk/bulk-clean-oauth` (the repo page, on
+    `github.com`) while `client_id` resolves on `yogesh-bhatttk.github.io` — a real
+    origin mismatch the server rejected with `"client_uri must have the same origin as
+    the client_id"`. Fixed by pointing `client_uri` at
+    `https://yogesh-bhatttk.github.io/bulk-clean-oauth/` instead (added a minimal
+    `index.html` there so the URL resolves to something).
+- **Verified against the live server**, using a real public handle (`bsky.app`),
+  read-only — no credentials entered or needed to reach this point: the PAR request to
+  `https://bsky.social/oauth/par` now returns only the expected, transparently-handled
+  `use_dpop_nonce` retry (not `invalid_request`/`Invalid redirect_uri` as in §7.8), and
+  `chrome.identity.launchWebAuthFlow` opens a real, genuine
+  `https://bsky.social/oauth/authorize?client_id=...&request_uri=urn:ietf:params:oauth:request_uri:...`
+  page — Bluesky's own hosted login screen. Screenshotted for the record. This confirms
+  the OAuth flow now works end-to-end up through the point of real user login; entering
+  real credentials and completing a full login → scan → delete cycle was not attempted
+  (same real-account-testing gap flagged for the other five platforms).
+- The diagnostic browser profile used for this test moved `identity` and
+  `https://*/*` from `optional_permissions`/`optional_host_permissions` into required
+  `permissions`/`host_permissions` in a **throwaway copy** of the built extension only
+  (needed because `chrome.permissions.request()`'s native grant dialog cannot be driven
+  by Playwright automation — confirmed via repeated 40–100s hangs). The real
+  `manifest.json` in this repo was never touched; `identity` and `https://*/*` remain
+  correctly optional there.
+
+**Bluesky is no longer blocked at the protocol/hosting level.** The remaining gap for
+Bluesky is the same one open for the other five non-Slack platforms: a full run against
+a real, logged-in account.
