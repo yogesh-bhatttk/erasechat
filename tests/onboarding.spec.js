@@ -32,8 +32,9 @@ test('onboarding shows on first run, then stays dismissed', async () => {
     const onboarding = page.locator('#onboarding-card');
     await expect(onboarding).toBeVisible();
 
-    // The disclosure names its independence from Slack (C4 transparency).
-    await expect(onboarding).toContainText(/not affiliated with or endorsed by Slack/i);
+    // The disclosure names its independence from every platform it supports,
+    // not just Slack (C4 transparency) -- see popup.html/_locales/en/messages.json.
+    await expect(onboarding).toContainText(/not affiliated with or endorsed by any of the platforms/i);
 
     // Dismiss persists the flag.
     await page.locator('#btn-dismiss-onboarding').click();
