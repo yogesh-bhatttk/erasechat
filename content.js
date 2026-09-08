@@ -62,6 +62,9 @@ if (!window.slackCleanInitialized) {
     // Guards the one-time "Erasechat Finished" completion alert against a
     // redundant final JOB_UPDATE re-firing it. Reset when a new job starts.
     let jobFinalized = false;
+    // Channel IDs we've already shown the "Paused Job in Another Channel" alert for
+    // during this dashboard session — see checkAndResumeState.
+    const alertedOtherJobChannels = new Set();
     // Bumped on every renderScanResults() call. The chunked (requestAnimationFrame)
     // render loop checks it so a second scan cancels a still-running render from
     // the previous one (otherwise the stale loop keeps appending cards indexed
@@ -1142,11 +1145,31 @@ if (!window.slackCleanInitialized) {
         }, (response) => {
           if (chrome.runtime.lastError) return;
 
-          if (response && response.otherJob && response.otherJob.isPaused) {
+          // background.js's GET_JOB_STATUS handler always sends otherJobs (an array)
+          // alongside the singular otherJob it keeps only for backward compatibility,
+          // so there's no response shape where otherJobs is missing but otherJob isn't.
+          const pausedElsewhere = (response && response.otherJobs || []).filter(j => j.isPaused);
+
+          // Only alert about a paused-elsewhere job the FIRST time it's seen — without
+          // this, switching between channels A/B/C while a job sits paused in channel Y
+          // re-triggers the same modal on every single switch, forcing a fresh dismiss
+          // click each time. Alert again if a channel not already alerted-on appears
+          // (e.g. a second job gets paused later).
+          const newlyPaused = pausedElsewhere.filter(j => !alertedOtherJobChannels.has(j.channelId));
+          if (newlyPaused.length > 0) {
+            newlyPaused.forEach(j => alertedOtherJobChannels.add(j.channelId));
+            const names = newlyPaused.map(j => j.channelId).join(", ");
             showCustomAlert(
               "Paused Job in Another Channel",
-              `You have a paused bulk clean in another conversation (${response.otherJob.channelId}). Switch to that channel to resume or cancel it.`
+              `You have a paused bulk clean in another conversation (${names}). Switch to that channel to resume or cancel it.`
             );
+          }
+          // Drop tracking for channels that are no longer paused, so a job that's
+          // resumed/cancelled and later paused again in the same channel re-alerts.
+          for (const channelId of Array.from(alertedOtherJobChannels)) {
+            if (!pausedElsewhere.some(j => j.channelId === channelId)) {
+              alertedOtherJobChannels.delete(channelId);
+            }
           }
 
           if (response && response.exists) {

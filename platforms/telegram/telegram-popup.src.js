@@ -69,8 +69,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         },
         onError: (err) => {
           showError(err.message || String(err));
+          // onError fires regardless of which step the user was on when the
+          // auth flow failed (initial request, code entry, or password entry) --
+          // reset all three so whichever one is actually stuck disabled/"Submitting..."
+          // is always recoverable without reopening the popup.
           btnRequest.disabled = false;
           btnRequest.textContent = 'Request Code';
+          btnCode.disabled = false;
+          btnCode.textContent = 'Submit Code';
+          btnPassword.disabled = false;
+          btnPassword.textContent = 'Submit Password';
         },
       }).then(() => {
         const sessionStr = client.session.save();
@@ -81,7 +89,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
         showStep('step-success');
       }).catch(err => {
+        // A rejection that bypasses the onError auth hook (e.g. a transport-level
+        // WebSocket failure inside teleproto) would otherwise leave the button stuck
+        // disabled reading "Requesting..." with no way to retry short of reopening
+        // the popup.
         showError(err.message || String(err));
+        btnRequest.disabled = false;
+        btnRequest.textContent = 'Request Code';
       });
     } catch (err) {
       showError(err.message || String(err));

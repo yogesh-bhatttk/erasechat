@@ -35,6 +35,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const ownUserId = getOwnUserId(data.teams_token);
 
+  // Cached rather than re-read from chrome.storage.local on every apiFetch call
+  // (every scan page, up to MAX_PAGES, and every delete item) -- the token rarely
+  // changes mid-session, and the 401 handler below already re-reads storage and
+  // updates this cache on the rare occasion it actually has expired.
+  let cachedToken = data.teams_token;
+
   const loadChatsBtn = document.getElementById('load-chats-btn');
   const chatSelect = document.getElementById('chat-select');
   const scanBtn = document.getElementById('scan-btn');
@@ -45,38 +51,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusText = document.getElementById('status-text');
   const progressText = document.getElementById('progress-text');
 
-  // See the matching comment in platforms/reddit/dashboard-reddit.js: this marker
-  // only informs the next session that a delete was interrupted -- it does not
-  // resume the delete itself, since a fresh scan is required to see current state.
   const DELETE_PROGRESS_KEY = 'teams_delete_progress';
-  const leftover = (await chrome.storage.local.get([DELETE_PROGRESS_KEY]))[DELETE_PROGRESS_KEY];
-  if (leftover) {
-    statusText.textContent = `A previous deletion was interrupted (${leftover.done} of ${leftover.total} processed). Scan again to see current state.`;
-    await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
-  }
+  await reportInterruptedDelete(DELETE_PROGRESS_KEY, statusText);
 
   let currentResults = [];
 
-  const delay = ms => new Promise(res => setTimeout(res, ms));
-
-  async function fetchWithRetry(url, options = {}, maxRetries = 3) {
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        const res = await fetch(url, options);
-        if (res.ok) return res;
-        if (res.status >= 500 || res.status === 429) throw new Error(`Rate limit or Server error (${res.status})`);
-        return res; 
-      } catch (err) {
-        if (i === maxRetries - 1) throw err;
-        await delay(Math.pow(2, i) * 1000);
-      }
-    }
-  }
+  // delay/fetchWithRetry: see platforms/shared/dashboard-fetch-utils.js, loaded
+  // before this file by dashboard-teams.html.
 
   async function apiFetch(endpoint, method = 'GET') {
-    // Dynamically fetch token to handle expirations during long runs
-    const storageData = await chrome.storage.local.get(['teams_token']);
-    const token = storageData.teams_token;
+    const token = cachedToken;
 
     const url = endpoint.startsWith('http') ? endpoint : `${baseUrl}${endpoint}`;
     const options = {
@@ -98,6 +82,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const refreshedData = await chrome.storage.local.get(['teams_token']);
       const refreshedToken = refreshedData.teams_token;
       if (refreshedToken && refreshedToken !== token) {
+        cachedToken = refreshedToken;
         const retryOptions = {
           method,
           headers: {
@@ -162,22 +147,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
     statusText.textContent = "Scanning...";
-    itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Scanning messages...</div>';
+    renderEmptyState(itemList, "Scanning messages...");
     currentResults = [];
 
     try {
-      // Fetch recent messages in chat
-      // Note: We scan up to 100 messages for the MVP
+      // Fetch recent messages in chat, capped at MAX_PAGES (like the mastodon/reddit/x
+      // dashboards) so a long-lived chat can't be scanned in full on every click.
       let endpoint = `/v1/users/ME/conversations/${encodeURIComponent(chatId)}/messages?pageSize=100`;
-      
-      while (endpoint) {
+      let pageCount = 0;
+      let truncated = false;
+      const MAX_PAGES = 20; // 100 messages per page * 20 = 2000 messages per scan
+
+      while (endpoint && pageCount < MAX_PAGES) {
         const res = await apiFetch(endpoint);
         const messages = res.messages || [];
-        
+
         for (const msg of messages) {
-          if (msg.from && msg.from.includes(ownUserId) && msg.content && !msg.deleted) {
-            const text = msg.content.replace(/<[^>]+>/g, '') || '';
-            
+          if (msg.from && msg.from.includes(ownUserId) && !msg.deleted) {
+            // A media-only message (image/file share) has an EMPTY `content` of its
+            // own -- but a message that's pure markup (e.g. a bare inline image tag)
+            // has a TRUTHY `content` that strips down to nothing, so the check must
+            // happen on the stripped text, not the raw content (matching mastodon's
+            // equivalent check on `plainText`, not raw `content`). Without this
+            // fallback such messages never enter currentResults and can never be
+            // selected for deletion here.
+            const strippedContent = msg.content ? msg.content.replace(/<[^>]+>/g, '') : '';
+            const text = strippedContent || '[Media only]';
+
             if (!filterText || text.toLowerCase().includes(filterText)) {
               currentResults.push({
                 id: msg.id,
@@ -187,13 +183,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
           }
         }
-        
+
         endpoint = res.nextLink || null;
+        pageCount++;
+        truncated = pageCount >= MAX_PAGES && !!endpoint;
         if (endpoint) await delay(1000); // 1s delay for pagination
       }
-      
-      resultsCount.textContent = `${currentResults.length} items found`;
-      
+
+      resultsCount.textContent = formatScanCount(currentResults.length, {
+        truncated, maxPages: MAX_PAGES, note: "older messages may exist"
+      });
+
       if (currentResults.length > 0) {
         itemList.innerHTML = '';
         currentResults.forEach(msg => {
@@ -214,7 +214,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
       } else {
-        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">No matching messages found in this chat.</div>';
+        renderEmptyState(itemList, "No matching messages found in this chat.");
         statusText.textContent = "Ready";
       }
     } catch (err) {
@@ -227,23 +227,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   deleteBtn.addEventListener('click', async () => {
     const chatId = chatSelect.value;
-    // Above LARGE_DELETE_THRESHOLD, a fixed literal like "DELETE" is the same
-    // low-friction confirm regardless of whether 2 or hundreds of messages are
-    // about to be permanently destroyed. Require typing the exact count
-    // instead, so the number is something the user has to actually notice and
-    // act on, not just habitually retype.
-    const count = currentResults.length;
-    const LARGE_DELETE_THRESHOLD = 100;
-    const isLarge = count > LARGE_DELETE_THRESHOLD;
-    const expected = isLarge ? String(count) : "DELETE";
-    const promptText = isLarge
-      ? `You are about to permanently delete ${count} messages -- more than ${LARGE_DELETE_THRESHOLD}. Type the exact number ${count} to confirm.`
-      : `Type DELETE to permanently delete ${count} messages.`;
-    const confirmation = prompt(promptText);
-    if (confirmation !== expected) {
-      alert("Deletion cancelled.");
-      return;
-    }
+    if (!confirmBulkDelete(currentResults.length, "messages")) return;
 
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
@@ -251,6 +235,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusText.style.color = "#ef4444";
     progressText.textContent = `Starting deletion...`;
     
+    const totalCount = currentResults.length;
     let deletedCount = 0;
     const failures = [];
     try {
@@ -259,7 +244,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // chrome.storage.local calls (progress marker) and everything else in this
       // handler against an unexpected exception so the loop can never die
       // silently, leaving scanBtn disabled and the progress marker stuck.
-      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: 0 } });
+      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
       for (const msg of currentResults) {
         try {
           // DELETE /v1/users/ME/conversations/{chatId}/messages/{messageId}
@@ -269,8 +254,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (err) {
           failures.push({ id: msg.id, message: err.message });
         }
-        progressText.textContent = `Deleted ${deletedCount} of ${currentResults.length}`;
-        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: deletedCount + failures.length } });
+        progressText.textContent = `Deleted ${deletedCount} of ${totalCount}`;
+        await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
 
         // Strict 2.5 second delay to avoid enterprise security alarms / rate limits
         await delay(2500);
@@ -281,16 +266,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
       } else {
-        statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${currentResults.length}.`;
+        statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${totalCount}.`;
         statusText.style.color = "#ef4444";
         console.warn("Teams delete failures:", failures);
       }
       currentResults = [];
-      itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
+      renderEmptyState(itemList, "Deletion finished.");
       resultsCount.textContent = "0 items found";
     } catch (err) {
       console.error("Teams delete loop stopped unexpectedly:", err);
-      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${currentResults.length} messages were deleted before this happened.`);
+      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} messages were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {

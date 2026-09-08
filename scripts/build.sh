@@ -60,6 +60,10 @@ copy_assets() {
   # outside platforms/.
   find "$dest/platforms" -name '*.src.js' -delete
   find "$dest/platforms" -name '*.bundle.js.map' -delete
+  # Terser's default license-comment extraction (webpack.telegram.config.js runs
+  # with minification enabled) emits one of these per bundle -- not loaded by the
+  # built extension either, so it shouldn't ship in the store zip unreviewed.
+  find "$dest/platforms" -name '*.bundle.js.LICENSE.txt' -delete
 }
 
 echo "Building Chrome/Chromium package (manifest.json)..."

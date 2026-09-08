@@ -1002,3 +1002,14 @@ select:focus-visible,
   accent-color: var(--accent);
   cursor: pointer;
 }
+
+/* Shared placeholder for empty/status states (scanning, no results, deletion
+ * finished) across the mastodon/reddit/teams/x dashboards -- was previously an
+ * inline style attribute (color: #64748b) copy-pasted into every status
+ * transition in every one of those files. var(--text-muted) additionally makes
+ * it theme-aware, unlike the hardcoded color it replaces. */
+.empty-state {
+  color: var(--text-muted);
+  text-align: center;
+  padding-top: 40px;
+}

@@ -17,15 +17,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusText = document.getElementById('status-text');
   const progressText = document.getElementById('progress-text');
 
-  // See the matching comment in platforms/reddit/dashboard-reddit.js: this marker
-  // only informs the next session that a delete was interrupted -- it does not
-  // resume the delete itself, since a fresh scan is required to see current state.
   const DELETE_PROGRESS_KEY = 'mastodon_delete_progress';
-  const leftover = (await chrome.storage.local.get([DELETE_PROGRESS_KEY]))[DELETE_PROGRESS_KEY];
-  if (leftover) {
-    statusText.textContent = `A previous deletion was interrupted (${leftover.done} of ${leftover.total} processed). Scan again to see current state.`;
-    await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
-  }
+  await reportInterruptedDelete(DELETE_PROGRESS_KEY, statusText);
 
   let currentResults = [];
 
@@ -84,22 +77,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     return text ? JSON.parse(text) : {};
   }
 
-  // Delay helper for rate limiting
-  const delay = ms => new Promise(res => setTimeout(res, ms));
-
-  async function fetchWithRetry(url, options = {}, maxRetries = 3) {
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        const res = await fetch(url, options);
-        if (res.ok) return res;
-        if (res.status >= 500 || res.status === 429) throw new Error(`Rate limit or Server error (${res.status})`);
-        return res; 
-      } catch (err) {
-        if (i === maxRetries - 1) throw err;
-        await delay(Math.pow(2, i) * 1000);
-      }
-    }
-  }
+  // delay/fetchWithRetry: see platforms/shared/dashboard-fetch-utils.js, loaded
+  // before this file by dashboard-mastodon.html.
 
   scanBtn.addEventListener('click', async () => {
     const filterText = filterInput.value.trim().toLowerCase();
@@ -107,7 +86,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
     statusText.textContent = "Scanning...";
-    itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Scanning toots...</div>';
+    renderEmptyState(itemList, "Scanning toots...");
     currentResults = [];
 
     try {
@@ -165,9 +144,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       // on a full page, not on a natural end (an empty or partial page) -- so
       // "N items found" doesn't imply an exhaustive scan when older toots may
       // still exist.
-      resultsCount.textContent = truncated
-        ? `${currentResults.length} items found (stopped after ${MAX_PAGES} pages -- older toots may exist)`
-        : `${currentResults.length} items found`;
+      resultsCount.textContent = formatScanCount(currentResults.length, {
+        truncated, maxPages: MAX_PAGES, note: "older toots may exist"
+      });
 
       if (currentResults.length > 0) {
         itemList.innerHTML = '';
@@ -196,7 +175,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
       } else {
-        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">No toots matched your criteria.</div>';
+        renderEmptyState(itemList, "No toots matched your criteria.");
         statusText.textContent = "Ready";
       }
     } catch (err) {
@@ -208,23 +187,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   deleteBtn.addEventListener('click', async () => {
-    // Above LARGE_DELETE_THRESHOLD, a fixed literal like "DELETE" is the same
-    // low-friction confirm regardless of whether 2 or hundreds of toots are
-    // about to be permanently destroyed. Require typing the exact count
-    // instead, so the number is something the user has to actually notice and
-    // act on, not just habitually retype.
-    const count = currentResults.length;
-    const LARGE_DELETE_THRESHOLD = 100;
-    const isLarge = count > LARGE_DELETE_THRESHOLD;
-    const expected = isLarge ? String(count) : "DELETE";
-    const promptText = isLarge
-      ? `You are about to permanently delete ${count} toots -- more than ${LARGE_DELETE_THRESHOLD}. Type the exact number ${count} to confirm.`
-      : `Type DELETE to permanently delete ${count} toots.`;
-    const confirmation = prompt(promptText);
-    if (confirmation !== expected) {
-      alert("Deletion cancelled.");
-      return;
-    }
+    if (!confirmBulkDelete(currentResults.length, "toots")) return;
 
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
@@ -237,6 +200,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // window, so we pace against that real limit instead of a flat delay.
     deleteTimestamps = [];
 
+    const totalCount = currentResults.length;
     let deletedCount = 0;
     const failures = [];
     try {
@@ -245,7 +209,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // chrome.storage.local calls (progress marker) and everything else in this
       // handler against an unexpected exception so the loop can never die
       // silently, leaving scanBtn disabled and the progress marker stuck.
-      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: 0 } });
+      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
       for (const status of currentResults) {
         await waitForDeleteRateLimit();
 
@@ -256,8 +220,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (err) {
           failures.push({ id: status.id, message: err.message });
         }
-        progressText.textContent = `Deleted ${deletedCount} of ${currentResults.length}`;
-        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: deletedCount + failures.length } });
+        progressText.textContent = `Deleted ${deletedCount} of ${totalCount}`;
+        await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
         await delay(DELETE_MIN_SPACING_MS);
       }
       await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
@@ -266,16 +230,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
       } else {
-        statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${currentResults.length}.`;
+        statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${totalCount}.`;
         statusText.style.color = "#ef4444";
         console.warn("Mastodon delete failures:", failures);
       }
       currentResults = [];
-      itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
+      renderEmptyState(itemList, "Deletion finished.");
       resultsCount.textContent = "0 items found";
     } catch (err) {
       console.error("Mastodon delete loop stopped unexpectedly:", err);
-      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${currentResults.length} toots were deleted before this happened.`);
+      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} toots were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {

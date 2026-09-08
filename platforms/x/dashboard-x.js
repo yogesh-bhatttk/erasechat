@@ -18,40 +18,32 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusText = document.getElementById('status-text');
   const progressText = document.getElementById('progress-text');
 
-  // See the matching comment in platforms/reddit/dashboard-reddit.js: this marker
-  // only informs the next session that a delete was interrupted -- it does not
-  // resume the delete itself, since a fresh scan is required to see current state.
   const DELETE_PROGRESS_KEY = 'x_delete_progress';
-  const leftover = (await chrome.storage.local.get([DELETE_PROGRESS_KEY]))[DELETE_PROGRESS_KEY];
-  if (leftover) {
-    statusText.textContent = `A previous deletion was interrupted (${leftover.done} of ${leftover.total} processed). Scan again to see current state.`;
-    await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
-  }
+  await reportInterruptedDelete(DELETE_PROGRESS_KEY, statusText);
 
   let currentResults = [];
   let userRestId = null;
+  // Tracks which screenName userRestId was actually resolved for -- without this,
+  // scanning once then editing the username field and scanning again would reuse
+  // the FIRST account's userRestId (since it's merely truthy), silently scanning
+  // and offering to delete the wrong account's tweets while the input shows the
+  // newly-typed name.
+  let userRestIdForScreenName = null;
 
   let queryIds = {
     UserByScreenName: 's70IQxZ5sQ-b40B2gP37Tw',
     UserTweets: 'Q6aAvPw7azHZhmCBjomMeA',
     DeleteTweet: 'VaenaVgh5q5ih7kvyVjgtg'
   };
+  // Once extractQueryIds() has run successfully this session, the scraped ids stay
+  // good until X actually rotates them (signaled by apiFetch's staleQueryId flag) --
+  // re-running it on every single Scan click re-downloads and regex-scans x.com's
+  // full main JS bundle (often multi-MB) for no reason.
+  let queryIdsExtracted = false;
+  let queryIdsStale = false;
 
-  const delay = ms => new Promise(res => setTimeout(res, ms));
-
-  async function fetchWithRetry(url, options = {}, maxRetries = 3) {
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        const res = await fetch(url, options);
-        if (res.ok) return res;
-        if (res.status >= 500 || res.status === 429) throw new Error(`Rate limit or Server error (${res.status})`);
-        return res; 
-      } catch (err) {
-        if (i === maxRetries - 1) throw err;
-        await delay(Math.pow(2, i) * 1000);
-      }
-    }
-  }
+  // delay/fetchWithRetry: see platforms/shared/dashboard-fetch-utils.js, loaded
+  // before this file by dashboard-x.html.
 
   async function apiFetch(url, method = 'GET', body = null) {
     const options = {
@@ -94,14 +86,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Look for the main JS bundle which usually contains the query IDs
       const scriptMatches = [...html.matchAll(/<script[^>]+src="([^"]+main\.[a-z0-9]+\.js)"/g)];
 
-      for (const m of scriptMatches) {
+      // Independent bundle fetches -- run them concurrently instead of one at a
+      // time, since each is a full (often multi-MB) download+parse.
+      await Promise.all(scriptMatches.map(async (m) => {
         const jsRes = await fetchWithRetry(m[1], { credentials: 'include' });
         const js = await jsRes.text();
         const matches = [...js.matchAll(/queryId:"([^"]+)",operationName:"(UserTweets|DeleteTweet|UserByScreenName)"/g)];
         for (const match of matches) {
           queryIds[match[2]] = match[1];
         }
-      }
+      }));
+      queryIdsExtracted = true;
+      queryIdsStale = false;
     } catch(e) {
       console.warn("Failed to extract queryIds dynamically. Falling back to defaults.", e);
     }
@@ -131,14 +127,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
     statusText.textContent = "Scanning...";
-    itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Scanning tweets...</div>';
+    renderEmptyState(itemList, "Scanning tweets...");
     currentResults = [];
 
     try {
-      await extractQueryIds();
+      if (!queryIdsExtracted || queryIdsStale) {
+        await extractQueryIds();
+      }
 
-      if (!userRestId) {
+      if (!userRestId || userRestIdForScreenName !== screenName) {
         userRestId = await resolveUserId(screenName);
+        userRestIdForScreenName = screenName;
       }
 
       let cursor = '';
@@ -213,9 +212,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       // more pages (cursor truthy) -- distinguish that from a natural end (no
       // entries, or no cursor) so "N items found" doesn't imply an exhaustive scan.
       const truncated = pageCount >= MAX_PAGES && !!cursor;
-      resultsCount.textContent = truncated
-        ? `${currentResults.length} items found (stopped after ${MAX_PAGES} pages -- more may exist)`
-        : `${currentResults.length} items found`;
+      resultsCount.textContent = formatScanCount(currentResults.length, {
+        truncated, maxPages: MAX_PAGES, note: "more may exist"
+      });
 
       if (currentResults.length > 0) {
         itemList.innerHTML = '';
@@ -237,11 +236,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
       } else {
-        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">No tweets matched your criteria.</div>';
+        renderEmptyState(itemList, "No tweets matched your criteria.");
         statusText.textContent = "Ready";
       }
     } catch (err) {
       if (err.staleQueryId) {
+        queryIdsStale = true;
         alert(
           "Scan failed: " + err.message +
           "\n\nThis looks like X.com's API rejected one of this extension's built-in query IDs. " +
@@ -257,23 +257,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   deleteBtn.addEventListener('click', async () => {
-    // Above LARGE_DELETE_THRESHOLD, a fixed literal like "DELETE" is the same
-    // low-friction confirm regardless of whether 2 or thousands of tweets are
-    // about to be permanently destroyed. Require typing the exact count
-    // instead, so the number is something the user has to actually notice and
-    // act on, not just habitually retype.
-    const count = currentResults.length;
-    const LARGE_DELETE_THRESHOLD = 100;
-    const isLarge = count > LARGE_DELETE_THRESHOLD;
-    const expected = isLarge ? String(count) : "DELETE";
-    const promptText = isLarge
-      ? `You are about to permanently delete ${count} tweets -- more than ${LARGE_DELETE_THRESHOLD}. Type the exact number ${count} to confirm.`
-      : `Type DELETE to permanently delete ${count} tweets.`;
-    const confirmation = prompt(promptText);
-    if (confirmation !== expected) {
-      alert("Deletion cancelled.");
-      return;
-    }
+    if (!confirmBulkDelete(currentResults.length, "tweets")) return;
 
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
@@ -311,13 +295,16 @@ document.addEventListener('DOMContentLoaded', async () => {
           // error) doesn't abort the rest of the batch.
           console.error(`Failed to delete tweet ${tweet.id}:`, err);
           failures.push({ id: tweet.id, message: err.message });
-          if (err.staleQueryId) staleQueryIdSuspected = true;
+          if (err.staleQueryId) {
+            staleQueryIdSuspected = true;
+            queryIdsStale = true;
+          }
         }
 
         progressText.textContent = failures.length > 0
           ? `Processed ${deletedCount + failures.length} of ${totalCount} (${deletedCount} deleted, ${failures.length} failed)`
           : `Deleted ${deletedCount} of ${totalCount}`;
-        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: deletedCount + failures.length } });
+        await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
 
         // strict 2.5 second delay to avoid rate limits and account suspension flags
         await delay(2500);
@@ -330,11 +317,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (failures.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
-        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
+        renderEmptyState(itemList, "Deletion finished.");
       } else {
         statusText.textContent = `Deletion finished: ${deletedCount} deleted, ${failures.length} failed.`;
         statusText.style.color = "#ef4444";
-        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished (see error summary).</div>';
+        renderEmptyState(itemList, "Deletion finished (see error summary).");
 
         const shown = failures.slice(0, 10).map(f => `#${f.id}: ${f.message}`).join('\n');
         const more = failures.length > 10 ? `\n...and ${failures.length - 10} more (see console for full list)` : '';

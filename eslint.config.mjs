@@ -132,6 +132,10 @@ export default [
   {
     // Standalone per-platform dashboard pages (opened via chrome.tabs.create,
     // unlike Slack's shadow-DOM overlay in content.js) — full DOM available.
+    // delay/fetchWithRetry come from platforms/shared/dashboard-fetch-utils.js,
+    // loaded via <script> right before each of these (except that file itself,
+    // which defines them -- no-redeclare's builtinGlobals:false means declaring
+    // them here doesn't flag that file's own definitions).
     files: ["platforms/*/dashboard-*.js"],
     languageOptions: {
       ecmaVersion: 2022,
@@ -141,7 +145,14 @@ export default [
         window: "readonly",
         document: "readonly",
         alert: "readonly",
-        prompt: "readonly"
+        prompt: "readonly",
+        delay: "readonly",
+        fetchWithRetry: "readonly",
+        confirmBulkDelete: "readonly",
+        reportInterruptedDelete: "readonly",
+        maybeSaveDeleteProgress: "readonly",
+        renderEmptyState: "readonly",
+        formatScanCount: "readonly"
       }
     },
     rules: correctnessRules

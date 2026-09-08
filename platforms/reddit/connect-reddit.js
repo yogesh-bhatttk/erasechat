@@ -7,23 +7,27 @@
 // has picked Reddit from the platform list and granted its optional permission.
 //
 // The cookie pre-check is a fast, offline "definitely not logged in" short-circuit
-// before spending a network round-trip -- NOT verified against a live account as
-// Reddit's current cookie name/shape (it could plausibly have changed since this
-// was ported). If that name turns out to be stale, this would produce a false
-// "please log in" message even for a genuinely logged-in user. Fixing that
-// properly needs a real account to check against; reordering this to always hit
-// the network first was tried and reverted -- it makes network reachability
-// load-bearing for a UX path that should fail fast and offline, and broke the
-// no-session e2e test's hermeticity (a real fetch to reddit.com from a
-// non-mocked test). Flagging this as a known, unverified gap rather than
-// guessing at a fix.
+// before spending a network round-trip. It is NOT verified against a live account,
+// and Reddit has used more than one cookie as its logged-in session marker over the
+// years (the legacy "reddit_session", and "token_v2"/"session_tracker" since the
+// site's OAuth-backed redesign) -- gating on a single exact name risks a false
+// "please log in" for a genuinely logged-in user whose session happens to be
+// carried by a different one of these. Checking for ANY of them lowers that risk
+// without reintroducing "always hit the network first", which was tried and
+// reverted: it makes network reachability load-bearing for a UX path that should
+// fail fast and offline, and broke the no-session e2e test's hermeticity (a real
+// fetch to reddit.com from a non-mocked test). Still flagging this as a known,
+// not-fully-verified gap -- these are the plausible candidates, not a confirmed list.
 //
 // Returns { ok: true, username } on success, { ok: false, message } on failure --
 // never throws, so callers don't need their own try/catch for the network fetch.
+const REDDIT_SESSION_COOKIE_NAMES = ["reddit_session", "token_v2", "session_tracker"];
+
 async function connectReddit() {
   try {
-    const cookies = await chrome.cookies.getAll({ domain: "reddit.com", name: "reddit_session" });
-    if (cookies.length === 0) {
+    const cookies = await chrome.cookies.getAll({ domain: "reddit.com" });
+    const hasSessionCookie = cookies.some(c => REDDIT_SESSION_COOKIE_NAMES.includes(c.name));
+    if (!hasSessionCookie) {
       return { ok: false, message: "Could not find an active Reddit session. Please log in to Reddit.com first." };
     }
 

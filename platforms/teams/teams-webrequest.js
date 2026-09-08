@@ -16,7 +16,11 @@
 // restart would also pick it up (chrome.webRequest exists by then), but the running
 // worker doesn't get a free restart just because a permission changed.
 function registerTeamsWebRequestListener() {
-  if (!chrome.webRequest || registerTeamsWebRequestListener.done) return;
+  // Guard the specific event object, not just the chrome.webRequest namespace: a
+  // build/policy where the namespace exists but onSendHeaders doesn't would still
+  // throw on .addListener below and take down the whole shared service worker for
+  // every platform -- the exact failure class this guard exists to prevent.
+  if (!chrome.webRequest || !chrome.webRequest.onSendHeaders || registerTeamsWebRequestListener.done) return;
   registerTeamsWebRequestListener.done = true;
 
   // extraHeaders is required in extraInfoSpec: without it Chrome withholds the

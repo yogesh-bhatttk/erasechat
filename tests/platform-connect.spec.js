@@ -306,6 +306,9 @@ test('Teams times out with an actionable error when background.js never captures
 
     await page.evaluate(() => {
       chrome.permissions.request = (_req, cb) => cb(true);
+      // connectTeams() now opens a real Teams tab itself (see connect-teams.js) --
+      // stub it so this test doesn't actually navigate to teams.microsoft.com.
+      chrome.tabs.create = () => Promise.resolve({});
       // Shrink the poll loop so this test doesn't actually wait 15 real seconds --
       // exercises the exact same timeout/error path with a friendlier duration.
       const platform = PLATFORMS.find((p) => p.id === 'teams');

@@ -19,35 +19,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusText = document.getElementById('status-text');
   const progressText = document.getElementById('progress-text');
 
-  // Delete progress is tracked in-memory only for the loop itself, but this one
-  // marker is persisted so a tab closed (or crashed) mid-delete can tell the next
-  // session something was left unfinished -- a fresh scan is still required to see
-  // current state (deletes aren't resumed against stale in-memory results), but at
-  // least the user is told, instead of silently having no idea how far it got.
   const DELETE_PROGRESS_KEY = 'reddit_delete_progress';
-  const leftover = (await chrome.storage.local.get([DELETE_PROGRESS_KEY]))[DELETE_PROGRESS_KEY];
-  if (leftover) {
-    statusText.textContent = `A previous deletion was interrupted (${leftover.done} of ${leftover.total} processed). Scan again to see current state.`;
-    await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
-  }
+  await reportInterruptedDelete(DELETE_PROGRESS_KEY, statusText);
 
   let currentResults = [];
 
-  const delay = ms => new Promise(res => setTimeout(res, ms));
-
-  async function fetchWithRetry(url, options = {}, maxRetries = 3) {
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        const res = await fetch(url, options);
-        if (res.ok) return res;
-        if (res.status >= 500 || res.status === 429) throw new Error(`Rate limit or Server error (${res.status})`);
-        return res; 
-      } catch (err) {
-        if (i === maxRetries - 1) throw err;
-        await delay(Math.pow(2, i) * 1000);
-      }
-    }
-  }
+  // delay/fetchWithRetry: see platforms/shared/dashboard-fetch-utils.js, loaded
+  // before this file by dashboard-reddit.html.
 
   scanBtn.addEventListener('click', async () => {
     const targetType = targetTypeInput.value;
@@ -57,7 +35,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
     statusText.textContent = "Scanning...";
-    itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Scanning history...</div>';
+    renderEmptyState(itemList, "Scanning history...");
     currentResults = [];
 
     try {
@@ -85,6 +63,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         for (const child of children) {
           const item = child.data;
           // Skip items that are already deleted/removed — nothing left to clean up.
+          if (!item || !item.name) continue; // e.g. a "more"-type stub child, not a real post/comment
           if (item.author === '[deleted]' || item.removed_by_category) continue;
           const isComment = item.name.startsWith('t1_');
           const text = isComment ? item.body : item.title;
@@ -110,9 +89,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       // end (no more children, or no `after` cursor). Surface that distinction
       // so "N items found" doesn't imply an exhaustive scan when it wasn't one.
       const truncated = pageCount >= MAX_PAGES && !!after;
-      resultsCount.textContent = truncated
-        ? `${currentResults.length} items found (stopped after ${MAX_PAGES} pages -- more may exist${isDeepScan ? '' : ', try Deep Scan'})`
-        : `${currentResults.length} items found`;
+      resultsCount.textContent = formatScanCount(currentResults.length, {
+        truncated, maxPages: MAX_PAGES, note: `more may exist${isDeepScan ? '' : ', try Deep Scan'}`
+      });
 
       if (currentResults.length > 0) {
         itemList.innerHTML = '';
@@ -141,7 +120,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
       } else {
-        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">No items found.</div>';
+        renderEmptyState(itemList, "No items found.");
         statusText.textContent = "Ready";
       }
     } catch (err) {
@@ -153,23 +132,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   deleteBtn.addEventListener('click', async () => {
-    // Above LARGE_DELETE_THRESHOLD, a fixed literal like "DELETE" is the same
-    // low-friction confirm regardless of whether 2 or 20,000 items are about to
-    // be permanently destroyed (Reddit's Deep Scan can surface thousands).
-    // Require typing the exact count instead, so the number is something the
-    // user has to actually notice and act on, not just habitually retype.
-    const count = currentResults.length;
-    const LARGE_DELETE_THRESHOLD = 100;
-    const isLarge = count > LARGE_DELETE_THRESHOLD;
-    const expected = isLarge ? String(count) : "DELETE";
-    const promptText = isLarge
-      ? `You are about to permanently delete ${count} items -- more than ${LARGE_DELETE_THRESHOLD}. Type the exact number ${count} to confirm.`
-      : `Type DELETE to permanently delete ${count} items.`;
-    const confirmation = prompt(promptText);
-    if (confirmation !== expected) {
-      alert("Deletion cancelled.");
-      return;
-    }
+    if (!confirmBulkDelete(currentResults.length, "items")) return;
 
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
@@ -177,6 +140,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusText.style.color = "#ef4444";
     progressText.textContent = `Starting deletion...`;
     
+    const totalCount = currentResults.length;
     let deletedCount = 0;
     const failures = [];
     try {
@@ -186,7 +150,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // handler against an unexpected exception (e.g. the extension being
       // reloaded mid-run invalidates the extension context) so the loop can never
       // die silently, leaving scanBtn disabled and the progress marker stuck.
-      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: 0 } });
+      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
       for (const item of currentResults) {
         try {
           // POST to /api/del
@@ -210,8 +174,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (err) {
           failures.push({ id: item.id, message: err.message });
         }
-        progressText.textContent = `Deleted ${deletedCount} of ${currentResults.length}`;
-        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: deletedCount + failures.length } });
+        progressText.textContent = `Deleted ${deletedCount} of ${totalCount}`;
+        await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
 
         // strict 1.5 second delay to avoid rate limits
         await delay(1500);
@@ -222,16 +186,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
       } else {
-        statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${currentResults.length}.`;
+        statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${totalCount}.`;
         statusText.style.color = "#ef4444";
         console.warn("Reddit delete failures:", failures);
       }
       currentResults = [];
-      itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
+      renderEmptyState(itemList, "Deletion finished.");
       resultsCount.textContent = "0 items found";
     } catch (err) {
       console.error("Reddit delete loop stopped unexpectedly:", err);
-      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${currentResults.length} items were deleted before this happened.`);
+      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} items were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {

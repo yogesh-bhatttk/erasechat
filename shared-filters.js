@@ -22,10 +22,11 @@ const MAX_QUANTIFIERS = 10;
 // hard; two is the most that stays merely quadratic (and is further bounded below).
 const MAX_UNBOUNDED_QUANTIFIERS = 2;
 // Final backstop: the length of text a (safe, ≤2-unbounded) regex is actually run
-// against. Slack allows very long messages; capping keeps even a quadratic pattern on
+// against. Slack allows very long messages (default limit 4000 chars, and code
+// blocks/snippets can run much longer); capping keeps even a quadratic pattern on
 // a pathological repeated run well under a second. Chosen far above any real message,
 // so ordinary matching is unaffected (over-long input under-matches, the safe way).
-const MAX_REGEX_INPUT = 1000;
+const MAX_REGEX_INPUT = 20000;
 
 // System / no-op message subtypes that are never the user's own deletable content.
 // Dropped by subtype regardless of text: Slack's join/leave/topic/purpose/name/archive
@@ -221,7 +222,7 @@ function decideItemAction(item, filterAttachments) {
   const hasFiles = !!(item.files && item.files.length > 0);
   const hasAttach = !!item.hasAttachments || !!(item.attachments && item.attachments.length > 0);
   const hasText = !!(item.text && item.text.trim().length > 0);
-  const hasBlocks = !!(Array.isArray(item.blocks) && item.blocks.some(b => b.type !== "image" && b.type !== "file"));
+  const hasBlocks = !!(Array.isArray(item.blocks) && item.blocks.some(b => b && b.type !== "image" && b.type !== "file"));
   if (filterAttachments) {
     if (!hasFiles && !hasAttach) return "skip";
     if (hasText || hasBlocks) return "trim";

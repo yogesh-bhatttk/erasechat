@@ -84,13 +84,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
     statusText.textContent = "Scanning...";
-    itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Scanning messages...</div>';
+    itemList.innerHTML = '<div class="empty-state">Scanning messages...</div>';
     currentResults = [];
 
     try {
       let offsetId = 0;
       let hasMore = true;
-      while (hasMore) {
+      let pageCount = 0;
+      let truncated = false;
+      // Cap pagination like the mastodon/reddit/x dashboards so a large saved-messages
+      // history or long-lived chat can't be scanned in full on every click.
+      const MAX_PAGES = 20; // 100 messages per page * 20 = 2000 messages per scan
+      while (hasMore && pageCount < MAX_PAGES) {
         const result = await invokeWithFloodWait(
           () => client.invoke(
             new Api.messages.Search({
@@ -128,9 +133,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         offsetId = result.messages[result.messages.length - 1].id;
         if (result.messages.length < 100) hasMore = false;
+        pageCount++;
+        truncated = pageCount >= MAX_PAGES && hasMore;
       }
-      
-      resultsCount.textContent = `${currentResults.length} items found`;
+
+      resultsCount.textContent = truncated
+        ? `${currentResults.length} items found (stopped after ${MAX_PAGES} pages -- older messages may exist)`
+        : `${currentResults.length} items found`;
       
       if (currentResults.length > 0) {
         itemList.innerHTML = '';
@@ -158,7 +167,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
       } else {
-        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">No messages matched your criteria.</div>';
+        itemList.innerHTML = '<div class="empty-state">No messages matched your criteria.</div>';
         statusText.textContent = "Ready";
       }
     } catch (err) {
@@ -260,12 +269,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (failedChunks.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
-        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished.</div>';
+        itemList.innerHTML = '<div class="empty-state">Deletion finished.</div>';
       } else {
         const failedCount = failedChunks.reduce((sum, c) => sum + c.count, 0);
         statusText.textContent = `Deletion finished: ${deletedCount} deleted, ${failedCount} failed.`;
         statusText.style.color = "#ef4444";
-        itemList.innerHTML = '<div style="color: #64748b; text-align: center; padding-top: 40px;">Deletion finished (see error summary).</div>';
+        itemList.innerHTML = '<div class="empty-state">Deletion finished (see error summary).</div>';
         console.warn("Telegram delete chunk failures:", failedChunks);
         alert(
           `Delete failed for ${failedCount} of ${deletedCount + failedCount} message(s). ` +

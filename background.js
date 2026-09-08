@@ -154,6 +154,28 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   // Set first-run flag for onboarding
   if (details.reason === "install") {
     chrome.storage.local.set({ slack_onboarding_complete: false });
+  } else if (details.reason === "update") {
+    // Migrate the onboarding-seen flag from its pre-Erasechat-rename name. Without
+    // this, every user who already dismissed onboarding under the old key sees the
+    // "Welcome to Erasechat!" card reappear once after updating, since the new key
+    // reads as undefined/falsy -- the same class of gap the job/queue key rename
+    // already gets a migration for in recoverAllJobs().
+    try {
+      const legacy = await chrome.storage.local.get(["sc_onboarding_complete", "slack_onboarding_complete"]);
+      if (legacy.slack_onboarding_complete === undefined && legacy.sc_onboarding_complete !== undefined) {
+        await chrome.storage.local.set({ slack_onboarding_complete: legacy.sc_onboarding_complete });
+      }
+      await chrome.storage.local.remove("sc_onboarding_complete");
+    } catch (e) {
+      console.error("SlackClean BG: onboarding-flag migration failed", e);
+    }
+
+    // The watchdog alarm was renamed alongside it ("sc_watchdog" -> WATCHDOG_ALARM).
+    // chrome.alarms persist across an update independent of source code, so a
+    // pre-rename install's old-named alarm would otherwise fire forever -- it
+    // matches neither branch in the onAlarm listener above, so nothing ever
+    // cancels it once the code stops looking for that name.
+    chrome.alarms.clear("sc_watchdog");
   }
 });
 
@@ -192,6 +214,40 @@ async function recoverAllJobs() {
     }
 
     const storage = await chrome.storage.local.get(null);
+
+    // One-time migration for installs from before the "Bulk Clean for Slack" ->
+    // "Erasechat" rename: the job/queue key prefixes changed (slackclean_state_ ->
+    // slack_state_, sc_q_ -> slack_q_) but an in-place extension update keeps the
+    // same extension ID and storage, so a paused/running job saved under the old
+    // prefixes would otherwise silently vanish the first time this runs post-update
+    // (recoverAllJobs only ever looked for the new prefix). Rewrite any legacy keys
+    // to their new names before the recovery scan below runs.
+    const LEGACY_STATE_PREFIX = "slackclean_state_";
+    const LEGACY_QUEUE_PREFIX = "sc_q_";
+    const legacyRewrites = {};
+    const legacyRemove = [];
+    for (const [key, val] of Object.entries(storage)) {
+      let newKey = null;
+      if (key.startsWith(LEGACY_STATE_PREFIX)) {
+        newKey = "slack_state_" + key.slice(LEGACY_STATE_PREFIX.length);
+      } else if (key.startsWith(LEGACY_QUEUE_PREFIX)) {
+        newKey = "slack_q_" + key.slice(LEGACY_QUEUE_PREFIX.length);
+      }
+      if (newKey && !(newKey in storage)) {
+        legacyRewrites[newKey] = val;
+        storage[newKey] = val;
+      }
+      if (newKey) legacyRemove.push(key);
+    }
+    if (legacyRemove.length > 0) {
+      try {
+        if (Object.keys(legacyRewrites).length > 0) await chrome.storage.local.set(legacyRewrites);
+        await chrome.storage.local.remove(legacyRemove);
+      } catch (e) {
+        console.error("SlackClean BG: legacy key migration failed", e);
+      }
+    }
+
     for (const [key, val] of Object.entries(storage)) {
       if (key.startsWith("slack_state_") && val) {
         // Never clobber a live in-memory job — storage is only a backup, and a
@@ -366,13 +422,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const respond = () => {
       const job = activeJobs[key];
       
-      let otherJob = null;
+      // otherJobs: every OTHER job in this same team, not just the first one found —
+      // a user can have paused jobs in more than one other channel at once, and the
+      // dashboard needs to be able to warn about all of them, not silently drop all
+      // but the first. otherJob (singular, first match) is kept alongside for
+      // backward compatibility with existing callers/tests.
+      const otherJobs = [];
       for (const [, j] of Object.entries(activeJobs)) {
         if (j.teamId === request.teamId && j.channelId !== request.channelId) {
-          otherJob = { channelId: j.channelId, isPaused: j.isPaused, isRunning: j.isRunning };
-          break;
+          otherJobs.push({ channelId: j.channelId, isPaused: j.isPaused, isRunning: j.isRunning });
         }
       }
+      const otherJob = otherJobs.length > 0 ? otherJobs[0] : null;
 
       if (job) {
         sendResponse({
@@ -385,10 +446,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             throttleDelay: job.throttleDelay,
             filterAttachments: job.filterAttachments
           },
-          otherJob
+          otherJob,
+          otherJobs
         });
       } else {
-        sendResponse({ exists: false, otherJob });
+        sendResponse({ exists: false, otherJob, otherJobs });
       }
     };
 
@@ -477,8 +539,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       };
 
       // Persist the (immutable) queue once; progress saves afterward are light.
-      await saveJobQueue(activeJobs[key]);
-      await saveJobState(key, activeJobs[key]);
+      // The two writes target independent storage keys, so run them concurrently
+      // instead of paying for two sequential chrome.storage.local round-trips.
+      await Promise.all([
+        saveJobQueue(activeJobs[key]),
+        saveJobState(key, activeJobs[key])
+      ]);
       markRunning(key, true);
       ensureWatchdog();
       scheduleNextStep(key, 0);
@@ -682,7 +748,15 @@ async function runScanInBg(token, req) {
   // parent newer than `latest`.
   const THREAD_LOOKBACK_SEC = 30 * 24 * 60 * 60; // 30 days
   const relaxLowerBound = includeThreads && oldestNum > 0;
-  const historyOldest = relaxLowerBound ? Math.max(0, oldestNum - THREAD_LOOKBACK_SEC) : oldest;
+  const lookbackCutoff = oldestNum - THREAD_LOOKBACK_SEC;
+  const historyOldest = relaxLowerBound ? Math.max(0, lookbackCutoff) : oldest;
+  // If the 30-day lookback itself got clamped short of the true beginning of history
+  // (lookbackCutoff > 0), a thread whose root predates it is never fetched/expanded,
+  // so an in-window reply hanging off it would be silently missed. That's a real,
+  // if rare, incompleteness distinct from MAX_THREAD_PAGES/page-cap truncation, so it
+  // must feed the same honest "not everything was examined" signal (see
+  // threadsTruncated/moreAvailable below) rather than reporting a clean scan.
+  const lookbackMayMissThreads = relaxLowerBound && lookbackCutoff > 0;
 
   // Track results, dedup, and rate limit pausing
   const results = [];
@@ -694,10 +768,11 @@ async function runScanInBg(token, req) {
   const maxPages = (oldestNum > 0) ? 100 : MAX_SCAN_PAGES;
   let continueScan = true;
   let capped = false;
-  // Set when a thread was deeper than MAX_THREAD_PAGES, so replies in it went
-  // unexamined. Folded into `moreAvailable` below — the UI already warns honestly
-  // that older/deeper messages were NOT scanned.
-  let threadsTruncated = false;
+  // Set when a thread was deeper than MAX_THREAD_PAGES, or (see lookbackMayMissThreads
+  // above) when a thread root could predate the 30-day lookback window, so replies in
+  // it went unexamined. Folded into `moreAvailable` below — the UI already warns
+  // honestly that older/deeper messages were NOT scanned.
+  let threadsTruncated = lookbackMayMissThreads;
 
   while (continueScan) {
     const res = await slackAPICallWithRetry(token, "conversations.history", {
@@ -947,7 +1022,7 @@ async function executeQueue(key) {
           // Strip attachments/blocks while preserving text.
           let trimmedBlocks = [];
           if (msg.blocks && Array.isArray(msg.blocks)) {
-             trimmedBlocks = msg.blocks.filter(b => b.type !== "image" && b.type !== "file");
+             trimmedBlocks = msg.blocks.filter(b => b && b.type !== "image" && b.type !== "file");
           }
           response = await slackAPICall(job.token, "chat.update", {
             channel: job.channelId,

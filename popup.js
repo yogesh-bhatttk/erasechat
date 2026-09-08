@@ -16,6 +16,14 @@
 // suppress a still-pending connect's tab-open.
 let leftPlatformPicker = false;
 
+// How many connectAndLaunchPlatform() calls (potentially for DIFFERENT platforms)
+// are currently in flight. Without this, whichever platform's connect finishes
+// FIRST calls window.close() and tears down the whole popup document -- silently
+// aborting any OTHER platform's still-running connect (e.g. Teams' up-to-15s token
+// poll) with no error ever shown, even though concurrent connects for different
+// platforms are meant to be safe (see leftPlatformPicker's own comment below).
+let pendingConnectCount = 0;
+
 // i18n helpers. Localized text is applied over the English already in the HTML,
 // so a missing key or a browser without chrome.i18n simply keeps the English —
 // no blank strings, no regression.
@@ -90,8 +98,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Auto-skip the picker only when the active tab is unambiguously Slack's --
   // every other platform's own migration step decides its own auto-detect
   // behavior when it lands (see popup/platform-registry.js's isTabMatch).
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const tab = tabs[0];
+  getActiveTabCached().then((tab) => {
     const hostname = tab && tab.url ? safeHostname(tab.url) : null;
     const slackPlatform = PLATFORMS.find((p) => p.id === "slack");
     if (hostname && slackPlatform.isTabMatch(hostname)) {
@@ -99,6 +106,23 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 });
+
+// Cached across every call site that needs the active tab on this popup load
+// (DOMContentLoaded's auto-skip check, renderPlatformList's "This tab" badge, and
+// detectSlackTab) -- they all resolve to the same tab on the same popup open, so
+// without this each one paid for its own redundant chrome.tabs.query IPC round-trip
+// on a hot path that runs every time the toolbar icon is clicked. Safe to cache for
+// the lifetime of a single popup document: switching the active tab closes the
+// popup (loses focus), so a stale cached tab can never be observed here.
+let activeTabPromise = null;
+function getActiveTabCached() {
+  if (!activeTabPromise) {
+    activeTabPromise = new Promise((resolve) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => resolve(tabs[0] || null));
+    });
+  }
+  return activeTabPromise;
+}
 
 function safeHostname(url) {
   try {
@@ -113,8 +137,7 @@ function renderPlatformList() {
   const list = document.getElementById("platform-list");
   list.innerHTML = "";
 
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const tab = tabs[0];
+  getActiveTabCached().then((tab) => {
     const hostname = tab && tab.url ? safeHostname(tab.url) : null;
 
     for (const platform of PLATFORMS) {
@@ -286,16 +309,21 @@ function connectAndLaunchPlatform(platform, formValues) {
 
   const request = { origins, permissions: platform.optionalPermissions || [] };
 
+  pendingConnectCount++;
+  const finishPending = () => { pendingConnectCount = Math.max(0, pendingConnectCount - 1); };
+
   try {
     chrome.permissions.request(request, (granted) => {
       void chrome.runtime.lastError;
       if (!granted) {
+        finishPending();
         setPlatformRowStatus(platform.id, "");
         showPlatformConnectError(t("popupPermissionDenied", "Permission was not granted, so this platform can't be opened."));
         return;
       }
 
       const afterConnect = (result) => {
+        finishPending();
         if (result && result.ok === false) {
           setPlatformRowStatus(platform.id, "");
           showPlatformConnectError(result.message || t("popupConnectFailed", "Could not connect. Please try again."));
@@ -311,11 +339,17 @@ function connectAndLaunchPlatform(platform, formValues) {
           return;
         }
         chrome.tabs.create({ url: chrome.runtime.getURL(platform.dashboard) });
-        window.close();
+        // Only close the popup once every in-flight connect has actually settled --
+        // closing earlier would tear down another platform's still-running
+        // connect (e.g. Teams' token poll) with no warning. See pendingConnectCount.
+        if (pendingConnectCount === 0) {
+          window.close();
+        }
       };
 
       if (typeof platform.connect === "function") {
         Promise.resolve(platform.connect(formValues)).then(afterConnect).catch((err) => {
+          finishPending();
           setPlatformRowStatus(platform.id, "");
           showPlatformConnectError(String(err && err.message ? err.message : err));
         });
@@ -329,6 +363,7 @@ function connectAndLaunchPlatform(platform, formValues) {
     // resolveOrigin() result that isn't a legal Chrome match pattern. Without
     // this catch, the row would be stuck on "Connecting..." forever with no
     // error shown.
+    finishPending();
     setPlatformRowStatus(platform.id, "");
     showPlatformConnectError(String(err && err.message ? err.message : err));
   }
@@ -371,8 +406,7 @@ function enterSlackView() {
 }
 
 function detectSlackTab() {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const tab = tabs[0];
+  getActiveTabCached().then((tab) => {
     if (!tab || !tab.url) {
       showOfflineState();
       return;
