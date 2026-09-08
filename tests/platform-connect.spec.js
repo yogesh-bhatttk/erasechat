@@ -297,8 +297,7 @@ test('clicking Telegram enters its own view with the credentials step, and back 
   }
 });
 
-test('Teams times out with an actionable error when background.js never captures a token', async () => {
-  test.setTimeout(20000); // connectTeams' own poll loop runs up to 15s
+test('Teams opens its sign-in tab and gives actionable next steps when no token is captured', async () => {
   const { context, extensionId } = await launch();
   try {
     const page = await context.newPage();
@@ -309,10 +308,6 @@ test('Teams times out with an actionable error when background.js never captures
       // connectTeams() now opens a real Teams tab itself (see connect-teams.js) --
       // stub it so this test doesn't actually navigate to teams.microsoft.com.
       chrome.tabs.create = () => Promise.resolve({});
-      // Shrink the poll loop so this test doesn't actually wait 15 real seconds --
-      // exercises the exact same timeout/error path with a friendlier duration.
-      const platform = PLATFORMS.find((p) => p.id === 'teams');
-      platform.connect = () => connectTeams({ timeoutMs: 300, pollIntervalMs: 50 });
     });
 
     await page.locator('.platform-row[data-platform="teams"]').click();
