@@ -146,6 +146,7 @@ export default [
         document: "readonly",
         alert: "readonly",
         prompt: "readonly",
+        module: "writable",
         delay: "readonly",
         fetchWithRetry: "readonly",
         confirmBulkDelete: "readonly",

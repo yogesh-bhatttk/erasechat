@@ -1,4 +1,10 @@
-document.addEventListener('DOMContentLoaded', async () => {
+function resolveXScriptUrl(src) {
+  return new URL(src, 'https://x.com/').href;
+}
+
+if (typeof module !== 'undefined') module.exports = { resolveXScriptUrl };
+
+if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
   const data = await chrome.storage.local.get(['x_csrf']);
   if (!data.x_csrf) {
     alert("Not linked to X.com. Please open the extension popup first.");
@@ -89,7 +95,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Independent bundle fetches -- run them concurrently instead of one at a
       // time, since each is a full (often multi-MB) download+parse.
       await Promise.all(scriptMatches.map(async (m) => {
-        const jsRes = await fetchWithRetry(m[1], { credentials: 'include' });
+        const jsRes = await fetchWithRetry(resolveXScriptUrl(m[1]), { credentials: 'include' });
         const js = await jsRes.text();
         const matches = [...js.matchAll(/queryId:"([^"]+)",operationName:"(UserTweets|DeleteTweet|UserByScreenName)"/g)];
         for (const match of matches) {
