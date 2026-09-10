@@ -219,6 +219,13 @@ Uploading to the stores is still manual — see
 - Privacy policy: [PRIVACY_POLICY.md](PRIVACY_POLICY.md)
 - Reporting a vulnerability: [SECURITY.md](SECURITY.md)
 
+## Further reading
+
+- [`docs/MULTI_PLATFORM_EXPANSION_PLAN.md`](docs/MULTI_PLATFORM_EXPANSION_PLAN.md) — the
+  research behind which platforms beyond Slack were worth adding, and why.
+- [`docs/AUDIT_PROMPT.md`](docs/AUDIT_PROMPT.md) — the prompt this project's audit passes
+  are run from.
+
 ## License
 
 [MIT](LICENSE) © 2026 Yogesh Bhatt

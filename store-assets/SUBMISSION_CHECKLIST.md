@@ -7,7 +7,7 @@ resolved before submitting; **(you)** require your action outside this repo.
 > merge that added five optional platforms (Reddit, X, Mastodon, Microsoft Teams,
 > Telegram) alongside Slack. Add, before submitting: (1) a real scan-and-delete run against
 > a live account for each of the five, not just Slack — none has been verified end-to-end
-> against a real logged-in account yet (see `MULTI_PLATFORM_EXPANSION_PLAN.md` §7.10's
+> against a real logged-in account yet (see `docs/MULTI_PLATFORM_EXPANSION_PLAN.md` §7.10's
 > closing note); (2) confirmation that new screenshots/description covering the platform
 > picker were added (see the same note in `STORE_LISTING.md`); (3) re-verification of the
 > `cookies`/`webRequest`/`identity` permission justification text in
