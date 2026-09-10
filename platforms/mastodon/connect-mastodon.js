@@ -23,9 +23,14 @@ async function connectMastodon(values) {
     }
 
     const account = await response.json();
+    // The access token is a durable, often broad-scope credential -- equivalent to
+    // a standing login, not a short CSRF value -- so it's stored session-only
+    // (chrome.storage.session, memory-only, cleared on browser close), matching the
+    // Slack token's own discipline. Everything else here is non-secret display/
+    // routing metadata and stays in local storage across restarts.
+    await chrome.storage.session.set({ mstdn_token: token });
     await chrome.storage.local.set({
       mstdn_host: host,
-      mstdn_token: token,
       mstdn_user_id: account.id,
       mstdn_username: account.username
     });

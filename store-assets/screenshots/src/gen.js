@@ -1,12 +1,12 @@
-// Generates the 5 store-screenshot compositions (1280x800) with "Erasechat"
+// Generates the 6 store-screenshot compositions (1280x800) with "Erasechat"
 // branding. Faithful recreation of the originals (marketing mockups), using the
 // product's own Outfit font (inlined) so it renders offline.
 const fs = require('fs');
 const path = require('path');
 
 // Regenerate the store screenshots after a branding/content change:
-//   node store-assets/screenshots/src/gen.js      # writes the 5 HTML files here
-//   for s in 01-overview 02-preview 03-safety 04-progress 05-privacy; do \
+//   node store-assets/screenshots/src/gen.js      # writes the 6 HTML files here
+//   for s in 00-platforms 01-overview 02-preview 03-safety 04-progress 05-privacy; do \
 //     google-chrome --headless=new --no-sandbox --hide-scrollbars \
 //       --force-device-scale-factor=1 --window-size=1280,800 \
 //       --screenshot="store-assets/screenshots/$s.png" \
@@ -95,6 +95,28 @@ const page = (bodyInner) => `<!doctype html><html><head><meta charset="utf-8"><s
 const head = (tag, h1html, sub) => `
 <div class="top">${brand(22)}${tag?`<div class="tag">${tag}</div>`:'<div></div>'}</div>
 <h1>${h1html}</h1><div class="sub">${sub}</div>`;
+
+// ---------- Slide 0: platform picker ----------
+const plat = (color, ini, name, desc, status, on) => `
+<div style="display:flex;gap:16px;align-items:center;padding:15px 4px;border-bottom:1px solid rgba(148,163,184,.1)">
+  <span class="av" style="background:${color};width:38px;height:38px;border-radius:10px;font-size:14px">${ini}</span>
+  <div style="flex:1">
+    <div style="font-weight:700;color:#fff;font-size:15px">${name}</div>
+    <div style="color:#94a3b8;font-size:13px;margin-top:2px">${desc}</div>
+  </div>
+  <span class="pill" style="${on ? 'color:#34d399;border-color:rgba(52,211,153,.35);background:rgba(52,211,153,.1)' : 'color:#cbd5e1'};font-size:12px;padding:6px 14px">${status}</span>
+</div>`;
+const s0 = page(head('Choose a Platform',
+  `One extension. <span class="a">Six platforms.</span>`,
+  `Slack is built in. Connect Reddit, X, Mastodon, Microsoft Teams, or Telegram independently — one click, no accounts to create, and nothing is touched until you ask.`) + `
+<div class="card" style="margin-top:28px;padding:6px 26px">
+  ${plat('linear-gradient(135deg,#8b5cf6,#ec4899)', 'S', 'Slack', 'Bulk-clean channels, groups, and DMs — the flagship engine', '🟢 Connected', true)}
+  ${plat('#FF4500', 'R', 'Reddit', 'Bulk-delete your own comments and posts', 'Connect', false)}
+  ${plat('#0f172a', 'X', 'X', 'Bulk-delete your own posts', 'Connect', false)}
+  ${plat('#6364FF', 'M', 'Mastodon', 'Works with any federated instance you choose', 'Connect', false)}
+  ${plat('#6264A7', 'T', 'Microsoft Teams', 'Bulk-delete your own chat messages', 'Connect', false)}
+  ${plat('#2AABEE', '✈', 'Telegram', 'A real MTProto client, right in your browser', 'Connect', false)}
+</div>`);
 
 // ---------- Slide 1: overview ----------
 const s1 = page(head('',
@@ -245,6 +267,6 @@ const s5 = page(head('Private by Design',
   </div>
 </div>`);
 
-const slides = {'01-overview':s1,'02-preview':s2,'03-safety':s3,'04-progress':s4,'05-privacy':s5};
+const slides = {'00-platforms':s0,'01-overview':s1,'02-preview':s2,'03-safety':s3,'04-progress':s4,'05-privacy':s5};
 for (const [name,html] of Object.entries(slides)) fs.writeFileSync(path.join(OUT, name+'.html'), html);
 console.log('wrote', Object.keys(slides).join(', '));

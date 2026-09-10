@@ -4,6 +4,10 @@
 //
 // Ported from bulk-clean-for-x's own popup.js. Returns { ok: true } on success,
 // { ok: false, message } on failure -- never throws.
+//
+// ct0 is stored in chrome.storage.session (memory-only, cleared on browser close),
+// matching the Slack token's own storage discipline -- never chrome.storage.local,
+// so nothing here survives to disk.
 async function connectX() {
   try {
     const cookies = await chrome.cookies.getAll({ domain: "x.com", name: "ct0" });
@@ -14,7 +18,7 @@ async function connectX() {
       return { ok: false, message: "Could not find an active X.com session. Please log in to X.com in this browser first." };
     }
 
-    await chrome.storage.local.set({ x_csrf: ct0 });
+    await chrome.storage.session.set({ x_csrf: ct0 });
     return { ok: true };
   } catch (err) {
     return { ok: false, message: "Error accessing cookies. Make sure you have the correct permissions." };

@@ -274,15 +274,26 @@ test("every data-i18n key in the UI resolves to a locale key", () => {
   // manifest check can see. A typo'd or renamed key there is invisible until a user
   // on a localized build sees the raw English fallback (or, for attributes, nothing
   // at all). Covers popup.html and the dashboard markup inside content.js alike.
+  const PLATFORM_DASHBOARD_HTML = [
+    "platforms/x/dashboard-x.html",
+    "platforms/teams/dashboard-teams.html",
+    "platforms/mastodon/dashboard-mastodon.html",
+    "platforms/reddit/dashboard-reddit.html",
+    "platforms/telegram/dashboard-telegram.html"
+  ];
+
   const sources = {
     "popup.html": fs.readFileSync(path.join(ROOT, "popup.html"), "utf8"),
     "content.js": fs.readFileSync(path.join(ROOT, "content.js"), "utf8"),
     "privacy.html": fs.readFileSync(path.join(ROOT, "privacy.html"), "utf8")
   };
+  for (const rel of PLATFORM_DASHBOARD_HTML) {
+    sources[rel] = fs.readFileSync(path.join(ROOT, rel), "utf8");
+  }
 
   let checked = 0;
   for (const [name, src] of Object.entries(sources)) {
-    for (const m of src.matchAll(/data-i18n(?:-ph|-title|-aria)?=["']([A-Za-z0-9_]+)["']/g)) {
+    for (const m of src.matchAll(/data-i18n(?:-ph|-title|-aria|-placeholder)?=["']([A-Za-z0-9_]+)["']/g)) {
       assert.ok(messages[m[1]], `${name} references undefined locale key: ${m[1]}`);
       checked++;
     }
@@ -294,7 +305,16 @@ test("locale keys used via the t() fallback helper exist too", () => {
   // t("key", "English fallback") is the JS-side counterpart to data-i18n. A missing
   // key here degrades silently to the fallback, so it never surfaces as a bug in the
   // default locale — only in translated builds.
-  for (const name of ["popup.js", "content.js"]) {
+  const FILES_USING_T = [
+    "popup.js", "content.js", "background.js",
+    "platforms/shared/dashboard-fetch-utils.js",
+    "platforms/x/dashboard-x.js",
+    "platforms/teams/dashboard-teams.js",
+    "platforms/mastodon/dashboard-mastodon.js",
+    "platforms/reddit/dashboard-reddit.js",
+    "platforms/telegram/telegram-dashboard.src.js"
+  ];
+  for (const name of FILES_USING_T) {
     const src = fs.readFileSync(path.join(ROOT, name), "utf8");
     for (const m of src.matchAll(/\bt\(\s*["']([A-Za-z0-9_]+)["']/g)) {
       assert.ok(messages[m[1]], `${name} calls t() with an undefined locale key: ${m[1]}`);
@@ -307,6 +327,61 @@ test("locale file is well formed", () => {
     assert.strictEqual(typeof entry, "object", `${key} must be an object`);
     assert.strictEqual(typeof entry.message, "string", `${key} needs a string message`);
     assert.ok(entry.message.length > 0, `${key} message must not be empty`);
+  }
+});
+
+test("no message text accidentally forms a $NAME$ named placeholder", () => {
+  // Chrome's messages.json format treats ANY "$...$" span as a NAMED placeholder
+  // reference, which must have a matching "placeholders" entry or the whole
+  // extension refuses to load ("Variable $X$ used but not defined"). This project
+  // only ever uses bare numbered substitution ($1, $2, ...) with no "placeholders"
+  // block anywhere -- so two adjacent numbered refs with nothing between them
+  // (e.g. a message built as "$1" + "$2" = literal text "...$1$2...") reads as the
+  // named placeholder "$1$" followed by a stray "2", and Chrome rejects the whole
+  // package at install time. This was caught only by actually loading the built
+  // extension, not by any positive test -- $1 resolving to a real key doesn't
+  // catch $1 and $2 colliding into an invalid token.
+  for (const locale of ["en", "es", "fr", "de"]) {
+    const localeMessages = readJson(`_locales/${locale}/messages.json`);
+    for (const [key, entry] of Object.entries(localeMessages)) {
+      const collision = entry.message.match(/\$[A-Za-z0-9_]*\$/);
+      assert.strictEqual(collision, null,
+        `_locales/${locale}/messages.json: "${key}" contains ${collision && collision[0]}, which Chrome parses as an undefined named placeholder: "${entry.message}"`);
+    }
+  }
+});
+
+test("translated locales have exactly the same key set as English", () => {
+  // A missing key silently falls back to English for that one string (no blank
+  // label) -- not a crash, but a drift that's otherwise invisible until a user on
+  // that locale spots the one untranslated string. An extra key is dead weight
+  // that will never be read. Both are cheap to catch here.
+  const enKeys = new Set(Object.keys(messages));
+  for (const locale of ["es", "fr", "de"]) {
+    const localeMessages = readJson(`_locales/${locale}/messages.json`);
+    const localeKeys = new Set(Object.keys(localeMessages));
+    const missing = [...enKeys].filter((k) => !localeKeys.has(k));
+    const extra = [...localeKeys].filter((k) => !enKeys.has(k));
+    assert.deepStrictEqual(missing, [], `_locales/${locale}/messages.json is missing keys present in English`);
+    assert.deepStrictEqual(extra, [], `_locales/${locale}/messages.json has keys not present in English`);
+    for (const [key, entry] of Object.entries(localeMessages)) {
+      assert.strictEqual(typeof entry.message, "string", `_locales/${locale}: ${key} needs a string message`);
+      assert.ok(entry.message.length > 0, `_locales/${locale}: ${key} message must not be empty`);
+    }
+  }
+});
+
+test("extensionDescription stays within the Chrome Web Store's 132-character manifest limit, in every locale", () => {
+  // Chrome truncates (and can reject) a manifest `description` over 132 characters.
+  // Both stores' listing description is longer-form text entered separately in their
+  // submission forms, but the manifest's own description -- which __MSG_extensionDescription__
+  // resolves to -- is what shows in chrome://extensions and is capped by Chrome itself.
+  for (const locale of ["en", "es", "fr", "de"]) {
+    const localeMessages = readJson(`_locales/${locale}/messages.json`);
+    const desc = localeMessages.extensionDescription?.message;
+    assert.ok(desc, `_locales/${locale}/messages.json is missing extensionDescription`);
+    assert.ok(desc.length <= 132,
+      `_locales/${locale}/messages.json extensionDescription is ${desc.length} chars (max 132): "${desc}"`);
   }
 });
 
@@ -465,4 +540,36 @@ test("no token is ever written to persistent storage", () => {
   }
   // The token's only persistent home is session storage, which clears on browser close.
   assert.match(bg, /chrome\.storage\.session\.set\(\s*\{\s*\[`sc_token_/);
+});
+
+test("the five non-Slack platforms' account credentials are never written to storage.local either", () => {
+  // Same promise as the Slack token above, extended to the newer platforms: each of
+  // these is a standing account credential (an MTProto session, a personal access
+  // token, a Bearer JWT, a CSRF/modhash write token) and belongs only in
+  // chrome.storage.session, memory-only, cleared on browser close.
+  const CREDENTIAL_FILES = [
+    { file: "platforms/telegram/telegram-popup.src.js", key: "tg_session" },
+    { file: "platforms/telegram/telegram-dashboard.src.js", key: "tg_session" },
+    { file: "platforms/mastodon/connect-mastodon.js", key: "mstdn_token" },
+    { file: "platforms/mastodon/dashboard-mastodon.js", key: "mstdn_token" },
+    { file: "platforms/teams/teams-webrequest.js", key: "teams_token" },
+    { file: "platforms/teams/dashboard-teams.js", key: "teams_token" },
+    { file: "platforms/x/connect-x.js", key: "x_csrf" },
+    { file: "platforms/x/dashboard-x.js", key: "x_csrf" },
+    { file: "platforms/reddit/connect-reddit.js", key: "reddit_modhash" },
+    { file: "platforms/reddit/dashboard-reddit.js", key: "reddit_modhash" }
+  ];
+
+  for (const { file, key } of CREDENTIAL_FILES) {
+    const src = fs.readFileSync(path.join(ROOT, file), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+
+    const localWrites = src.match(/chrome\.storage\.local\.(set|get|remove)\([\s\S]{0,400}?\)/g) || [];
+    for (const call of localWrites) {
+      assert.ok(!call.includes(key), `${key} touched via chrome.storage.local in ${file}:\n${call}`);
+    }
+    assert.match(src, new RegExp(`chrome\\.storage\\.session\\.(set|get)\\([\\s\\S]{0,200}?${key}`),
+      `${file} must read/write ${key} via chrome.storage.session`);
+  }
 });

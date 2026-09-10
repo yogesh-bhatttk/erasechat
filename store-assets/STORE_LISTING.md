@@ -1,12 +1,12 @@
 # Erasechat — Store Listing Copy
 
-> **⚠️ Also stale on the multi-platform question (2026-09-07):** this file, and both
-> submission sheets it points to below, still describe Slack only. The extension now also
-> offers five optional platforms (Reddit, X, Mastodon, Microsoft Teams, Telegram),
-> each connected explicitly from the popup. `CWS_SUBMISSION_FIELDS.md`'s §2 has been
-> updated for this; `AMO_SUBMISSION_FIELDS.md` has a matching reviewer-notes addendum but
-> its Description is still Slack-only. Neither file's Description/Screenshots reflect the
-> platform picker yet — that's a visual-asset task, not a text edit.
+> **Updated 2026-09-10 for the 6-platform tool.** Both submission sheets'
+> Summary/Description/permission-justification/Notes-for-Reviewer text now describe all
+> six platforms (Slack plus optional Reddit, X, Mastodon, Microsoft Teams, Telegram, each
+> connected explicitly from the popup). What's below in this shared file is still
+> Slack-focused (see the per-file note in each submission sheet) — the Feature claims and
+> screenshot captions haven't been expanded to the five newer platforms, and new
+> screenshots showing the platform picker are a visual-asset task, not a text edit.
 >
 > **Per-store field values live in the two submission sheets, not here.** Chrome and AMO
 > disagree on nearly every field — category taxonomy, whether the summary comes from the
@@ -90,11 +90,12 @@ _Order matches `store-assets/screenshots/`. Identical on both stores._
 
 | # | File | Caption |
 |---|---|---|
-| 1 | `01-overview.png` | Set your rules, target any conversation. |
-| 2 | `02-preview.png` | Scan first. Preview every message before it goes. |
-| 3 | `03-safety.png` | Deletes are permanent — so we make you confirm. |
-| 4 | `04-progress.png` | Watch it work — live progress and logs. |
-| 5 | `05-privacy.png` | 100% local. Nothing leaves your browser. |
+| 1 | `00-platforms.png` | One extension. Six platforms. |
+| 2 | `01-overview.png` | Set your rules, target any conversation. |
+| 3 | `02-preview.png` | Scan first. Preview every message before it goes. |
+| 4 | `03-safety.png` | Deletes are permanent — so we make you confirm. |
+| 5 | `04-progress.png` | Watch it work — live progress and logs. |
+| 6 | `05-privacy.png` | 100% local. Nothing leaves your browser. |
 
 ---
 

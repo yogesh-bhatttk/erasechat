@@ -90,9 +90,13 @@ test('a granted permission and a real session opens the Reddit dashboard tab', a
 
     expect(created.url).toMatch(/dashboard-reddit\.html$/);
 
-    const stored = await page.evaluate(() => chrome.storage.local.get(['reddit_modhash', 'reddit_username']));
-    expect(stored.reddit_modhash).toBe('abc123');
-    expect(stored.reddit_username).toBe('testuser');
+    // modhash is a write-authorizing token, so it's session-only (memory, cleared on
+    // browser close) like the Slack token; the username is non-sensitive display
+    // metadata and stays in local storage.
+    const storedSession = await page.evaluate(() => chrome.storage.session.get(['reddit_modhash']));
+    const storedLocal = await page.evaluate(() => chrome.storage.local.get(['reddit_username']));
+    expect(storedSession.reddit_modhash).toBe('abc123');
+    expect(storedLocal.reddit_username).toBe('testuser');
   } finally {
     await context.close();
   }
@@ -156,7 +160,9 @@ test('a granted permission and a real ct0 cookie opens the X dashboard tab', asy
 
     expect(created.url).toMatch(/dashboard-x\.html$/);
 
-    const stored = await page.evaluate(() => chrome.storage.local.get(['x_csrf']));
+    // The CSRF value is stored session-only (memory, cleared on browser close), like
+    // the Slack token -- never chrome.storage.local.
+    const stored = await page.evaluate(() => chrome.storage.session.get(['x_csrf']));
     expect(stored.x_csrf).toBe('csrf-token-value');
   } finally {
     await context.close();
@@ -237,11 +243,15 @@ test('a granted permission and valid credentials opens the Mastodon dashboard ta
 
     expect(created.url).toMatch(/dashboard-mastodon\.html$/);
 
-    const stored = await page.evaluate(() => chrome.storage.local.get(['mstdn_host', 'mstdn_token', 'mstdn_user_id', 'mstdn_username']));
-    expect(stored.mstdn_host).toBe('example.social');
-    expect(stored.mstdn_token).toBe('tok123');
-    expect(stored.mstdn_user_id).toBe('999');
-    expect(stored.mstdn_username).toBe('mstdnuser');
+    // The access token is a durable, standing credential -- session-only storage,
+    // like the Slack token. Host/id/username are non-sensitive routing/display
+    // metadata and stay in local storage.
+    const storedLocal = await page.evaluate(() => chrome.storage.local.get(['mstdn_host', 'mstdn_user_id', 'mstdn_username']));
+    const storedSession = await page.evaluate(() => chrome.storage.session.get(['mstdn_token']));
+    expect(storedLocal.mstdn_host).toBe('example.social');
+    expect(storedSession.mstdn_token).toBe('tok123');
+    expect(storedLocal.mstdn_user_id).toBe('999');
+    expect(storedLocal.mstdn_username).toBe('mstdnuser');
   } finally {
     await context.close();
   }
@@ -259,8 +269,10 @@ test('Teams opens straight to its dashboard when a token is already stored from 
         chrome.tabs.create = (opts) => { resolve(opts); return Promise.resolve({}); };
         window.close = () => {};
 
-        chrome.storage.local.set({ teams_token: 'Bearer abc', teams_base_url: 'https://teams.microsoft.com' }, () => {
-          document.querySelector('.platform-row[data-platform="teams"]').click();
+        chrome.storage.session.set({ teams_token: 'Bearer abc' }, () => {
+          chrome.storage.local.set({ teams_base_url: 'https://teams.microsoft.com' }, () => {
+            document.querySelector('.platform-row[data-platform="teams"]').click();
+          });
         });
       });
     });

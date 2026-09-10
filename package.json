@@ -2,7 +2,7 @@
   "name": "erasechat",
   "version": "1.0.0",
   "private": true,
-  "description": "Bulk delete and clean your Slack messages with advanced filters, threads, and safety controls.",
+  "description": "Bulk delete and clean your own content on Slack, Reddit, X, Mastodon, Microsoft Teams, and Telegram, with advanced filters and strong safety controls.",
   "author": "Yogesh Bhatt <yogeshb@prosperix.com>",
   "license": "MIT",
   "engines": {

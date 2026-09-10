@@ -42,7 +42,14 @@ async function connectReddit() {
     }
 
     const { modhash, name } = json.data;
-    await chrome.storage.local.set({ reddit_modhash: modhash, reddit_username: name });
+    // modhash is a CSRF-style write token (not the session cookie itself, which is
+    // never read or stored here at all -- it rides via credentials: "include") but
+    // it's still stored session-only, matching the Slack token's discipline: nothing
+    // that authorizes a write on the user's behalf touches chrome.storage.local.
+    // The username is plain display metadata, not a credential, so it stays in
+    // local storage for convenience across restarts.
+    await chrome.storage.session.set({ reddit_modhash: modhash });
+    await chrome.storage.local.set({ reddit_username: name });
 
     return { ok: true, username: name };
   } catch (err) {

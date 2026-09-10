@@ -33,6 +33,32 @@ const sharedFilterGlobals = {
   stringToColor: "readonly"
 };
 
+// Provided by platforms/shared/dashboard-fetch-utils.js, loaded via <script>
+// before each platform dashboard's own script (and, for Telegram, before its
+// webpack bundle too -- see dashboard-telegram.html).
+const dashboardFetchUtilsGlobals = {
+  delay: "readonly",
+  fetchWithRetry: "readonly",
+  confirmBulkDelete: "readonly",
+  reportInterruptedDelete: "readonly",
+  maybeSaveDeleteProgress: "readonly",
+  renderEmptyState: "readonly",
+  formatScanCount: "readonly",
+  t: "readonly",
+  localizeI18n: "readonly",
+  showAlert: "readonly",
+  showConfirm: "readonly",
+  showPrompt: "readonly",
+  resetSelection: "readonly",
+  getSelectedItems: "readonly",
+  renderSelectAllControl: "readonly",
+  addRowCheckbox: "readonly",
+  wireSelectAll: "readonly",
+  createCancelController: "readonly",
+  armCancelButton: "readonly",
+  resetCancelButton: "readonly"
+};
+
 const correctnessRules = {
   // The single most valuable rule here: with no build step, a misspelled global is a
   // runtime crash in the user's browser and nowhere else.
@@ -112,7 +138,12 @@ export default [
         window: "readonly",
         document: "readonly",
         alert: "readonly",
-        prompt: "readonly"
+        prompt: "readonly",
+        // telegram-dashboard.src.js only (harmless to also declare for the popup
+        // source, which doesn't call these): provided by
+        // platforms/shared/dashboard-fetch-utils.js, loaded via <script> before
+        // telegram-dashboard.bundle.js in dashboard-telegram.html.
+        ...dashboardFetchUtilsGlobals
       }
     },
     rules: correctnessRules
@@ -147,13 +178,7 @@ export default [
         alert: "readonly",
         prompt: "readonly",
         module: "writable",
-        delay: "readonly",
-        fetchWithRetry: "readonly",
-        confirmBulkDelete: "readonly",
-        reportInterruptedDelete: "readonly",
-        maybeSaveDeleteProgress: "readonly",
-        renderEmptyState: "readonly",
-        formatScanCount: "readonly"
+        ...dashboardFetchUtilsGlobals
       }
     },
     rules: correctnessRules

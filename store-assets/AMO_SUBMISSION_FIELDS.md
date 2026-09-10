@@ -4,16 +4,13 @@ Copy-paste values for the Firefox Add-ons submission form, in the order the form
 Kept separate from `STORE_LISTING.md` because that file is written against the **Chrome**
 Web Store's taxonomy, which does not match AMO's (see Categories below).
 
-> **⚠️ Stale as of 2026-09-07.** This file was written before the extension grew from
-> Slack-only into a 6-platform tool (Slack plus optional Reddit, X, Mastodon, Microsoft
+> **Updated 2026-09-10 for the 6-platform tool.** Summary, Description, and Screenshots
+> now name/show all six platforms (Slack plus optional Reddit, X, Mastodon, Microsoft
 > Teams, and Telegram, each connected explicitly from the popup). The
-> `data_collection_permissions: ["none"]` claim below still holds — nothing is
-> transmitted to the developer on any of the six platforms, only stored locally on the
-> user's own device — but the Description and Notes for Reviewer text still describe
-> Slack only. Before a real submission, at minimum add a paragraph to Notes for Reviewer
-> along the lines of the "OPTIONAL PLATFORMS BEYOND SLACK" addendum in
-> `CWS_SUBMISSION_FIELDS.md`, and update the Description to mention the five optional
-> platforms exist. Screenshots further down are also Slack-only and unchanged.
+> `data_collection_permissions: ["none"]` claim still holds — nothing is transmitted to
+> the developer on any of the six platforms, only stored locally (and, for each
+> platform's credential itself, only in memory via `chrome.storage.session`) on the
+> user's own device.
 
 ---
 
@@ -28,9 +25,9 @@ erasechat
 ```
 
 ## Summary
-_AMO shows this in listings and search. Already correct on the form._
+_AMO shows this in listings and search._
 ```
-Bulk delete and clean your Slack messages in channels and DMs with advanced filters, threads, and safety controls.
+Bulk-delete your own content on Slack, Reddit, X, Mastodon, Microsoft Teams & Telegram, with advanced filters and safety controls.
 ```
 
 ## Description
@@ -40,42 +37,42 @@ Bulk delete and clean your Slack messages in channels and DMs with advanced filt
 > add-on on its product page. Use the full text below (AMO supports light Markdown).
 
 ```
-Tired of scrolling back years to clean up your Slack? Erasechat clears your own messages in bulk — with the filters and safety controls to do it right.
+Tired of scrolling back years to clean up your own posts and messages? Erasechat bulk-deletes your own content — with the filters and safety controls to do it right — across six platforms: Slack (built in) plus five optional platforms you connect one at a time: Reddit, X, Mastodon, Microsoft Teams, and Telegram.
 
-Open any channel, private group, or direct message, pick your filters, preview exactly what will be removed, and delete in bulk — all from your browser.
+Open a conversation (or your own account, for Reddit/X/Mastodon), pick your filters, preview exactly what will be removed, and delete in bulk — all from your browser.
 
-**Precise filters**
+**Slack — the flagship engine**
 * Target your own messages in the current conversation
 * By date — all time, older than X days, or a custom date range
 * By keyword, phrase, or /regex/ pattern
 * Include thread replies, or leave threads untouched
 * Attachments-only mode — remove files and images while keeping the message text
+* Type-to-confirm for large jobs (100+ messages); pause, resume, or cancel any run
+* Single-conversation scope, auto-pauses on navigation drift, rate-limit aware pacing, and jobs resume reliably even if the browser restarts mid-cleanup
 
-**Scan and preview before anything is deleted**
-* Run a scan to see every matching message first
-* Un-check anything you want to keep — you are always in control
-* Export the matched messages as a CSV backup in one click
+**Five more platforms, each optional**
+Connect Reddit, X, Mastodon, Microsoft Teams, or Telegram independently from the popup — none is required to use Slack, and none is contacted until you click it.
+* Reddit — bulk-delete your own comments, posts, or both
+* X — bulk-delete your own posts
+* Mastodon — works with any instance; you provide a personal access token
+* Microsoft Teams — bulk-delete your own chat messages (work/school accounts)
+* Telegram — bulk-delete your own messages via a real, in-browser MTProto client
 
-**Safety built in**
-* Type-to-confirm for large jobs (100+ messages)
-* Pause, resume, or cancel any run at any time
-* Single-conversation scope — it only touches the chat you opened
-* Auto-pauses if you navigate to a different channel or workspace mid-run
-* Rate-limit aware pacing that honours Slack's Retry-After
-* Jobs resume reliably even if the browser restarts mid-cleanup
+Every platform follows the same scan → preview → confirm safety model: review and individually un-check matches before deleting, type-to-confirm for large batches, and cancel a run already in progress.
 
-**Private by design**
+**Private by design, on every platform**
 * 100% local — all scanning and deleting happen in your browser tab
-* No servers, no accounts, no tracking, no message content uploaded
-* Works through your existing Slack login — no passwords or tokens to enter
+* No servers, no accounts, no tracking, no content uploaded to us
+* Works through your existing login on each platform — every credential stays in memory-only browser storage, never written to disk
 
 **Convenient**
-* Open the dashboard from the toolbar or with Ctrl+Shift+K (Cmd+Shift+K on macOS)
+* Open the Slack dashboard from the toolbar or with Ctrl+Shift+K (Cmd+Shift+K on macOS)
 * Clean, modern interface with three colour themes
+* Localized UI (English, Spanish, French, German) across all six platforms
 
 ---
 
-**Please note:** Erasechat is an independent tool and is not affiliated with, endorsed by, or sponsored by Slack. It acts on your behalf using your existing Slack session. Deletions are permanent and cannot be undone — always preview (and export a backup) before you delete. Deleting messages you do not have permission to remove may be restricted by your workspace.
+**Please note:** Erasechat is an independent tool and is not affiliated with, endorsed by, or sponsored by Slack, Reddit, X Corp., Mastodon gGmbH, Microsoft, or Telegram FZ-LLC. It acts on your behalf using your existing session (or, for Mastodon/Telegram, a credential you provide) on whichever platform(s) you connect. Deletions are permanent and cannot be undone — always preview before you delete. Deleting content you do not have permission to remove may be restricted by your workspace, instance, or tenant administrator.
 ```
 
 ## "This add-on is experimental"
@@ -219,13 +216,17 @@ Happy to answer anything — yogeshb@prosperix.com
 
 Upload from `store-assets/screenshots/` in this order, with these captions:
 
+AMO has no 5-screenshot cap the way Chrome does, so all 6 go here (see
+`CWS_SUBMISSION_FIELDS.md` for why Chrome's listing drops one of these).
+
 | # | File | Caption |
 |---|---|---|
-| 1 | `01-overview.png` | Set your rules, target any conversation. |
-| 2 | `02-preview.png` | Scan first. Preview every message before it goes. |
-| 3 | `03-safety.png` | Deletes are permanent — so we make you confirm. |
-| 4 | `04-progress.png` | Watch it work — live progress and logs. |
-| 5 | `05-privacy.png` | 100% local. Nothing leaves your browser. |
+| 1 | `00-platforms.png` | One extension. Six platforms. |
+| 2 | `01-overview.png` | Set your rules, target any conversation. |
+| 3 | `02-preview.png` | Scan first. Preview every message before it goes. |
+| 4 | `03-safety.png` | Deletes are permanent — so we make you confirm. |
+| 5 | `04-progress.png` | Watch it work — live progress and logs. |
+| 6 | `05-privacy.png` | 100% local. Nothing leaves your browser. |
 
 ## Version Notes (if asked)
 

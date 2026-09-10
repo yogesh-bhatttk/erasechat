@@ -153,19 +153,29 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
   // Set first-run flag for onboarding
   if (details.reason === "install") {
-    chrome.storage.local.set({ slack_onboarding_complete: false });
+    chrome.storage.local.set({ erasechat_onboarding_complete: false });
   } else if (details.reason === "update") {
-    // Migrate the onboarding-seen flag from its pre-Erasechat-rename name. Without
-    // this, every user who already dismissed onboarding under the old key sees the
-    // "Welcome to Erasechat!" card reappear once after updating, since the new key
-    // reads as undefined/falsy -- the same class of gap the job/queue key rename
-    // already gets a migration for in recoverAllJobs().
+    // Migrate the onboarding-seen flag from its pre-Erasechat-rename names (the
+    // original "sc_onboarding_complete", and the six-platform expansion's
+    // "slack_onboarding_complete" -- a naming leftover from when the onboarding
+    // card was Slack-only). Without this, every user who already dismissed
+    // onboarding under an old key sees the "Welcome to Erasechat!" card reappear
+    // once after updating, since the new key reads as undefined/falsy -- the same
+    // class of gap the job/queue key rename already gets a migration for in
+    // recoverAllJobs().
     try {
-      const legacy = await chrome.storage.local.get(["sc_onboarding_complete", "slack_onboarding_complete"]);
-      if (legacy.slack_onboarding_complete === undefined && legacy.sc_onboarding_complete !== undefined) {
-        await chrome.storage.local.set({ slack_onboarding_complete: legacy.sc_onboarding_complete });
+      const legacy = await chrome.storage.local.get([
+        "sc_onboarding_complete", "slack_onboarding_complete", "erasechat_onboarding_complete"
+      ]);
+      if (legacy.erasechat_onboarding_complete === undefined) {
+        const inherited = legacy.slack_onboarding_complete !== undefined
+          ? legacy.slack_onboarding_complete
+          : legacy.sc_onboarding_complete;
+        if (inherited !== undefined) {
+          await chrome.storage.local.set({ erasechat_onboarding_complete: inherited });
+        }
       }
-      await chrome.storage.local.remove("sc_onboarding_complete");
+      await chrome.storage.local.remove(["sc_onboarding_complete", "slack_onboarding_complete"]);
     } catch (e) {
       console.error("SlackClean BG: onboarding-flag migration failed", e);
     }
@@ -506,13 +516,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   else if (request.type === "START_DELETION") {
+    const key = `slack_state_${request.teamId}_${request.channelId}`;
+    // Refuse a second concurrent START_DELETION for the same channel (e.g. the same
+    // conversation open in two tabs). Without this, the second message silently
+    // replaces activeJobs[key] out from under the first job: executeQueue's identity
+    // check correctly stops the superseded run rather than corrupting it, but the
+    // first tab is left showing "Deleting…" forever with no error, and its remaining
+    // items are simply abandoned. Mirrors the inFlightScans guard for RUN_SCAN.
+    if (activeJobs[key] && activeJobs[key].isRunning) {
+      sendResponse({ success: false, error: "job_already_running" });
+      return true;
+    }
+
     ensureToken(request.teamId).then(async token => {
       if (!token) {
         sendResponse({ success: false, error: "not_authed" });
         return;
       }
 
-      const key = `slack_state_${request.teamId}_${request.channelId}`;
+      // Re-check after the async token fetch: another START_DELETION could have
+      // started and begun running while this one was awaiting ensureToken().
+      if (activeJobs[key] && activeJobs[key].isRunning) {
+        sendResponse({ success: false, error: "job_already_running" });
+        return;
+      }
+
       clearScheduled(key);
 
       // Resolve each item's concrete action once, here, via the shared decision
@@ -917,7 +945,7 @@ function handleRateLimitBackoff(job, key, pauseTime, context) {
   if (activeJobs[key] !== job) return;
   job._rateLimitRetries = (job._rateLimitRetries || 0) + 1;
   if (job._rateLimitRetries > MAX_RATELIMIT_RETRIES) {
-    sendLogMessage(job, `[Rate Limited] Slack is still throttling after ${MAX_RATELIMIT_RETRIES} retries. Pausing — reopen the dashboard to resume once throttling clears.`, "error");
+    sendLogMessage(job, t("bgLogRateLimitPaused", `[Rate Limited] Slack is still throttling after ${MAX_RATELIMIT_RETRIES} retries. Pausing — reopen the dashboard to resume once throttling clears.`, [String(MAX_RATELIMIT_RETRIES)]), "error");
     job.isPaused = true;
     clearScheduled(key);
     markRunning(key, false);
@@ -927,7 +955,7 @@ function handleRateLimitBackoff(job, key, pauseTime, context) {
     return;
   }
   const waitSec = pauseTime + 1; // small buffer past Retry-After
-  sendLogMessage(job, `[Rate Limited] ${context} Backing off ${waitSec}s (retry ${job._rateLimitRetries}/${MAX_RATELIMIT_RETRIES})...`, "warn");
+  sendLogMessage(job, t("bgLogRateLimitBackoff", `[Rate Limited] ${context} Backing off ${waitSec}s (retry ${job._rateLimitRetries}/${MAX_RATELIMIT_RETRIES})...`, [String(context), String(waitSec), String(job._rateLimitRetries), String(MAX_RATELIMIT_RETRIES)]), "warn");
   broadcastRateLimit(job, waitSec);
   scheduleNextStep(key, waitSec * 1000);
 }
@@ -970,7 +998,7 @@ async function executeQueue(key) {
         // dashboard (which re-sends the fresh session token via SET_SESSION) lets the
         // user resume exactly where it stopped. Deleting the job here would throw away
         // all remaining work and contradict the "re-open to reconnect" guidance.
-        sendLogMessage(job, "[Paused] Session token lost after a service-worker restart. Re-open the dashboard to reconnect, then resume.", "error");
+        sendLogMessage(job, t("bgLogTokenLostPaused", "[Paused] Session token lost after a service-worker restart. Re-open the dashboard to reconnect, then resume."), "error");
         job.isRunning = false;
         job.isPaused = true;
         clearScheduled(key);
@@ -986,9 +1014,9 @@ async function executeQueue(key) {
       job.isRunning = false;
       broadcastJobUpdate(job);
       if (job.deleteQueue.length === 0 && job.stats.total > 0) {
-        sendLogMessage(job, "Error: The deletion queue was lost from storage. Please run a new scan.", "error");
+        sendLogMessage(job, t("bgLogQueueLost", "Error: The deletion queue was lost from storage. Please run a new scan."), "error");
       } else {
-        sendLogMessage(job, "Bulk clean operation completed successfully.", "info");
+        sendLogMessage(job, t("bgLogCompletedSuccess", "Bulk clean operation completed successfully."), "info");
       }
       markRunning(key, false);
       clearJobState(key, job); // removes progress + queue; no final save needed
@@ -1061,7 +1089,7 @@ async function executeQueue(key) {
       // Session invalidated. PAUSE and preserve the queue/progress rather than
       // discarding it: after the user re-authenticates to Slack and re-opens the
       // dashboard (re-sending a valid token), the job can resume from where it halted.
-      sendLogMessage(job, `[Paused] Slack session invalid (${response.error}). Re-log in to Slack, re-open the dashboard, then resume.`, "error");
+      sendLogMessage(job, t("bgLogSessionInvalidPaused", `[Paused] Slack session invalid (${response.error}). Re-log in to Slack, re-open the dashboard, then resume.`, [String(response.error)]), "error");
       job.isRunning = false;
       job.isPaused = true;
       clearScheduled(key);
@@ -1083,12 +1111,12 @@ async function executeQueue(key) {
     if (response.error === "network_error" || response.error === "catch_error" || response.error === "file_delete_failed") {
       job._transientRetries = (job._transientRetries || 0) + 1;
       if (job._transientRetries <= MAX_TRANSIENT_RETRIES) {
-        sendLogMessage(job, `[Network] Transient error at ${msg.time} (attempt ${job._transientRetries}/${MAX_TRANSIENT_RETRIES}). Retrying...`, "warn");
+        sendLogMessage(job, t("bgLogTransientRetry", `[Network] Transient error at ${msg.time} (attempt ${job._transientRetries}/${MAX_TRANSIENT_RETRIES}). Retrying...`, [String(msg.time), String(job._transientRetries), String(MAX_TRANSIENT_RETRIES)]), "warn");
         scheduleNextStep(key, TRANSIENT_RETRY_DELAY_MS);
         return; // do NOT advance — retry the same item
       }
       // Retries exhausted: fall through and count it as a failure.
-      sendLogMessage(job, `[Network] Giving up on message at ${msg.time} after ${MAX_TRANSIENT_RETRIES} retries.`, "warn");
+      sendLogMessage(job, t("bgLogTransientGiveUp", `[Network] Giving up on message at ${msg.time} after ${MAX_TRANSIENT_RETRIES} retries.`, [String(msg.time), String(MAX_TRANSIENT_RETRIES)]), "warn");
     }
 
     // Idempotency: an already-gone message is exactly the end state we wanted
@@ -1102,17 +1130,17 @@ async function executeQueue(key) {
     if (response.ok) {
       if (response.skipped) {
         job.stats.skipped = (job.stats.skipped || 0) + 1;
-        sendLogMessage(job, `[Skipped] No attachment to clean at ${msg.time}`, "info");
+        sendLogMessage(job, t("bgLogSkippedNoAttachment", `[Skipped] No attachment to clean at ${msg.time}`, [String(msg.time)]), "info");
       } else if (response.alreadyGone) {
         job.stats.success++;
-        sendLogMessage(job, `[Success] Message at ${msg.time} was already removed.`, "info");
+        sendLogMessage(job, t("bgLogAlreadyRemoved", `[Success] Message at ${msg.time} was already removed.`, [String(msg.time)]), "info");
       } else {
         job.stats.success++;
-        sendLogMessage(job, `[Success] Cleaned msg at ${msg.time}`);
+        sendLogMessage(job, t("bgLogCleaned", `[Success] Cleaned msg at ${msg.time}`, [String(msg.time)]));
       }
     } else {
       job.stats.fail++;
-      sendLogMessage(job, `[Failed] Error cleaning msg at ${msg.time}: ${response.error || "unknown"}`, "error");
+      sendLogMessage(job, t("bgLogCleanFailed", `[Failed] Error cleaning msg at ${msg.time}: ${response.error || "unknown"}`, [String(msg.time), String(response.error || "unknown")]), "error");
     }
 
     job._transientRetries = 0;  // item resolved — reset for the next one
@@ -1126,7 +1154,7 @@ async function executeQueue(key) {
     if (job.deleteIndex >= job.deleteQueue.length) {
       job.isRunning = false;
       broadcastJobUpdate(job);
-      sendLogMessage(job, "Bulk clean operation completed successfully.", "info");
+      sendLogMessage(job, t("bgLogCompletedSuccess", "Bulk clean operation completed successfully."), "info");
       markRunning(key, false);
       clearJobState(key, job); // removes progress + queue; no final save needed
       delete activeJobs[key];
@@ -1185,6 +1213,16 @@ function broadcastRateLimit(job, pauseTime) {
       });
     });
   });
+}
+
+// Same pattern as content.js/popup.js's own t(): localized text is used when
+// available, English is the fallback -- never a blank/undefined log line.
+function t(key, fallback, substitutions) {
+  try {
+    const m = chrome.i18n.getMessage(key, substitutions);
+    if (m) return m;
+  } catch (e) { /* i18n unavailable */ }
+  return fallback !== undefined ? fallback : key;
 }
 
 function sendLogMessage(job, message, type = "info") {

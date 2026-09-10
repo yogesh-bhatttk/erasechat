@@ -18,7 +18,16 @@ module.exports = {
   },
   output: {
     filename: '[name].js',
-    path: path.resolve(__dirname, 'platforms/telegram')
+    path: path.resolve(__dirname, 'platforms/telegram'),
+    // Without this, webpack's own runtime emits a `new Function('return this')()`
+    // fallback (see node_modules/webpack/lib/runtime/GlobalRuntimeModule.js) to find the
+    // global object portably across environments that might predate globalThis --
+    // exactly the kind of eval-adjacent construct addons-linter's DANGEROUS_EVAL check
+    // flags (found in both bundles at review time). This target is always a Manifest V3
+    // extension page in a current Chrome/Firefox, where globalThis is guaranteed to
+    // exist, so telling webpack that lets it skip the fallback entirely instead of
+    // relying on CSP to block a construct that never needed to exist here.
+    environment: { globalThis: true }
   },
   resolve: {
     fallback: {
@@ -29,7 +38,15 @@ module.exports = {
       "child_process": false,
       "module": false,
       "dns": false,
-      "dgram": false
+      "dgram": false,
+      // NodePolyfillPlugin would otherwise pull in vm-browserify, whose
+      // runInThisContext is a literal eval(this.code) -- reachable (harmlessly, via a
+      // caught CSP violation) from a transitive asn1.js call inside teleproto. CSP
+      // blocks it today, but that safety is then resting entirely on an incidental
+      // try/catch rather than this codebase's own no-eval design. Disabling the
+      // polyfill here forces asn1.js's own non-eval fallback path deterministically;
+      // there is no legitimate use of Node's `vm` module in a browser bundle anyway.
+      "vm": false
     },
     alias: {
       'node:crypto': 'crypto-browserify',
@@ -38,7 +55,11 @@ module.exports = {
       'node:stream': 'stream-browserify',
       'node:buffer': 'buffer',
       'node:process': 'process/browser',
-      'node:path': 'path-browserify'
+      'node:path': 'path-browserify',
+      // See platforms/telegram/function-bind-shim.js: the real `function-bind` package
+      // bundles an eval-based ES5 polyfill (dead code in any real browser) alongside its
+      // native-bind fast path; this alias keeps only the fast path.
+      'function-bind': path.resolve(__dirname, 'platforms/telegram/function-bind-shim.js')
     }
   },
   plugins: [

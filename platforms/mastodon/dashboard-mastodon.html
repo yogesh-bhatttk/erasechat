@@ -64,40 +64,41 @@
         <div class="dashboard-main">
           <div class="config-grid">
             <div class="panel-card filter-form">
-              <h3 class="panel-title">1. Search Filters</h3>
-              
+              <h3 class="panel-title" data-i18n="dashSearchFilters">1. Search Filters</h3>
+
           <div class="form-group">
-            <label>Text Filter (Optional)</label>
-            <input type="text" id="text-filter" placeholder="e.g. testing">
+            <label data-i18n="dashTextMatch">Text Filter (Optional)</label>
+            <input type="text" id="text-filter" placeholder="Keyword or Phrase" data-i18n-ph="dashKeywordPlaceholder">
           </div>
-        
+
               <button id="scan-btn" class="dashboard-btn btn-scan" style="margin-top: 15px; justify-content: center;">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                Scan History
+                <span data-i18n="dashScan">Scan Messages</span>
               </button>
             </div>
-            
+
             <div class="results-panel">
               <div class="results-header">
-                <h4>Preview Results</h4>
+                <h4 data-i18n="dashPreviewResults">Preview Results</h4>
                 <div class="results-selector" id="results-count">0 items found</div>
               </div>
               <div class="results-list" id="item-list">
-                <div class="no-messages">Enter parameters and click Scan to begin.</div>
+                <div class="no-messages" data-i18n="dashScanPromptEmpty">Enter parameters and click Scan to begin.</div>
               </div>
             </div>
           </div>
 
           <div class="action-panel">
             <div class="selected-channel-summary">
-              <h4>Ready to delete?</h4>
-              <p id="status-text">Items deleted will be unrecoverable.</p>
+              <h4 data-i18n="dashReadyToDelete">Ready to delete?</h4>
+              <p id="status-text" data-i18n="dashUnrecoverableWarning">Items deleted will be unrecoverable.</p>
               <p id="progress-text" style="color: #6364FF; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
             </div>
             <div class="action-buttons">
+              <button id="sc-btn-cancel" class="dashboard-btn" hidden data-i18n="dashCancel">Cancel</button>
               <button id="delete-btn" class="dashboard-btn btn-delete danger" disabled>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                Start Deleting
+                <span data-i18n="dashStartDeleting">Start Deleting</span>
               </button>
             </div>
           </div>

@@ -1,12 +1,16 @@
 document.addEventListener('DOMContentLoaded', async () => {
-  const data = await chrome.storage.local.get(['teams_token', 'teams_base_url']);
-  if (!data.teams_token || !data.teams_base_url) {
-    alert("Not linked to MS Teams. Please open the extension popup first.");
+  const [sessionData, localData] = await Promise.all([
+    chrome.storage.session.get(['teams_token']),
+    chrome.storage.local.get(['teams_base_url'])
+  ]);
+  if (!sessionData.teams_token || !localData.teams_base_url) {
+    await showAlert("Not linked to MS Teams. Please open the extension popup first.");
     window.close();
     return;
   }
 
-  const { teams_base_url: baseUrl } = data;
+  const { teams_base_url: baseUrl } = localData;
+  const data = sessionData;
 
   // The captured Bearer token is a JWT whose `oid` (or `sub`) claim is the signed-in
   // user's own AAD object id. Teams' internal chatsvc API embeds that same GUID inside
@@ -45,6 +49,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const chatSelect = document.getElementById('chat-select');
   const scanBtn = document.getElementById('scan-btn');
   const deleteBtn = document.getElementById('delete-btn');
+  const cancelBtn = document.getElementById('sc-btn-cancel');
   const filterInput = document.getElementById('text-filter');
   const itemList = document.getElementById('item-list');
   const resultsCount = document.getElementById('results-count');
@@ -79,7 +84,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // request once before giving up - don't let one stale token abort an
     // entire in-progress batch delete.
     if (response.status === 401) {
-      const refreshedData = await chrome.storage.local.get(['teams_token']);
+      const refreshedData = await chrome.storage.session.get(['teams_token']);
       const refreshedToken = refreshedData.teams_token;
       if (refreshedToken && refreshedToken !== token) {
         cachedToken = refreshedToken;
@@ -98,12 +103,44 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (response.status === 403) {
         throw new Error("API Error 403: Teams message deletion was blocked. This usually means the signed-in account is a personal Microsoft account, or your organization's messaging policy does not allow deleting sent messages. A work/school account with a policy that permits message deletion is required.");
       }
+      if (response.status === 401) {
+        const err = new Error("Your Teams session appears to have expired. Reopen teams.microsoft.com, make sure you're signed in, then click the Erasechat toolbar icon again to reconnect.");
+        err.expiredAuth = true;
+        throw err;
+      }
       throw new Error(`API Error ${response.status}`);
     }
 
     // DELETE requests may return empty body
     const text = await response.text();
     return text ? JSON.parse(text) : {};
+  }
+
+  // Shared by the scan-success render and the post-delete "remaining items"
+  // render (a partial/cancelled/selective delete leaves some scanned items
+  // un-deleted -- those stay visible with fresh checkboxes, not discarded).
+  function renderResultRows(items) {
+    itemList.innerHTML = '';
+    resetSelection(items);
+    const selectAllBox = renderSelectAllControl(itemList);
+    const rowCheckboxes = [];
+    items.forEach(msg => {
+      const div = document.createElement('div');
+      div.className = 'post-item';
+
+      const timeDiv = document.createElement('div');
+      timeDiv.className = 'post-time';
+      timeDiv.textContent = new Date(msg.time).toLocaleString();
+
+      const textDiv = document.createElement('div');
+      textDiv.textContent = msg.text;
+
+      div.appendChild(timeDiv);
+      div.appendChild(textDiv);
+      addRowCheckbox(div, msg, rowCheckboxes);
+      itemList.appendChild(div);
+    });
+    wireSelectAll(selectAllBox, items, rowCheckboxes);
   }
 
   loadChatsBtn.addEventListener('click', async () => {
@@ -113,8 +150,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Fetch recent conversations
       const res = await apiFetch('/v1/users/ME/conversations');
       const conversations = res.conversations || [];
-      
-      chatSelect.innerHTML = '<option value="">-- Select a Chat --</option>';
+
+      chatSelect.innerHTML = '';
+      const placeholderOpt = document.createElement('option');
+      placeholderOpt.value = '';
+      placeholderOpt.textContent = t("teamsDashSelectChatPlaceholder", "-- Select a Chat --");
+      chatSelect.appendChild(placeholderOpt);
       for (const conv of conversations) {
         // Teams chat IDs usually start with '19:'
         if (conv.id && conv.id.startsWith('19:')) {
@@ -124,11 +165,11 @@ document.addEventListener('DOMContentLoaded', async () => {
           chatSelect.appendChild(opt);
         }
       }
-      
+
       statusText.textContent = "Chats loaded.";
       scanBtn.disabled = false;
     } catch (err) {
-      alert("Failed to load chats: " + err.message);
+      await showAlert("Failed to load chats: " + err.message);
       statusText.textContent = "Error";
     } finally {
       loadChatsBtn.disabled = false;
@@ -138,10 +179,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   scanBtn.addEventListener('click', async () => {
     const chatId = chatSelect.value;
     const filterText = filterInput.value.trim().toLowerCase();
-    
-    if (!chatId) return alert("Please select a chat first.");
+
+    if (!chatId) { await showAlert("Please select a chat first."); return; }
     if (!ownUserId) {
-      return alert("Could not determine your own Teams identity from the captured token, so scanning was refused for safety (this would otherwise risk surfacing other participants' messages). Try reconnecting to Teams.");
+      await showAlert("Could not determine your own Teams identity from the captured token, so scanning was refused for safety (this would otherwise risk surfacing other participants' messages). Try reconnecting to Teams.");
+      return;
     }
 
     scanBtn.disabled = true;
@@ -195,30 +237,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
 
       if (currentResults.length > 0) {
-        itemList.innerHTML = '';
-        currentResults.forEach(msg => {
-          const div = document.createElement('div');
-          div.className = 'post-item';
-
-          const timeDiv = document.createElement('div');
-          timeDiv.className = 'post-time';
-          timeDiv.textContent = new Date(msg.time).toLocaleString();
-
-          const textDiv = document.createElement('div');
-          textDiv.textContent = msg.text;
-
-          div.appendChild(timeDiv);
-          div.appendChild(textDiv);
-          itemList.appendChild(div);
-        });
+        renderResultRows(currentResults);
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
       } else {
         renderEmptyState(itemList, "No matching messages found in this chat.");
-        statusText.textContent = "Ready";
+        statusText.textContent = t("dashReady", "Ready");
       }
     } catch (err) {
-      alert("Scan failed: " + err.message);
+      await showAlert("Scan failed: " + err.message);
       statusText.textContent = "Error";
     } finally {
       scanBtn.disabled = false;
@@ -227,17 +254,26 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   deleteBtn.addEventListener('click', async () => {
     const chatId = chatSelect.value;
-    if (!confirmBulkDelete(currentResults.length, "messages")) return;
+    const selected = getSelectedItems(currentResults);
+    if (selected.length === 0) {
+      await showAlert(t("dashNoItemsSelected", "No items are selected. Check at least one item, or use Select All, before deleting."));
+      return;
+    }
+    if (!(await confirmBulkDelete(selected.length, "messages"))) return;
 
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
-    statusText.textContent = "Deleting...";
+    statusText.textContent = t("dashDeleting", "Deleting...");
     statusText.style.color = "#ef4444";
     progressText.textContent = `Starting deletion...`;
-    
-    const totalCount = currentResults.length;
+
+    const cancelController = createCancelController();
+    armCancelButton(cancelBtn, cancelController);
+
+    const totalCount = selected.length;
     let deletedCount = 0;
     const failures = [];
+    const processedItems = [];
     try {
       // The inner per-item try/catch below isolates one item's failure from the
       // rest of the batch. This outer try/finally is separate: it guards the
@@ -245,7 +281,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       // handler against an unexpected exception so the loop can never die
       // silently, leaving scanBtn disabled and the progress marker stuck.
       await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
-      for (const msg of currentResults) {
+      let expiredAuth = false;
+      for (const msg of selected) {
+        if (cancelController.cancelled) break;
+        processedItems.push(msg);
         try {
           // DELETE /v1/users/ME/conversations/{chatId}/messages/{messageId}
           const endpoint = `/v1/users/ME/conversations/${encodeURIComponent(chatId)}/messages/${msg.id}`;
@@ -253,16 +292,44 @@ document.addEventListener('DOMContentLoaded', async () => {
           deletedCount++;
         } catch (err) {
           failures.push({ id: msg.id, message: err.message });
+          // An expired token fails every remaining item identically -- stop
+          // immediately with one clear reconnect message instead of retrying each
+          // remaining item at the full pacing delay only to fail the same way.
+          if (err.expiredAuth) {
+            expiredAuth = true;
+            break;
+          }
         }
-        progressText.textContent = `Deleted ${deletedCount} of ${totalCount}`;
+        progressText.textContent = failures.length > 0
+          ? `Processed ${deletedCount + failures.length} of ${totalCount} (${deletedCount} deleted, ${failures.length} failed)`
+          : `Deleted ${deletedCount} of ${totalCount}`;
         await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
 
+        if (expiredAuth || cancelController.cancelled) break;
         // Strict 2.5 second delay to avoid enterprise security alarms / rate limits
         await delay(2500);
       }
       await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
 
-      if (failures.length === 0) {
+      // Anything scanned but not selected, plus anything selected but never
+      // reached because a cancel/expired-auth break happened early, stays
+      // visible -- only items actually attempted are removed from view.
+      currentResults = currentResults.filter(item => !processedItems.includes(item));
+      if (currentResults.length > 0) {
+        renderResultRows(currentResults);
+      } else {
+        itemList.innerHTML = '';
+      }
+      resultsCount.textContent = formatScanCount(currentResults.length, { truncated: false });
+
+      if (expiredAuth) {
+        statusText.textContent = "Session expired — reconnect required.";
+        statusText.style.color = "#ef4444";
+        await showAlert(`Stopped: your Teams session appears to have expired. ${deletedCount} of ${totalCount} messages were deleted before this happened. Reopen teams.microsoft.com, sign in, then click the Erasechat toolbar icon again to reconnect and finish.`);
+      } else if (cancelController.cancelled) {
+        statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
+        statusText.style.color = "#ef4444";
+      } else if (failures.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
       } else {
@@ -270,16 +337,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusText.style.color = "#ef4444";
         console.warn("Teams delete failures:", failures);
       }
-      currentResults = [];
-      renderEmptyState(itemList, "Deletion finished.");
-      resultsCount.textContent = "0 items found";
+      if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
     } catch (err) {
       console.error("Teams delete loop stopped unexpectedly:", err);
-      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} messages were deleted before this happened.`);
+      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} messages were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {
       scanBtn.disabled = false;
+      deleteBtn.disabled = currentResults.length === 0;
+      resetCancelButton(cancelBtn);
     }
   });
 });

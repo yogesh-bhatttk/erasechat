@@ -1,40 +1,69 @@
 # Erasechat
 
-Bulk-delete and clean your own Slack messages — in channels, private groups, and DMs —
-with advanced filters, thread support, and strong safety controls. A Manifest V3
-browser extension for **Chrome / Chromium** (Chrome, Brave, Edge) and **Firefox**.
+Bulk-delete and clean your own content — in channels, private groups, and DMs, or posts
+and comments — across **six platforms**: **Slack** (built in) plus five **optional**
+platforms you connect one at a time from the popup: **Reddit, X, Mastodon, Microsoft
+Teams, and Telegram**. A Manifest V3 browser extension for **Chrome / Chromium** (Chrome,
+Brave, Edge) and **Firefox**.
 
-> **Independent tool — not affiliated with, or endorsed by, Slack.** It uses your
-> existing, logged-in Slack web session to delete messages *on your behalf*.
-> **Deletions are permanent and cannot be undone.** All processing happens locally in
-> your browser; no message content is sent to any external server. See
-> [PRIVACY_POLICY.md](PRIVACY_POLICY.md).
+> **Independent tool — not affiliated with, or endorsed by, Slack, Reddit, X Corp.,
+> Mastodon gGmbH, Microsoft, or Telegram FZ-LLC.** It uses your existing, logged-in
+> session on each platform (or, for Mastodon and Telegram, a credential you provide) to
+> act *on your behalf*. **Deletions are permanent and cannot be undone.** All processing
+> happens locally in your browser; no content is sent anywhere but the platform you're
+> managing. See [PRIVACY_POLICY.md](PRIVACY_POLICY.md).
 
 ---
 
+## Platforms
+
+| Platform | Status | Auth | Notes |
+|---|---|---|---|
+| **Slack** | Built in, always available | Rides your existing browser session | The most mature engine — ~10 audit passes, resumable background job queue, per-message filters |
+| **Reddit** | Optional | Rides your existing browser session | Comments, posts, or both |
+| **X** | Optional | Rides your existing browser session | Reads live query IDs from x.com, since X has no stable public API |
+| **Mastodon** | Optional | Personal access token you generate on your instance | Works with any federated instance; permission is requested for the exact instance you type |
+| **Microsoft Teams** | Optional | Passively captured from your own Teams web-client traffic | Requires a work/school account whose messaging policy permits deletion |
+| **Telegram** | Optional | `api_id`/`api_hash` (from my.telegram.org) + phone/code login | Real MTProto client running in the extension; deletes "for everyone" |
+
+Every platform's scan can be reviewed and individually deselected before you confirm a
+delete, and every platform's dashboard lets you cancel a deletion already in progress.
+Connecting a platform is always an explicit, one-click action from the popup — nothing
+beyond Slack is ever contacted automatically.
+
 ## Features
 
-- **Current-chat scope** — only the conversation you have open is ever touched.
+- **Current-conversation scope** — only what you have open (or, for Reddit/X/Mastodon,
+  your own account) is ever touched.
 - **Scan & preview before deleting** — nothing is deleted until you review the matched
-  list and confirm.
-- **Filters** — by sender (only me / everyone), date (all time, older-than-N-days, or a
-  custom range), free-text keyword, `/regex/` pattern, and attachments-only. An **Invert**
-  checkbox flips the text/regex filter to "keep matches, delete everything else."
-- **Threads** — optionally scan and delete replies inside threads.
-- **Attachment cleaning** — "Only Delete Attachments" strips files/attachments while
-  keeping the message text (a message that is *only* a file is deleted).
-- **Skip Pinned Messages** — on by default: a message currently pinned in the
+  list; every platform's results can be individually checked/unchecked before you
+  confirm, not just previewed as an all-or-nothing batch.
+- **Filters** — Slack supports sender (only me / everyone), date (all time,
+  older-than-N-days, or a custom range), free-text keyword, `/regex/` pattern, and
+  attachments-only, with an **Invert** checkbox that flips the text/regex filter to "keep
+  matches, delete everything else." The other five platforms filter by free-text keyword
+  (Reddit adds a comments/posts/both target type and a Deep Scan option).
+- **Threads** — Slack can optionally scan and delete replies inside threads.
+- **Attachment cleaning** — Slack's "Only Delete Attachments" strips files/attachments
+  while keeping the message text (a message that is *only* a file is deleted).
+- **Skip Pinned Messages** (Slack) — on by default: a message currently pinned in the
   conversation is never selected for deletion, regardless of what else matches.
-- **Saved filter presets** — name and save a full filter combination for reuse (e.g.
-  "older than 90 days, no attachments"), stored locally per browser profile.
-- **Safety** — a type-**DELETE** confirmation for large batches (>100), channel/workspace
-  drift protection that auto-pauses if you navigate away, and pause/resume/cancel at any
-  time. Bulk jobs run in the background and survive the service worker being suspended.
-- **Rate-limit aware** — honors Slack's `Retry-After` with a synced countdown.
-- **Export** — download scanned messages as CSV, and the execution log as text.
-- **Localized** — English, Spanish, French, and German.
-- **Local & private** — your Slack token stays in `chrome.storage.session` (memory-only)
-  and is never written to disk or sent anywhere but `slack.com`.
+- **Saved filter presets** (Slack) — name and save a full filter combination for reuse
+  (e.g. "older than 90 days, no attachments"), stored locally per browser profile.
+- **Safety** — a type-**DELETE** confirmation on every platform (typing the exact count
+  above 100 items), and a cancel control mid-delete on every platform. Slack additionally
+  has channel/workspace drift protection that auto-pauses if you navigate away, and a
+  bulk job that runs in the background and survives the service worker being suspended.
+- **Rate-limit aware** — Slack honors its `Retry-After` header with a synced countdown;
+  Mastodon paces against its real 30-per-30-minute delete limit; Telegram backs off on
+  `FLOOD_WAIT`.
+- **Export** — Slack can download scanned messages as CSV, and its execution log as text.
+- **Localized UI** — labels, buttons, and dialogs are translated into English, Spanish,
+  French, and German across all six platforms. Slack's live execution log (the running
+  diagnostic narration of a scan/delete) is English-only for now.
+- **Local & private** — every platform's credential lives only in
+  `chrome.storage.session` (memory-only) and is never written to disk or sent anywhere
+  but that platform's own API.
 
 ## The text filter, and the `/regex/` convention
 
@@ -75,6 +104,10 @@ Then open the Slack **web** client (`https://app.slack.com` or your workspace su
 open a channel or DM, click the extension icon, and **Open Clean Dashboard**
 (shortcut: `Ctrl+Shift+K` / `Cmd+Shift+K`).
 
+To use one of the other five platforms, click the extension icon and pick it from the
+popup's platform list — each one requests its own (optional) permission and connects
+independently, whether or not you also use Slack.
+
 ## Cross-browser (two manifests)
 
 Chromium MV3 requires a `background.service_worker`; Firefox stable runs MV3 backgrounds
@@ -103,6 +136,13 @@ ships two manifests with identical everything else:
 | `tests/packaging.test.js` | Release gate: manifest/version/permission/CSP/locale/build-asset invariants |
 | `tests/*.spec.js` | Playwright e2e (loads the unpacked extension) |
 | `eslint.config.mjs` | Correctness-only lint rules (`no-undef` first — no bundler catches a typo'd global here) |
+| `platforms/shared/dashboard-fetch-utils.js` | Shared by the five non-Slack dashboards: fetch/retry helpers, i18n (`t()`/`localizeI18n()`), the custom alert/confirm/prompt modal system, per-item selection (checkboxes + Select All), and cancel support |
+| `platforms/shared/dashboard-base.css` | Shared dashboard styling for the five non-Slack platforms |
+| `platforms/<platform>/connect-<platform>.js` | Per-platform "connect" step the popup calls after a permission grant/form submit |
+| `platforms/<platform>/dashboard-<platform>.html` / `.js` | Each platform's standalone scan/delete dashboard (opened as its own tab) |
+| `platforms/teams/teams-webrequest.js` | Passive Bearer-token capture from the user's own Teams traffic (background listener) |
+| `platforms/telegram/telegram-{popup,dashboard}.src.js` | Telegram's real MTProto client (via `teleproto`), bundled by webpack into `.bundle.js` — see `webpack.telegram.config.js` and `scripts/build-telegram.js` |
+| `popup/platform-registry.js` | Platform metadata table the popup renders its picker from |
 
 > Do **not** fork the logic in `shared-filters.js` into the content script — scanning and
 > the delete/keep decision are deliberately delegated to the background context so there

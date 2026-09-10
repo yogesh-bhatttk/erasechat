@@ -2,6 +2,140 @@
 
 ## Unreleased
 
+### Cross-platform audit remediation
+
+A four-pass audit (Slack core re-audit, the five non-Slack platforms, security/privacy,
+and UX/store readiness) found the Slack engine in good shape after ~10 prior passes, but
+the six-platform expansion itself carrying most of the real risk. Fixes below, grouped by
+theme; all four passes' findings are addressed.
+
+#### Critical — credentials for Telegram, Mastodon, Teams, Reddit, and X moved to session-only storage
+
+Every one of the five non-Slack platforms' credentials was being written to
+`chrome.storage.local` (disk-persisted, survives a browser restart) — most acutely
+Telegram's full MTProto session string (a standing, unrevoked login with no password/2FA
+gate of its own) and Mastodon's personal access token, but also Teams' Bearer JWT and the
+lower-severity Reddit modhash / X CSRF token. This directly contradicted the product's
+own headline security claim for Slack ("the token lives only in `chrome.storage.session`
+and is never written to disk"). All five now follow the same rule: the credential itself
+is memory-only (cleared on browser close); only non-sensitive labels (username, instance
+URL, API base URL, Telegram's app-identifying `api_id`/`api_hash`) persist to disk for
+reconnect convenience. `platforms/{telegram,mastodon,teams,reddit,x}/{connect-*.js,
+dashboard-*.js}`, `platforms/teams/teams-webrequest.js`. New packaging test
+(`tests/packaging.test.js`) asserts none of the five ever touches `storage.local` for its
+credential, mirroring the existing Slack-token test.
+
+#### Critical — no per-item selection on any of the five non-Slack dashboards
+
+A scan's results were previously all-or-nothing: every matched item got deleted with no
+way to review and uncheck specific ones, unlike Slack's own dashboard. Added a shared
+"Select All" control + per-row checkboxes to `platforms/shared/dashboard-fetch-utils.js`
+(`resetSelection`/`renderSelectAllControl`/`addRowCheckbox`/`wireSelectAll`/
+`getSelectedItems`), wired into all five dashboards. Anything scanned but left unchecked,
+or selected but not yet reached because a cancel interrupted the run, stays visible with
+fresh checkboxes rather than being silently discarded.
+
+#### High — no pause/cancel on any of the five non-Slack dashboards
+
+Once a delete started, the only way to stop it was closing the tab. Added a shared cancel
+controller (`createCancelController`/`armCancelButton`/`resetCancelButton`) and a Cancel
+button to every non-Slack dashboard; each delete loop checks it between items (or, for
+Mastodon, also mid-rate-limit-wait) and reports "Cancelled: N of M processed" rather than
+either running to completion or leaving no trace of what happened.
+
+#### High — native `alert`/`confirm`/`prompt` replaced with the existing custom modal system
+
+Every dashboard but Slack's fell back to bare browser dialogs — a visual break from the
+themed UI, and a real dead end: both Chrome and Firefox offer "Prevent this page from
+creating additional dialogs" after a couple of native prompts in a row, which would
+silently disable the type-to-confirm delete safety gate with no fallback. Reused
+content.js's existing modal markup/CSS/i18n-key pattern (`sc-alert-modal`,
+`sc-confirm-modal`, `sc-prompt-modal`) via new `showAlert`/`showConfirm`/`showPrompt`
+helpers in `dashboard-fetch-utils.js`, built lazily so no platform's HTML has to
+hand-author it. `confirmBulkDelete()` is now async and uses these instead of native
+`prompt`/`alert`.
+
+#### High — i18n: the five non-Slack dashboards translated; Slack core engine reentrancy guard; Telegram bugs
+
+- All five non-Slack dashboards' static labels/buttons/placeholders now carry
+  `data-i18n`/`data-i18n-ph` attributes, reusing Slack-dashboard locale keys wherever text
+  matches (e.g. `dashScan`, `dashCancel`, `dashSelectAll`, the alert/confirm/prompt modal
+  keys) and adding ~28 new keys, translated into Spanish/French/German, for the rest.
+  `dashboard-fetch-utils.js` carries its own `t()`/`localizeI18n()` (same pattern as
+  popup.js/content.js). New packaging tests assert every `data-i18n`/`t()` key used across
+  the five platforms resolves, and that all four locale files share exactly the same key
+  set (previously unchecked). Scope decision, stated plainly rather than left implicit:
+  Slack's live execution-log narration remains English-only, as it already was.
+- **Telegram's text filter meant something different from every other platform.**
+  `messages.Search`'s `q` parameter is Telegram's own word-based server-side search, not
+  the case-insensitive substring match every other dashboard does locally — same UI
+  label, silently different semantics. Now always searches with an empty query and
+  filters locally, matching everyone else. `platforms/telegram/telegram-dashboard.src.js`.
+- **Telegram bypassed the shared safety/utility module entirely**, duplicating the
+  type-DELETE confirmation threshold and progress-reporting logic inline instead of using
+  `dashboard-fetch-utils.js` — a drift risk if the shared threshold/copy ever changes.
+  `dashboard-telegram.html` now loads it, and the duplicated logic is gone.
+- **A reachable `eval()` sat inside the Telegram webpack bundle**, via a transitive
+  `vm-browserify` polyfill pulled in by a crypto dependency's `asn1.js`. CSP already
+  blocked it (caught by the library's own try/catch, falling back to a safe path) — but
+  that safety rested on an incidental catch rather than this codebase's own no-eval
+  design. `webpack.telegram.config.js` now explicitly disables the `vm` polyfill
+  (`resolve.fallback.vm: false`), so the dependency's non-eval fallback is deterministic
+  and the `eval` call is no longer bundled at all. Verified: `runInThisContext` no longer
+  appears as a callable in the built bundle. Running the real AMO validator
+  (`npm run validate:firefox`) surfaced two more eval-adjacent constructs the static
+  audit hadn't scoped in, both webpack/polyfill artifacts rather than teleproto itself:
+  webpack's own `new Function('return this')()` global-object detection (disabled via
+  `output.environment.globalThis: true`, since a Manifest V3 page can assume `globalThis`
+  exists) and the `function-bind` package's dead ES5 polyfill branch, built the same way
+  (aliased to a shim exporting only the native `Function.prototype.bind` — see
+  `platforms/telegram/function-bind-shim.js`). One inert reference remains and is
+  considered acceptable: `get-intrinsic` (a load-bearing transitive dependency of the
+  crypto stack) holds `eval` as a *value* in an introspection lookup table, never calling
+  it — the validator's warning count dropped from 7 to 2 (0 errors throughout), with the
+  same warning duplicated across both Telegram bundles.
+  Also fixed the one other warning the same validator run caught: an `UNSAFE_VAR_ASSIGNMENT`
+  in `dashboard-teams.js` from building an `<option>` via a template-literal `innerHTML`
+  assignment — replaced with `createElement`/`textContent`.
+- **A second tab open on the same Slack channel could silently orphan a running delete
+  job.** `START_DELETION` had no reentrancy guard (unlike scans' `inFlightScans`), so a
+  second tab's click replaced `activeJobs[key]` out from under the first job — which
+  stopped cleanly (the identity check already caught this) but left its remaining items
+  abandoned with the UI still showing "Deleting…" and no error. `background.js` now
+  refuses a second `START_DELETION` for an already-running key; `content.js` surfaces a
+  clear "Already Running" message instead of a generic error.
+
+#### Medium — expired/invalid credentials failed slowly instead of failing fast
+
+Mastodon, Reddit, and Teams treated an expired/revoked credential as an ordinary per-item
+failure, retrying every remaining item at the platform's full pacing delay only to fail
+the same way each time, with no reconnect guidance (Teams' own 403 handling already did
+this correctly — its 401 path didn't). All three now detect an auth failure specifically,
+stop the run immediately, and tell the user to reconnect. `platforms/{mastodon,reddit,
+teams}/dashboard-*.js`.
+
+#### Medium — progress-reporting inconsistency across platforms
+
+X and Telegram showed live failure counts during a delete run; Teams, Reddit, and
+Mastodon only revealed them in the final summary — a symptom of the delete-loop tail
+being duplicated rather than shared. Unified to the richer format everywhere.
+
+#### Documentation — six-platform scope extended to every doc that lagged behind
+
+`PRIVACY_POLICY.md`, `privacy.html`, `SECURITY.md`, `README.md`, `TERMS.md`,
+`package.json`, `CWS_SUBMISSION_FIELDS.md`, `AMO_SUBMISSION_FIELDS.md`, and
+`STORE_LISTING.md` all had Slack-only language, permission justifications, or trademark
+disclaimers left over from before the multi-platform expansion — despite the manifest
+requesting `cookies`/`webRequest` and five more host-permission patterns for platforms
+none of these documents disclosed. All updated to describe the current reality,
+including the credential-storage change above. `extensionDescription` (the Chrome/AMO
+listing summary) now names all six platforms and stays within Chrome's 132-character
+manifest limit in every locale (new packaging test). Small wording fixes: Mastodon's
+"log in" → "connect" (matches its actual token-paste flow), the onboarding-seen storage
+key renamed from `slack_onboarding_complete` to `erasechat_onboarding_complete` (with a
+migration for existing installs), and `privacy.html`'s trademark footer now names all six
+platforms' owners instead of only Slack's.
+
 #### Removed Bluesky platform support
 
 Bluesky was the only platform requiring a separate, externally-hosted OAuth

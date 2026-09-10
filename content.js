@@ -107,9 +107,9 @@ if (!window.slackCleanInitialized) {
     // i18n helpers. Translations are applied over the English already baked into
     // the injected markup, so a missing key (or a browser without chrome.i18n)
     // simply keeps the English — never a blank label.
-    function t(key, fallback) {
+    function t(key, fallback, substitutions) {
       try {
-        const m = chrome.i18n.getMessage(key);
+        const m = chrome.i18n.getMessage(key, substitutions);
         if (m) return m;
       } catch (e) { /* i18n unavailable */ }
       return fallback !== undefined ? fallback : key;
@@ -173,9 +173,9 @@ if (!window.slackCleanInitialized) {
             // Report skips honestly — a skipped item ("attachment-only" mode with
             // nothing to clean) was NOT deleted, so it must not be counted under
             // "Successfully deleted".
-            let summary = `Bulk deletion process completed.\n\nSuccessfully deleted: ${stats.success}\nFailed: ${stats.fail}`;
-            if (skipped > 0) summary += `\nSkipped (nothing to clean): ${skipped}`;
-            showCustomAlert("Erasechat Finished", summary);
+            let summary = t("modalFinishedSummary", `Bulk deletion process completed.\n\nSuccessfully deleted: ${stats.success}\nFailed: ${stats.fail}`, [String(stats.success), String(stats.fail)]);
+            if (skipped > 0) summary += t("modalFinishedSkipped", `\nSkipped (nothing to clean): ${skipped}`, [String(skipped)]);
+            showCustomAlert(t("modalFinishedTitle", "Erasechat Finished"), summary);
             stopOperations("Finished");
             // Clear the now-deleted messages from the preview so the user can't
             // re-run a delete against stale results (which would all fail as
@@ -353,7 +353,7 @@ if (!window.slackCleanInitialized) {
 
         if (data.error === "rate_limited") {
           const waitTime = (data.retryAfter || 10) + 1;
-          logConsole(`API Rate Limit hit on ${endpoint}. Waiting ${waitTime} seconds before retry (Attempt ${attempt + 1}/${maxRetries})...`, "warn");
+          logConsole(t("logRateLimitHit", `API Rate Limit hit on ${endpoint}. Waiting ${waitTime} seconds before retry (Attempt ${attempt + 1}/${maxRetries})...`, [String(endpoint), String(waitTime), String(attempt + 1), String(maxRetries)]), "warn");
           await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
           attempt++;
         } else {
@@ -396,7 +396,7 @@ if (!window.slackCleanInitialized) {
           const { cacheData, timestamp } = cached[cacheKey];
           if (cacheData && timestamp && (Date.now() - timestamp < TTL)) {
             userCache = cacheData;
-            logConsole(`Loaded ${Object.keys(userCache).length} user profiles from local cache.`, "info");
+            logConsole(t("logLoadedUserCache", `Loaded ${Object.keys(userCache).length} user profiles from local cache.`, [String(Object.keys(userCache).length)]), "info");
             return;
           }
         }
@@ -406,7 +406,7 @@ if (!window.slackCleanInitialized) {
 
       try {
         userCache[activeTeam.userId] = "Me";
-        logConsole("Caching workspace user directories...", "info");
+        logConsole(t("logCachingUsers", "Caching workspace user directories..."), "info");
         
         let cursor = "";
         let pages = 0;
@@ -426,7 +426,7 @@ if (!window.slackCleanInitialized) {
         } while (cursor);
 
         await chrome.storage.local.set({ [cacheKey]: { cacheData: userCache, timestamp: Date.now() } });
-        logConsole(`Cached ${Object.keys(userCache).length} user profiles.`, "info");
+        logConsole(t("logCachedUsers", `Cached ${Object.keys(userCache).length} user profiles.`, [String(Object.keys(userCache).length)]), "info");
       } catch (e) {
         console.error("SlackClean: Could not cache user list", e);
       }
@@ -454,7 +454,7 @@ if (!window.slackCleanInitialized) {
       // Record the intended target SYNCHRONOUSLY (before the await below reassigns
       // activeChannel), so a scan callback that lands mid-load can tell it's stale.
       intendedChannelId = channelId;
-      logConsole(`Fetching details for active channel ID: ${channelId}...`, "info");
+      logConsole(t("logFetchingChannel", `Fetching details for active channel ID: ${channelId}...`, [String(channelId)]), "info");
       
       const domName = getChannelNameFromDOM();
       
@@ -482,7 +482,7 @@ if (!window.slackCleanInitialized) {
           shadowRoot.getElementById("sc-selected-subtitle").innerText = `Mode: ${activeChannel.type} (${activeChannel.id}). Only this open chat will be cleaned.`;
           shadowRoot.getElementById("sc-btn-scan").disabled = false;
           
-          logConsole(`Target loaded: ${activeChannel.name} (${activeChannel.type})`, "info");
+          logConsole(t("logTargetLoaded", `Target loaded: ${activeChannel.name} (${activeChannel.type})`, [String(activeChannel.name), String(activeChannel.type)]), "info");
         } else {
           activeChannel = {
             id: channelId,
@@ -494,10 +494,10 @@ if (!window.slackCleanInitialized) {
           shadowRoot.getElementById("sc-selected-subtitle").innerText = `Loaded via URL (${activeChannel.id}). Only this open chat will be cleaned.`;
           shadowRoot.getElementById("sc-btn-scan").disabled = false;
           
-          logConsole(`Target loaded via URL matching: ${activeChannel.name}`, "info");
+          logConsole(t("logTargetLoadedUrl", `Target loaded via URL matching: ${activeChannel.name}`, [String(activeChannel.name)]), "info");
         }
       } catch (e) {
-        logConsole("Error loading conversation info: " + e.message, "error");
+        logConsole(t("logErrorLoadingConversation", "Error loading conversation info: " + e.message, [e.message]), "error");
       }
     }
 
@@ -572,7 +572,7 @@ if (!window.slackCleanInitialized) {
       if (urlEl) urlEl.innerText = activeTeam.url || "Slack URL";
       if (uidEl) uidEl.innerText = activeTeam.userId || "User";
 
-      logConsole(`Workspace switched to ${activeTeam.name || activeTeam.id}. Reloading directory...`, "info");
+      logConsole(t("logWorkspaceSwitched", `Workspace switched to ${activeTeam.name || activeTeam.id}. Reloading directory...`, [String(activeTeam.name || activeTeam.id)]), "info");
 
       // The cached user-name directory belongs to the previous workspace — reset it
       // and reload before resolving the target so DM/author names resolve correctly.
@@ -1047,8 +1047,8 @@ if (!window.slackCleanInitialized) {
         shadowRoot.getElementById("sc-selected-subtitle").innerText = "Please log in to Slack and go to a workspace channel.";
         
         showCustomAlert(
-          "Authentication Error",
-          "Slack session credentials not found. Make sure you are logged into Slack web client on this tab, then re-open."
+          t("modalAuthErrorTitle", "Authentication Error"),
+          t("modalAuthErrorMsg", "Slack session credentials not found. Make sure you are logged into Slack web client on this tab, then re-open.")
         );
         return;
       }
@@ -1071,7 +1071,7 @@ if (!window.slackCleanInitialized) {
         } else {
           shadowRoot.getElementById("sc-selected-title").innerText = "No Conversation Active";
           shadowRoot.getElementById("sc-selected-subtitle").innerText = "Click a Channel or DM in Slack's sidebar — it will be detected automatically.";
-          logConsole("No conversation detected yet. Click a channel or DM in Slack and it will be picked up automatically.", "warn");
+          logConsole(t("logNoConversationDetected", "No conversation detected yet. Click a channel or DM in Slack and it will be picked up automatically."), "warn");
         }
       });
     }
@@ -1129,7 +1129,7 @@ if (!window.slackCleanInitialized) {
         host.style.setProperty('--accent-soft', 'rgba(245, 158, 11, 0.16)');
       }
       
-      logConsole(`Interface theme set to: ${themeName.toUpperCase()}`, "info");
+      logConsole(t("logThemeSet", `Interface theme set to: ${themeName.toUpperCase()}`, [themeName.toUpperCase()]), "info");
     }
 
 
@@ -1160,8 +1160,8 @@ if (!window.slackCleanInitialized) {
             newlyPaused.forEach(j => alertedOtherJobChannels.add(j.channelId));
             const names = newlyPaused.map(j => j.channelId).join(", ");
             showCustomAlert(
-              "Paused Job in Another Channel",
-              `You have a paused bulk clean in another conversation (${names}). Switch to that channel to resume or cancel it.`
+              t("modalPausedOtherTitle", "Paused Job in Another Channel"),
+              t("modalPausedOtherMsg", `You have a paused bulk clean in another conversation (${names}). Switch to that channel to resume or cancel it.`, [names])
             );
           }
           // Drop tracking for channels that are no longer paused, so a job that's
@@ -1189,14 +1189,14 @@ if (!window.slackCleanInitialized) {
               updateProgressUI();
               syncButtonStates();
               if (ui.consoleStatus) ui.consoleStatus.innerText = t("dashDeleting", "Deleting...");
-              logConsole(`Connected to active background clean process at message ${deleteIndex}/${stats.total}...`, "info");
+              logConsole(t("logConnectedToActive", `Connected to active background clean process at message ${deleteIndex}/${stats.total}...`, [String(deleteIndex), String(stats.total)]), "info");
             } else if (isPaused) {
               // Paused/interrupted job: prompt to resume
               showCustomConfirm(
-                "Interrupted Clean Detected",
-                `An unfinished deletion task was found for "${activeChannel.name}" at index ${state.deleteIndex}/${state.stats.total}. Would you like to resume?`,
-                "Resume Deletion",
-                "Discard Progress",
+                t("modalInterruptedTitle", "Interrupted Clean Detected"),
+                t("modalInterruptedMsg", `An unfinished deletion task was found for "${activeChannel.name}" at index ${state.deleteIndex}/${state.stats.total}. Would you like to resume?`, [String(activeChannel.name), String(state.deleteIndex), String(state.stats.total)]),
+                t("modalResumeDeletion", "Resume Deletion"),
+                t("modalDiscardProgress", "Discard Progress"),
                 async (confirmed) => {
                   if (confirmed) {
                     chrome.runtime.sendMessage({
@@ -1205,7 +1205,7 @@ if (!window.slackCleanInitialized) {
                       channelId: activeChannel.id
                     }, (res) => {
                       if (chrome.runtime.lastError || !res || !res.success) {
-                        logConsole("Could not resume — background service worker unavailable. Please reload Slack.", "error");
+                        logConsole(t("logResumeFailed", "Could not resume — background service worker unavailable. Please reload Slack."), "error");
                         stopOperations("Error");
                         return;
                       }
@@ -1214,7 +1214,7 @@ if (!window.slackCleanInitialized) {
                       jobFinalized = false;
                       toggleInputs(true);
                       syncButtonStates();
-                      logConsole(`Resuming bulk deletion queue from message index ${deleteIndex + 1}...`, "warn");
+                      logConsole(t("logResuming", `Resuming bulk deletion queue from message index ${deleteIndex + 1}...`, [String(deleteIndex + 1)]), "warn");
                       updateProgressUI();
                     });
                   } else {
@@ -1477,14 +1477,14 @@ if (!window.slackCleanInitialized) {
               void chrome.runtime.lastError;
               isPaused = true;
               syncButtonStates();
-              logConsole("[Warning] Workspace switch detected! Bulk clean auto-paused to avoid operating on the wrong workspace.", "error");
+              logConsole(t("logWorkspaceSwitchPause", "[Warning] Workspace switch detected! Bulk clean auto-paused to avoid operating on the wrong workspace."), "error");
               showCustomAlert(
-                "Execution Paused",
-                "You switched workspaces while a clean was running. It was paused and stays bound to the original workspace. Return there to resume, or cancel it before working here."
+                t("modalExecutionPausedTitle", "Execution Paused"),
+                t("modalExecutionPausedWorkspaceMsg", "You switched workspaces while a clean was running. It was paused and stays bound to the original workspace. Return there to resume, or cancel it before working here.")
               );
             });
           } else {
-            logConsole("A paused clean is still bound to its original workspace. Return to it to resume, or cancel it before switching.", "warn");
+            logConsole(t("logPausedBoundWorkspace", "A paused clean is still bound to its original workspace. Return to it to resume, or cancel it before switching."), "warn");
           }
           return; // stay pinned to the old workspace/channel
         }
@@ -1500,7 +1500,7 @@ if (!window.slackCleanInitialized) {
       // dashboard doesn't stay stuck on "No Conversation Active" until reopened.
       if (!activeChannel) {
         if (info.channelId && shadowHost && shadowHost.style.display !== "none") {
-          logConsole(`Conversation detected: ${info.channelId}`, "info");
+          logConsole(t("logConversationDetected", `Conversation detected: ${info.channelId}`, [String(info.channelId)]), "info");
           switchTargetChannel(info.channelId);
         }
         return;
@@ -1517,11 +1517,11 @@ if (!window.slackCleanInitialized) {
           }, () => {
             isPaused = true;
             syncButtonStates();
-            logConsole("[Warning] Slack navigation detected! Bulk clean auto-paused to prevent channel drift.", "error");
+            logConsole(t("logNavigationPause", "[Warning] Slack navigation detected! Bulk clean auto-paused to prevent channel drift."), "error");
 
             showCustomAlert(
-              "Execution Paused",
-              "You have navigated away from the target channel. The cleaner process has been paused. Return to the target channel to resume, or discard operations."
+              t("modalExecutionPausedTitle", "Execution Paused"),
+              t("modalExecutionPausedChannelMsg", "You have navigated away from the target channel. The cleaner process has been paused. Return to the target channel to resume, or discard operations.")
             );
           });
         } else if (!isRunning && info.channelId && shadowHost && shadowHost.style.display !== "none") {
@@ -1529,10 +1529,10 @@ if (!window.slackCleanInitialized) {
           // active. If a job is paused (isRunning && isPaused), it stays bound to
           // its original channel — re-targeting here would orphan that job and
           // misroute subsequent pause/resume/cancel messages to the wrong channel.
-          logConsole(`Syncing workspace channel target details: ${info.channelId}`, "info");
+          logConsole(t("logSyncingChannel", `Syncing workspace channel target details: ${info.channelId}`, [String(info.channelId)]), "info");
           switchTargetChannel(info.channelId);
         } else if (isRunning) {
-          logConsole("A paused clean is still bound to its channel. Return to it to resume, or cancel it before switching.", "warn");
+          logConsole(t("logPausedBoundChannel", "A paused clean is still bound to its channel. Return to it to resume, or cancel it before switching."), "warn");
         }
       }
     }
@@ -1544,23 +1544,23 @@ if (!window.slackCleanInitialized) {
       // Minimize Overlay View to bottom floating widget
       getEl("sc-btn-minimize").addEventListener("click", () => {
         dashboardEl.classList.add("minimized");
-        logConsole("Dashboard minimized to floating widget.", "info");
+        logConsole(t("logMinimized", "Dashboard minimized to floating widget."), "info");
       });
 
       // Maximize Overlay View to full-screen view
       getEl("sc-btn-maximize").addEventListener("click", () => {
         dashboardEl.classList.remove("minimized");
-        logConsole("Dashboard maximized to full view.", "info");
+        logConsole(t("logMaximized", "Dashboard maximized to full view."), "info");
       });
 
       // Close Dashboard (Hide host in DOM instead of destroying)
       getEl("sc-btn-close").addEventListener("click", () => {
         if (isRunning) {
           showCustomConfirm(
-            "Close Dashboard?",
-            "A clean operation is running. Exiting will cancel all ongoing processes. Are you sure you want to close?",
-            "Close and Stop",
-            "Keep Running",
+            t("modalCloseDashboardTitle", "Close Dashboard?"),
+            t("modalCloseDashboardMsg", "A clean operation is running. Exiting will cancel all ongoing processes. Are you sure you want to close?"),
+            t("modalCloseAndStop", "Close and Stop"),
+            t("modalKeepRunning", "Keep Running"),
             (confirmed) => {
               if (confirmed) {
                 chrome.runtime.sendMessage({
@@ -1571,10 +1571,10 @@ if (!window.slackCleanInitialized) {
                   if (chrome.runtime.lastError) {
                     // The cancel didn't reach the worker — the job may STILL be running.
                     // Don't claim it stopped or hide the dashboard; tell the user to retry.
-                    logConsole("Could not reach the background worker to stop the job. It may still be running — reload Slack and try again.", "error");
+                    logConsole(t("logStopUnreachable", "Could not reach the background worker to stop the job. It may still be running — reload Slack and try again."), "error");
                     showCustomAlert(
-                      "Could Not Stop",
-                      "The stop request didn't reach the background worker, so the clean may still be running. Reload the Slack page and try again."
+                      t("modalCouldNotStopTitle", "Could Not Stop"),
+                      t("modalCouldNotStopMsg", "The stop request didn't reach the background worker, so the clean may still be running. Reload the Slack page and try again.")
                     );
                     return;
                   }
@@ -1616,10 +1616,10 @@ if (!window.slackCleanInitialized) {
       // Cancel Action Event
       getEl("sc-btn-cancel").addEventListener("click", () => {
         showCustomConfirm(
-          "Cancel Cleaning Sequence",
-          "Are you sure you want to cancel the deletion process? Remaining messages will not be deleted.",
-          "Stop Deletion",
-          "Continue Deleting",
+          t("modalCancelSequenceTitle", "Cancel Cleaning Sequence"),
+          t("modalCancelSequenceMsg", "Are you sure you want to cancel the deletion process? Remaining messages will not be deleted."),
+          t("modalStopDeletion", "Stop Deletion"),
+          t("modalContinueDeleting", "Continue Deleting"),
           (confirmed) => {
             if (confirmed) {
               chrome.runtime.sendMessage({
@@ -1631,14 +1631,14 @@ if (!window.slackCleanInitialized) {
                   // Cancel didn't reach the worker — the job may still be deleting.
                   // Keep the running UI so the user can retry rather than being told
                   // it stopped when it may not have.
-                  logConsole("Could not reach the background worker to cancel. The job may still be running — reload Slack and try again.", "error");
+                  logConsole(t("logCancelUnreachable", "Could not reach the background worker to cancel. The job may still be running — reload Slack and try again."), "error");
                   showCustomAlert(
-                    "Could Not Cancel",
-                    "The cancel request didn't reach the background worker, so the clean may still be running. Reload the Slack page and try again."
+                    t("modalCouldNotCancelTitle", "Could Not Cancel"),
+                    t("modalCouldNotCancelMsg", "The cancel request didn't reach the background worker, so the clean may still be running. Reload the Slack page and try again.")
                   );
                   return;
                 }
-                logConsole("Bulk deletion canceled by user.", "warn");
+                logConsole(t("logCanceledByUser", "Bulk deletion canceled by user."), "warn");
                 stopOperations("Canceled");
               });
             }
@@ -1665,15 +1665,15 @@ if (!window.slackCleanInitialized) {
         const preset = presets.find(p => p.id === presetId);
         if (preset) {
           applyFilterFormState(preset);
-          logConsole(`Loaded filter preset "${preset.name}".`, "info");
+          logConsole(t("logPresetLoaded", `Loaded filter preset "${preset.name}".`, [String(preset.name)]), "info");
         }
       });
 
       getEl("sc-btn-preset-save").addEventListener("click", () => {
         showCustomPrompt(
-          "Name This Preset",
-          "Save the current filter settings for reuse later.",
-          "e.g. Older than 90 days, no attachments",
+          t("dashPromptTitle", "Name This Preset"),
+          t("modalSavePresetMsg", "Save the current filter settings for reuse later."),
+          t("modalSavePresetPlaceholder", "e.g. Older than 90 days, no attachments"),
           async (name) => {
             if (!name) return;
 
@@ -1686,8 +1686,8 @@ if (!window.slackCleanInitialized) {
             } else {
               if (presets.length >= MAX_FILTER_PRESETS) {
                 showCustomAlert(
-                  "Preset Limit Reached",
-                  `You already have ${MAX_FILTER_PRESETS} saved presets, the maximum. Delete one before saving another.`
+                  t("modalPresetLimitTitle", "Preset Limit Reached"),
+                  t("modalPresetLimitMsg", `You already have ${MAX_FILTER_PRESETS} saved presets, the maximum. Delete one before saving another.`, [String(MAX_FILTER_PRESETS)])
                 );
                 return;
               }
@@ -1698,7 +1698,7 @@ if (!window.slackCleanInitialized) {
             populatePresetSelect(presets);
             getEl("sc-preset-select").value = existing ? existing.id : presets[presets.length - 1].id;
             getEl("sc-btn-preset-delete").classList.remove("hidden");
-            logConsole(`Saved filter preset "${name}".`, "info");
+            logConsole(t("logPresetSaved", `Saved filter preset "${name}".`, [String(name)]), "info");
           }
         );
       });
@@ -1710,17 +1710,17 @@ if (!window.slackCleanInitialized) {
 
         const selectedLabel = select.options[select.selectedIndex]?.text || "this preset";
         showCustomConfirm(
-          "Delete Preset?",
-          `Remove the saved preset "${selectedLabel}"? This cannot be undone.`,
-          "Delete",
-          "Cancel",
+          t("modalDeletePresetTitle", "Delete Preset?"),
+          t("modalDeletePresetMsg", `Remove the saved preset "${selectedLabel}"? This cannot be undone.`, [String(selectedLabel)]),
+          t("dashPresetDelete", "Delete"),
+          t("dashCancel", "Cancel"),
           async (confirmed) => {
             if (!confirmed) return;
             const presets = await loadFilterPresets();
             const remaining = presets.filter(p => p.id !== presetId);
             await saveFilterPresets(remaining);
             populatePresetSelect(remaining);
-            logConsole(`Deleted filter preset "${selectedLabel}".`, "info");
+            logConsole(t("logPresetDeleted", `Deleted filter preset "${selectedLabel}".`, [String(selectedLabel)]), "info");
           }
         );
       });
@@ -1733,7 +1733,7 @@ if (!window.slackCleanInitialized) {
           }
           const cleared = document.createElement("div");
           cleared.className = "console-line info";
-          cleared.textContent = "[Logs cleared by user]";
+          cleared.textContent = t("logsClearedByUser", "[Logs cleared by user]");
           ui.consoleLog.appendChild(cleared);
         }
       });
@@ -1784,7 +1784,7 @@ if (!window.slackCleanInitialized) {
         a.click();
         URL.revokeObjectURL(url);
 
-        logConsole(`Exported ${scanResults.length} messages to CSV.`, "info");
+        logConsole(t("logExportedCsv", `Exported ${scanResults.length} messages to CSV.`, [String(scanResults.length)]), "info");
       });
 
       // Safety Verification Modal Event Listeners
@@ -1898,7 +1898,7 @@ if (!window.slackCleanInitialized) {
       // renderScanResults re-enables it once fresh results are fully rendered.
       if (ui.btnDelete) ui.btnDelete.disabled = true;
       
-      logConsole(`Initiating message scan in current target: ${activeChannel.name}...`, "info");
+      logConsole(t("logScanInitiating", `Initiating message scan in current target: ${activeChannel.name}...`, [String(activeChannel.name)]), "info");
       
       // Read filter inputs
       const filterSender = shadowRoot.getElementById("sc-filter-sender").value;
@@ -1925,8 +1925,8 @@ if (!window.slackCleanInitialized) {
         // covered ALL history — and the confirm dialog only shows a count, never
         // the date range, so the user could delete far more than intended.
         if (!startVal || !endVal) {
-          logConsole("Error: Custom date range requires both a start and an end date.", "error");
-          showCustomAlert("Incomplete Date Range", "Please choose both a Start Date and an End Date for a custom range.");
+          logConsole(t("logDateRangeIncomplete", "Error: Custom date range requires both a start and an end date."), "error");
+          showCustomAlert(t("modalIncompleteDateRangeTitle", "Incomplete Date Range"), t("modalIncompleteDateRangeMsg", "Please choose both a Start Date and an End Date for a custom range."));
           scanBtn.disabled = false;
           scanBtn.innerText = t("dashScan", "Scan Messages");
           toggleInputs(false);
@@ -1941,8 +1941,8 @@ if (!window.slackCleanInitialized) {
         const latestTs = Math.floor(new Date(endVal + "T23:59:59").getTime() / 1000);
 
         if (oldestTs > latestTs) {
-          logConsole("Error: Start Date cannot be after End Date.", "error");
-          showCustomAlert("Invalid Date Range", "Start Date must be before or equal to End Date.");
+          logConsole(t("logDateRangeInvalid", "Error: Start Date cannot be after End Date."), "error");
+          showCustomAlert(t("modalInvalidDateRangeTitle", "Invalid Date Range"), t("modalInvalidDateRangeMsg", "Start Date must be before or equal to End Date."));
           scanBtn.disabled = false;
           scanBtn.innerText = t("dashScan", "Scan Messages");
           toggleInputs(false);
@@ -1953,7 +1953,7 @@ if (!window.slackCleanInitialized) {
       }
 
       scanResults = [];
-      logConsole("Querying Slack APIs in background...", "info");
+      logConsole(t("logQuerying", "Querying Slack APIs in background..."), "info");
 
       // Guard the scan against a response that never arrives (SW suspended mid-scan).
       // `scanSettled` ensures the timeout and the real callback don't both run.
@@ -1973,10 +1973,10 @@ if (!window.slackCleanInitialized) {
         // a duplicate sweep of the same conversation while one is still running, so
         // re-scanning is safe either way — it just reports "already running" instead
         // of doubling the API load.
-        logConsole("No scan result after 2 minutes. The background worker may have been suspended, or may still be working through a throttled channel. Re-run Scan — a scan that is still running will say so rather than starting a second one.", "error");
+        logConsole(t("logScanTimeout", "No scan result after 2 minutes. The background worker may have been suspended, or may still be working through a throttled channel. Re-run Scan — a scan that is still running will say so rather than starting a second one."), "error");
         showCustomAlert(
-          "Scan Did Not Finish In Time",
-          "No result came back within 2 minutes. The background worker was either suspended or is still working through a heavily rate-limited channel.\n\nRe-run Scan: if one is still in progress you'll be told, and nothing is deleted either way."
+          t("modalScanTimeoutTitle", "Scan Did Not Finish In Time"),
+          t("modalScanTimeoutMsg", "No result came back within 2 minutes. The background worker was either suspended or is still working through a heavily rate-limited channel.\n\nRe-run Scan: if one is still in progress you'll be told, and nothing is deleted either way.")
         );
       }, SCAN_TIMEOUT_MS);
 
@@ -2001,7 +2001,7 @@ if (!window.slackCleanInitialized) {
         restoreScanUI();
 
         if (chrome.runtime.lastError) {
-          logConsole(`Scan API call failed: ${chrome.runtime.lastError.message}`, "error");
+          logConsole(t("logScanApiFailed", `Scan API call failed: ${chrome.runtime.lastError.message}`, [chrome.runtime.lastError.message]), "error");
           return;
         }
 
@@ -2021,7 +2021,7 @@ if (!window.slackCleanInitialized) {
             (intendedChannelId && intendedChannelId !== targetChannelId) ||
             (activeTeam && activeTeam.id !== targetTeamId) ||
             (intendedTeamId && intendedTeamId !== targetTeamId)) {
-          logConsole("Channel or workspace changed during active scan. Discarding stale scan results.", "warn");
+          logConsole(t("logScanStale", "Channel or workspace changed during active scan. Discarding stale scan results."), "warn");
           return;
         }
 
@@ -2042,9 +2042,9 @@ if (!window.slackCleanInitialized) {
           const truncated = wasCapped || moreAvailable;
 
           const note = wasCapped
-            ? " (5,000-result limit reached — narrow your filters for more)"
-            : (moreAvailable ? " (scan depth limit reached — older messages were NOT examined)" : "");
-          logConsole(`Scan complete. Matches found: ${scanResults.length}${note}`, truncated ? "warn" : "info");
+            ? t("logScanCappedNote", " (5,000-result limit reached — narrow your filters for more)")
+            : (moreAvailable ? t("logScanMoreNote", " (scan depth limit reached — older messages were NOT examined)") : "");
+          logConsole(t("logScanComplete", `Scan complete. Matches found: ${scanResults.length}`, [String(scanResults.length)]) + note, truncated ? "warn" : "info");
           
           // Pre-fetch any unknown users so the UI renders real names instead of raw IDs
           const unknownUsers = new Set();
@@ -2052,7 +2052,7 @@ if (!window.slackCleanInitialized) {
             if (msg.user && !userCache[msg.user]) unknownUsers.add(msg.user);
           });
           if (unknownUsers.size > 0) {
-            logConsole(`Fetching names for ${unknownUsers.size} unknown users...`, "info");
+            logConsole(t("logFetchingNames", `Fetching names for ${unknownUsers.size} unknown users...`, [String(unknownUsers.size)]), "info");
             Promise.all(Array.from(unknownUsers).map(uid => getUserName(uid))).then(() => {
               renderScanResults();
             });
@@ -2062,13 +2062,13 @@ if (!window.slackCleanInitialized) {
 
           if (wasCapped) {
             showCustomAlert(
-              "Scan Results Capped",
-              `The scan returned ${scanResults.length} messages, the maximum per scan. There may be additional matching messages. Use a narrower date range or text filter, delete this batch, then scan again.`
+              t("modalScanCappedTitle", "Scan Results Capped"),
+              t("modalScanCappedMsg", `The scan returned ${scanResults.length} messages, the maximum per scan. There may be additional matching messages. Use a narrower date range or text filter, delete this batch, then scan again.`, [String(scanResults.length)])
             );
           } else if (moreAvailable) {
             showCustomAlert(
-              "Not All Messages Were Scanned",
-              `This channel has more history than a single scan examines, so only its most recent messages were checked (${scanResults.length} matched). Older matching messages exist but were NOT scanned. Use a date range to scan older messages, or delete this batch and scan again.`
+              t("modalMoreNotScannedTitle", "Not All Messages Were Scanned"),
+              t("modalMoreNotScannedMsg", `This channel has more history than a single scan examines, so only its most recent messages were checked (${scanResults.length} matched). Older matching messages exist but were NOT scanned. Use a date range to scan older messages, or delete this batch and scan again.`, [String(scanResults.length)])
             );
           }
         } else if (response && response.error === "scan_in_progress") {
@@ -2076,15 +2076,15 @@ if (!window.slackCleanInitialized) {
           // likely the user hit the client-side scan timeout and retried). Say so
           // plainly rather than reporting it as a failure — the first scan is still
           // coming, and starting a second would only compete for the rate limit.
-          logConsole("A scan of this conversation is already running. Waiting for it to finish rather than starting a second one.", "warn");
+          logConsole(t("logScanAlreadyRunning", "A scan of this conversation is already running. Waiting for it to finish rather than starting a second one."), "warn");
           showCustomAlert(
-            "Scan Already Running",
-            "A scan of this conversation is still in progress. Starting another would compete for the same Slack rate limit and make both slower, so this request was skipped. Give the first scan a moment to finish."
+            t("modalScanAlreadyRunningTitle", "Scan Already Running"),
+            t("modalScanAlreadyRunningMsg", "A scan of this conversation is still in progress. Starting another would compete for the same Slack rate limit and make both slower, so this request was skipped. Give the first scan a moment to finish.")
           );
         } else {
           const reason = response ? (response.message || response.error || "Unknown error") : "No response from the background worker";
-          logConsole(`Scan runtime error: ${reason}`, "error");
-          showCustomAlert("Scan Failed", `The scan could not be completed: ${reason}`);
+          logConsole(t("logScanRuntimeError", `Scan runtime error: ${reason}`, [String(reason)]), "error");
+          showCustomAlert(t("modalScanFailedTitle", "Scan Failed"), t("modalScanFailedMsg", `The scan could not be completed: ${reason}`, [String(reason)]));
         }
       });
     }
@@ -2278,8 +2278,8 @@ if (!window.slackCleanInitialized) {
 
         const hasThreadRoots = deleteQueue.some(msg => msg.replyCount > 0);
         const warningPrefix = hasThreadRoots
-          ? `CRITICAL WARNING: You have selected one or more Thread Roots. Slack will permanently delete ALL replies by other users in those threads! `
-          : `WARNING: `;
+          ? t("modalThreadRootWarning", "CRITICAL WARNING: You have selected one or more Thread Roots. Slack will permanently delete ALL replies by other users in those threads!") + " "
+          : t("modalWarningPrefix", "WARNING: ");
 
         // Pin this queue to the channel/workspace it was built against.
         // startDeletionProcess re-checks this before dispatching, so a channel or
@@ -2299,10 +2299,15 @@ if (!window.slackCleanInitialized) {
           const verifyModal = shadowRoot.getElementById("sc-verify-modal");
           const verifyDesc = verifyModal.querySelector(".sc-verify-desc");
           if (verifyDesc) {
+            const verifyCountSpan = '<span id="sc-verify-count-label"></span>';
+            const verifyDeleteSpan = '<strong class="sc-verify-emphasis">DELETE</strong>';
+            const verifyIntroHtml = t("verifyCountIntro", `You are about to delete more than 100 messages (${verifyCountSpan} messages).`, [verifyCountSpan]);
+            const verifyConfirmHtml = t("verifyTypeDelete", `To confirm this operation, type the word ${verifyDeleteSpan} below:`, [verifyDeleteSpan]);
             if (hasThreadRoots) {
-              verifyDesc.innerHTML = 'You are about to delete more than 100 messages (<span id="sc-verify-count-label"></span> messages). <br><br><strong style="color:var(--color-pink)">CRITICAL WARNING: You have selected one or more Thread Roots. Slack will permanently delete ALL replies by other users in those threads!</strong><br><br>To confirm this operation, type the word <strong class="sc-verify-emphasis">DELETE</strong> below:';
+              const verifyWarningHtml = `<strong style="color:var(--color-pink)">${t("modalThreadRootWarning", "CRITICAL WARNING: You have selected one or more Thread Roots. Slack will permanently delete ALL replies by other users in those threads!")}</strong>`;
+              verifyDesc.innerHTML = `${verifyIntroHtml} <br><br>${verifyWarningHtml}<br><br>${verifyConfirmHtml}`;
             } else {
-              verifyDesc.innerHTML = 'You are about to delete more than 100 messages (<span id="sc-verify-count-label"></span> messages). To confirm this operation, type the word <strong class="sc-verify-emphasis">DELETE</strong> below:';
+              verifyDesc.innerHTML = `${verifyIntroHtml} ${verifyConfirmHtml}`;
             }
             shadowRoot.getElementById("sc-verify-count-label").innerText = deleteQueue.length;
           } else {
@@ -2313,10 +2318,10 @@ if (!window.slackCleanInitialized) {
           shadowRoot.getElementById("sc-verify-input").focus();
         } else {
           showCustomConfirm(
-            "Confirm Deletion",
-            `${warningPrefix}You are about to permanently delete ${deleteQueue.length} messages in channel "${activeChannel.name}". This action cannot be undone.`,
-            "Start Deleting",
-            "Go Back",
+            t("modalConfirmDeletionTitle", "Confirm Deletion"),
+            t("modalConfirmDeletionMsg", `${warningPrefix}You are about to permanently delete ${deleteQueue.length} messages in channel "${activeChannel.name}". This action cannot be undone.`, [warningPrefix, String(deleteQueue.length), String(activeChannel.name)]),
+            t("dashStartDeleting", "Start Deleting"),
+            t("dashVerifyGoBack", "Go Back"),
             (confirmed) => {
               if (confirmed) {
                 startDeletionProcess();
@@ -2332,12 +2337,12 @@ if (!window.slackCleanInitialized) {
             channelId: activeChannel.id
           }, () => {
             if (chrome.runtime.lastError) {
-              logConsole("Pause request failed — background unavailable. Reload Slack if this persists.", "error");
+              logConsole(t("logPauseFailed", "Pause request failed — background unavailable. Reload Slack if this persists."), "error");
               return;
             }
             isPaused = true;
             syncButtonStates();
-            logConsole("Requesting pause in background...", "warn");
+            logConsole(t("logRequestingPause", "Requesting pause in background..."), "warn");
           });
         } else {
           chrome.runtime.sendMessage({
@@ -2346,12 +2351,12 @@ if (!window.slackCleanInitialized) {
             channelId: activeChannel.id
           }, () => {
             if (chrome.runtime.lastError) {
-              logConsole("Resume request failed — background unavailable. Reload Slack if this persists.", "error");
+              logConsole(t("logResumeReqFailed", "Resume request failed — background unavailable. Reload Slack if this persists."), "error");
               return;
             }
             isPaused = false;
             syncButtonStates();
-            logConsole("Requesting resume in background...", "info");
+            logConsole(t("logRequestingResume", "Requesting resume in background..."), "info");
           });
         }
       }
@@ -2375,10 +2380,10 @@ if (!window.slackCleanInitialized) {
           activeTeam.id !== queueTeamId ||
           scanResultsChannelId !== activeChannel.id ||
           scanResultsTeamId !== activeTeam.id) {
-        logConsole("Target conversation changed before deletion started — operation aborted for safety. Re-scan the current channel.", "error");
+        logConsole(t("logDeletionAbortedDrift", "Target conversation changed before deletion started — operation aborted for safety. Re-scan the current channel."), "error");
         showCustomAlert(
-          "Deletion Aborted",
-          "The active conversation changed before deletion started, so the operation was cancelled to protect against deleting from the wrong channel. Please re-scan and try again."
+          t("modalDeletionAbortedTitle", "Deletion Aborted"),
+          t("modalDeletionAbortedMsg", "The active conversation changed before deletion started, so the operation was cancelled to protect against deleting from the wrong channel. Please re-scan and try again.")
         );
         stopOperations("Aborted");
         return;
@@ -2397,7 +2402,7 @@ if (!window.slackCleanInitialized) {
       const minTitle = shadowRoot.getElementById("sc-min-status-title");
       if (minTitle) minTitle.innerText = t("dashDeleting", "Deleting...");
 
-      logConsole(`Delegating deletion of ${stats.total} items to background service worker...`, "info");
+      logConsole(t("logDelegatingDeletion", `Delegating deletion of ${stats.total} items to background service worker...`, [String(stats.total)]), "info");
 
       const filterAttachments = shadowRoot.getElementById("sc-filter-attachments").checked;
 
@@ -2426,7 +2431,15 @@ if (!window.slackCleanInitialized) {
         filterAttachments
       }, (response) => {
         if (chrome.runtime.lastError || !response || !response.success) {
-          logConsole("Error starting deletion process in background.", "error");
+          if (response && response.error === "job_already_running") {
+            logConsole(t("logJobAlreadyRunning", "A deletion job for this channel is already running (likely started from another tab). Not starting a second one."), "error");
+            showCustomAlert(
+              t("modalAlreadyRunningTitle", "Already Running"),
+              t("modalAlreadyRunningMsg", "A deletion job for this conversation is already running — possibly from another tab with the same channel open. Wait for it to finish, or pause/cancel it from that tab, before starting a new one.")
+            );
+          } else {
+            logConsole(t("logStartDeletionError", "Error starting deletion process in background."), "error");
+          }
           stopOperations("Error");
         }
       });

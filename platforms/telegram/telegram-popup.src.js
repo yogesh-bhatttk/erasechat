@@ -28,8 +28,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     errorMsg.style.display = 'block';
   }
 
-  // Check existing session
-  const data = await chrome.storage.local.get(['tg_session', 'tg_api_id', 'tg_api_hash']);
+  // Check existing session. tg_session is a saved MTProto auth key -- functionally
+  // equivalent to a standing login, with no password/2FA gate of its own -- so it
+  // lives in chrome.storage.session (memory-only, cleared on browser close),
+  // matching the Slack token's own discipline. api_id/api_hash identify the app,
+  // not the user's account, and stay in local storage across restarts.
+  const [sessionData, localData] = await Promise.all([
+    chrome.storage.session.get(['tg_session']),
+    chrome.storage.local.get(['tg_api_id', 'tg_api_hash'])
+  ]);
+  const data = { ...sessionData, ...localData };
   if (data.tg_session && data.tg_api_id && data.tg_api_hash) {
     showStep('step-success');
   }
@@ -82,11 +90,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         },
       }).then(() => {
         const sessionStr = client.session.save();
-        chrome.storage.local.set({
-          tg_session: sessionStr,
-          tg_api_id: apiId,
-          tg_api_hash: apiHash
-        });
+        chrome.storage.session.set({ tg_session: sessionStr });
+        chrome.storage.local.set({ tg_api_id: apiId, tg_api_hash: apiHash });
         showStep('step-success');
       }).catch(err => {
         // A rejection that bypasses the onError auth hook (e.g. a transport-level
@@ -135,7 +140,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // out of the extension itself).
     btnLogout.disabled = true;
     try {
-      const existing = await chrome.storage.local.get(['tg_session', 'tg_api_id', 'tg_api_hash']);
+      const [sessionExisting, localExisting] = await Promise.all([
+        chrome.storage.session.get(['tg_session']),
+        chrome.storage.local.get(['tg_api_id', 'tg_api_hash'])
+      ]);
+      const existing = { ...sessionExisting, ...localExisting };
       if (existing.tg_session && existing.tg_api_id && existing.tg_api_hash) {
         const logoutClient = new TelegramClient(
           new StringSession(existing.tg_session),
@@ -150,7 +159,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (err) {
       console.error("Telegram server-side logout failed (clearing local session anyway):", err);
     } finally {
-      await chrome.storage.local.remove(['tg_session', 'tg_api_id', 'tg_api_hash']);
+      await Promise.all([
+        chrome.storage.session.remove(['tg_session']),
+        chrome.storage.local.remove(['tg_api_id', 'tg_api_hash'])
+      ]);
       showStep('step-credentials');
       btnLogout.disabled = false;
     }

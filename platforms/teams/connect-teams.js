@@ -7,8 +7,11 @@
 //
 // If a token from a previous session is already stored, this resolves immediately.
 async function connectTeams() {
-  const existing = await chrome.storage.local.get(["teams_token", "teams_base_url"]);
-  if (existing.teams_token && existing.teams_base_url) {
+  const [sessionExisting, localExisting] = await Promise.all([
+    chrome.storage.session.get(["teams_token"]),
+    chrome.storage.local.get(["teams_base_url"])
+  ]);
+  if (sessionExisting.teams_token && localExisting.teams_base_url) {
     return { ok: true };
   }
 

@@ -36,44 +36,40 @@ Both are read **from the package** and shown greyed out. They come from
 | Dashboard field | Source key | Current value |
 |---|---|---|
 | Title | `extensionName` | `Erasechat` (9 / 75) |
-| Summary | `extensionDescription` | `Bulk delete and clean your Slack messages in channels and DMs with advanced filters, threads, and safety controls.` (114 / 132) |
+| Summary | `extensionDescription` | `Bulk-delete your own content on Slack, Reddit, X, Mastodon, Microsoft Teams & Telegram, with advanced filters and safety controls.` (130 / 132) |
 
-The summary is the one-liner in search results. Changing it means editing the locale file,
-`npm run build`, and re-uploading the zip — and it changes the Firefox package too, since
-both manifests share the locale. A punchier alternative, if that round trip is ever worth
-making:
-
-```
-Bulk-delete your own Slack messages by sender, date, keyword, threads & files. Scan, preview, then delete — safely, locally.
-```
-
-Not worth doing mid-submission. The shipped text is accurate and within limits.
+The summary is the one-liner in search results. It now names all six platforms so a
+reviewer or user isn't surprised by permissions/functionality the old Slack-only summary
+didn't disclose (`tests/packaging.test.js` pins it to 132 chars across every locale).
+Changing it means editing the locale file, `npm run build`, and re-uploading the zip —
+and it changes the Firefox package too, since both manifests share the locale.
 
 ### Description
-_max 16,000 chars · currently 1,981_
+_max 16,000 chars_
 
 > **Chrome renders this as plain text.** Markdown does not work — `**bold**` shows the
 > literal asterisks. The text below is already plain-text formatted (•, caps headings).
 > Do not paste the Markdown version from `STORE_LISTING.md` here.
 
 ```
-Tired of scrolling back years to clean up your Slack? Erasechat clears your own messages in bulk — with the filters and safety controls to do it right.
+Tired of scrolling back years to clean up your own posts and messages? Erasechat bulk-deletes your own content — with the filters and safety controls to do it right — across six platforms: Slack (built in) plus five optional platforms you connect one at a time: Reddit, X, Mastodon, Microsoft Teams, and Telegram.
 
-Open any channel, private group, or direct message, pick your filters, preview exactly what will be removed, and delete in bulk — all from your browser.
+Open a conversation (or your own account, for Reddit/X/Mastodon), pick your filters, preview exactly what will be removed, and delete in bulk — all from your browser.
 
-🎯 PRECISE FILTERS
+💬 SLACK — the flagship engine
+🎯 Precise filters
 • Target your own messages in the current conversation
 • By date — all time, older than X days, or a custom date range
 • By keyword, phrase, or /regex/ pattern
 • Include thread replies, or leave threads untouched
 • Attachments-only mode — remove files and images while keeping the message text
 
-🔍 SCAN AND PREVIEW BEFORE ANYTHING IS DELETED
+🔍 Scan and preview before anything is deleted
 • Run a scan to see every matching message first
 • Un-check anything you want to keep — you are always in control
 • Export the matched messages as a CSV backup in one click
 
-🛟 SAFETY BUILT IN
+🛟 Safety built in
 • Type-to-confirm for large jobs (100+ messages)
 • Pause, resume, or cancel any run at any time
 • Single-conversation scope — it only touches the chat you opened
@@ -81,17 +77,27 @@ Open any channel, private group, or direct message, pick your filters, preview e
 • Rate-limit aware pacing that honors Slack's Retry-After
 • Jobs resume reliably even if the browser restarts mid-cleanup
 
-🔒 PRIVATE BY DESIGN
+🌐 FIVE MORE PLATFORMS, EACH OPTIONAL
+Connect Reddit, X, Mastodon, Microsoft Teams, or Telegram independently from the popup — none is required to use Slack, and none is contacted until you click it.
+• Reddit — bulk-delete your own comments, posts, or both
+• X — bulk-delete your own posts
+• Mastodon — works with any instance; you provide a personal access token
+• Microsoft Teams — bulk-delete your own chat messages (work/school accounts)
+• Telegram — bulk-delete your own messages via a real, in-browser MTProto client
+Every one of these follows the same scan → preview → confirm safety model as Slack: review and individually un-check matches before deleting, type-to-confirm for large batches, and cancel a run already in progress.
+
+🔒 PRIVATE BY DESIGN, ON EVERY PLATFORM
 • 100% local — all scanning and deleting happen in your browser tab
-• No servers, no accounts, no tracking, no message content uploaded
-• Works through your existing Slack login — no passwords or tokens to enter
+• No servers, no accounts, no tracking, no content uploaded to us
+• Works through your existing login on each platform — no passwords or tokens sent to us, and every platform's credential stays in memory-only browser storage, never written to disk
 
 ⌨️ CONVENIENT
-• Open the dashboard from the toolbar or with Ctrl+Shift+K (Cmd+Shift+K on macOS)
+• Open the Slack dashboard from the toolbar or with Ctrl+Shift+K (Cmd+Shift+K on macOS)
 • Clean, modern interface with three color themes
+• Localized UI (English, Spanish, French, German) across all six platforms
 
 PLEASE NOTE
-Erasechat is an independent tool and is not affiliated with, endorsed by, or sponsored by Slack. It acts on your behalf using your existing Slack session. Deletions are permanent and cannot be undone — always preview (and export a backup) before you delete. Deleting messages you do not have permission to remove may be restricted by your workspace.
+Erasechat is an independent tool and is not affiliated with, endorsed by, or sponsored by Slack, Reddit, X Corp., Mastodon gGmbH, Microsoft, or Telegram FZ-LLC. It acts on your behalf using your existing session (or, for Mastodon/Telegram, a credential you provide) on whichever platform(s) you connect. Deletions are permanent and cannot be undone — always preview before you delete. Deleting content you do not have permission to remove may be restricted by your workspace, instance, or tenant administrator.
 ```
 
 ### Category
@@ -130,13 +136,22 @@ screenshots*. With only one locale they are interchangeable. Upload the five to 
 which covers every language including any added later; if the submit check still asks for
 localized ones, upload the identical five there as well.
 
+There are now 6 candidate screenshots (`00-platforms.png` added so the listing itself
+discloses the 6-platform scope — see the note in §2 above about the old Slack-only
+Description/Screenshots being the thing that made this look like undisclosed
+functionality). Chrome's 5-slot cap means one of the original five has to go: dropped
+`05-privacy.png` for Chrome specifically, since the description's own "PRIVATE BY DESIGN"
+section and the required disclaimer already carry that message in text, whereas the
+platform disclosure has no other home in the listing's visuals. AMO has no such cap — all
+6 go there (see `AMO_SUBMISSION_FIELDS.md`).
+
 | # | File | Caption (if captions are offered) |
 |---|---|---|
-| 1 | `store-assets/screenshots/01-overview.png` | Set your rules, target any conversation. |
-| 2 | `store-assets/screenshots/02-preview.png` | Scan first. Preview every message before it goes. |
-| 3 | `store-assets/screenshots/03-safety.png` | Deletes are permanent — so we make you confirm. |
-| 4 | `store-assets/screenshots/04-progress.png` | Watch it work — live progress and logs. |
-| 5 | `store-assets/screenshots/05-privacy.png` | 100% local. Nothing leaves your browser. |
+| 1 | `store-assets/screenshots/00-platforms.png` | One extension. Six platforms. |
+| 2 | `store-assets/screenshots/01-overview.png` | Set your rules, target any conversation. |
+| 3 | `store-assets/screenshots/02-preview.png` | Scan first. Preview every message before it goes. |
+| 4 | `store-assets/screenshots/03-safety.png` | Deletes are permanent — so we make you confirm. |
+| 5 | `store-assets/screenshots/04-progress.png` | Watch it work — live progress and logs. |
 
 ### Promotional images
 
@@ -196,19 +211,13 @@ tab buries the only channel a user has for reporting a bug.
 
 ## 2. Privacy practices tab
 
-> **⚠️ Stale as of 2026-09-07 — read before submitting.** Everything below this point in
-> §2 was written before the extension grew from Slack-only into a 6-platform tool (Slack
-> plus optional Reddit, X, Mastodon, Microsoft Teams, and Telegram support,
-> connected one at a time from the popup). The single-purpose statement and the three
-> permission justifications below have been updated to describe that reality accurately.
-> **Still needed, and not done here:** justification text for the two NEW optional
-> permissions (`cookies`, `webRequest`) and the new optional host permissions
-> — drafted just below, but not yet measured against Chrome's real per-box character
-> limit the way the original `storage`/`scripting`/`alarms`/host-permission text was (see
-> the counting note that follows). Re-verify lengths in the actual dashboard before
-> pasting. The Description/Screenshots/promo sections further down in this file are
-> UNCHANGED and still describe Slack only — new screenshots showing the platform picker
-> and an updated description are a separate, visual-asset task, not a text edit.
+> **Updated 2026-09-10 for the 6-platform tool.** The Summary, Description, single-purpose
+> statement, every permission justification below (including `cookies`/`webRequest`
+> and the new optional host permissions), and the Screenshots section now describe the
+> current reality: Slack plus optional Reddit, X, Mastodon, Microsoft Teams, and Telegram
+> support, each connected one at a time from the popup. Re-verify character counts in the
+> actual dashboard before pasting; the counts noted here were measured against this
+> version of the text.
 
 ### Single purpose
 ```
@@ -225,7 +234,7 @@ Erasechat has a single purpose: to help users bulk-delete and clean their own co
 
 **`storage`**
 ```
-Saves the user's filter preferences, first-run onboarding state, and the state of an in-progress deletion job so it can resume safely if the background service worker is suspended or the browser restarts. The Slack session token is deliberately excluded from this: it is held only in chrome.storage.session, which is cleared when the browser closes. An automated test in the repository asserts the token is never written to storage.local.
+Saves the user's filter preferences, first-run onboarding state, and the state of an in-progress deletion job so it can resume safely if the background service worker is suspended or the browser restarts. On every platform (Slack and the five optional ones), the account credential itself is deliberately excluded from persistent storage: it is held only in chrome.storage.session, which is cleared when the browser closes. Automated tests in the repository assert that no platform's credential is ever written to storage.local.
 ```
 
 **`scripting`**
@@ -255,12 +264,12 @@ Because 1,000 characters cannot hold the full token rationale, **Access → Test
 
 **`cookies` (optional permission)**
 ```
-Used only for the optional Reddit and X integrations, and only after the user explicitly clicks that platform in the popup. Reddit: checks for the user's own already-logged-in reddit.com session cookie so the extension can act as them without a separate login. X: reads the CSRF token (ct0) that platform's own web client already sets for a logged-in session. No cookie value is ever transmitted anywhere except back to that same platform's own API, and never to the developer.
+Used only for the optional Reddit and X integrations, and only after the user explicitly clicks that platform in the popup. Reddit: checks for the user's own already-logged-in reddit.com session cookie so the extension can act as them without a separate login. X: reads the CSRF token (ct0) that platform's own web client already sets for a logged-in session. No cookie value is ever transmitted anywhere except back to that same platform's own API, and never to the developer; the value itself is kept only in chrome.storage.session (memory-only, cleared on browser close), never written to disk.
 ```
 
 **`webRequest` (optional permission)**
 ```
-Used only for the optional Microsoft Teams integration, and only after the user explicitly clicks Teams in the popup and grants this permission for teams.microsoft.com specifically. It passively observes the Authorization header on the user's own already-authenticated Teams web-client requests to capture a Bearer token, since Teams has no ambient session cookie the way Slack does. No request body or unrelated header is read or stored; only the Authorization value from requests whose path matches the chat API is kept, and only in chrome.storage.local on the user's own device.
+Used only for the optional Microsoft Teams integration, and only after the user explicitly clicks Teams in the popup and grants this permission for teams.microsoft.com specifically. It passively observes the Authorization header on the user's own already-authenticated Teams web-client requests to capture a Bearer token, since Teams has no ambient session cookie the way Slack does. No request body or unrelated header is read or stored; only the Authorization value from requests whose path matches the chat API is kept, and only in chrome.storage.session (memory-only, cleared on browser close) — never written to disk.
 ```
 
 **Optional host permissions — `*.reddit.com`, `*.x.com`, `*.twitter.com`, `*.teams.microsoft.com`, `*.msg.teams.microsoft.com`, `https://*/*`**

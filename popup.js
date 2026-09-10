@@ -84,8 +84,8 @@ document.addEventListener("DOMContentLoaded", () => {
   localizeI18n(document);
 
   // Check for first-run onboarding
-  chrome.storage.local.get(["slack_onboarding_complete"], (data) => {
-    if (!data.slack_onboarding_complete) {
+  chrome.storage.local.get(["erasechat_onboarding_complete"], (data) => {
+    if (!data.erasechat_onboarding_complete) {
       showOnboarding();
     }
   });
@@ -602,7 +602,7 @@ function showOnboarding() {
   if (dismissBtn) {
     dismissBtn.addEventListener("click", () => {
       onboardingEl.classList.add("hidden");
-      chrome.storage.local.set({ slack_onboarding_complete: true });
+      chrome.storage.local.set({ erasechat_onboarding_complete: true });
     });
   }
 }

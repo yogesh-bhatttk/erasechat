@@ -5,9 +5,9 @@ function resolveXScriptUrl(src) {
 if (typeof module !== 'undefined') module.exports = { resolveXScriptUrl };
 
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
-  const data = await chrome.storage.local.get(['x_csrf']);
+  const data = await chrome.storage.session.get(['x_csrf']);
   if (!data.x_csrf) {
-    alert("Not linked to X.com. Please open the extension popup first.");
+    await showAlert("Not linked to X.com. Please open the extension popup first.");
     window.close();
     return;
   }
@@ -17,6 +17,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
   const scanBtn = document.getElementById('scan-btn');
   const deleteBtn = document.getElementById('delete-btn');
+  const cancelBtn = document.getElementById('sc-btn-cancel');
   const usernameInput = document.getElementById('username');
   const filterInput = document.getElementById('text-filter');
   const itemList = document.getElementById('item-list');
@@ -124,12 +125,39 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
 
 
+  // Shared by the scan-success render and the post-delete "remaining items" render
+  // (a partial/cancelled/selective delete leaves some scanned items un-deleted --
+  // those stay visible with fresh checkboxes rather than being discarded).
+  function renderResultRows(items) {
+    itemList.innerHTML = '';
+    resetSelection(items);
+    const selectAllBox = renderSelectAllControl(itemList);
+    const rowCheckboxes = [];
+    items.forEach(tweet => {
+      const div = document.createElement('div');
+      div.className = 'post-item';
+
+      const timeDiv = document.createElement('div');
+      timeDiv.className = 'post-time';
+      timeDiv.textContent = new Date(tweet.time).toLocaleString();
+
+      const textDiv = document.createElement('div');
+      textDiv.textContent = tweet.text;
+
+      div.appendChild(timeDiv);
+      div.appendChild(textDiv);
+      addRowCheckbox(div, tweet, rowCheckboxes);
+      itemList.appendChild(div);
+    });
+    wireSelectAll(selectAllBox, items, rowCheckboxes);
+  }
+
   scanBtn.addEventListener('click', async () => {
     const screenName = usernameInput.value.trim().replace('@', '');
     const filterText = filterInput.value.trim().toLowerCase();
     
-    if (!screenName) return alert("Please enter your X.com username.");
-    
+    if (!screenName) { await showAlert("Please enter your X.com username."); return; }
+
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
     statusText.textContent = "Scanning...";
@@ -223,38 +251,23 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       });
 
       if (currentResults.length > 0) {
-        itemList.innerHTML = '';
-        currentResults.forEach(tweet => {
-          const div = document.createElement('div');
-          div.className = 'post-item';
-
-          const timeDiv = document.createElement('div');
-          timeDiv.className = 'post-time';
-          timeDiv.textContent = new Date(tweet.time).toLocaleString();
-
-          const textDiv = document.createElement('div');
-          textDiv.textContent = tweet.text;
-
-          div.appendChild(timeDiv);
-          div.appendChild(textDiv);
-          itemList.appendChild(div);
-        });
+        renderResultRows(currentResults);
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
       } else {
         renderEmptyState(itemList, "No tweets matched your criteria.");
-        statusText.textContent = "Ready";
+        statusText.textContent = t("dashReady", "Ready");
       }
     } catch (err) {
       if (err.staleQueryId) {
         queryIdsStale = true;
-        alert(
+        await showAlert(
           "Scan failed: " + err.message +
           "\n\nThis looks like X.com's API rejected one of this extension's built-in query IDs. " +
           "X frequently rotates these; the extension may need an update with refreshed query IDs."
         );
       } else {
-        alert("Scan failed: " + err.message);
+        await showAlert("Scan failed: " + err.message);
       }
       statusText.textContent = "Error";
     } finally {
@@ -263,17 +276,26 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   });
 
   deleteBtn.addEventListener('click', async () => {
-    if (!confirmBulkDelete(currentResults.length, "tweets")) return;
+    const selected = getSelectedItems(currentResults);
+    if (selected.length === 0) {
+      await showAlert(t("dashNoItemsSelected", "No items are selected. Check at least one item, or use Select All, before deleting."));
+      return;
+    }
+    if (!(await confirmBulkDelete(selected.length, "tweets"))) return;
 
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
-    statusText.textContent = "Deleting...";
+    statusText.textContent = t("dashDeleting", "Deleting...");
     statusText.style.color = "#ef4444";
     progressText.textContent = `Starting deletion...`;
-    
-    const totalCount = currentResults.length;
+
+    const cancelController = createCancelController();
+    armCancelButton(cancelBtn, cancelController);
+
+    const totalCount = selected.length;
     let deletedCount = 0;
     const failures = []; // { id, message }
+    const processedItems = [];
     let staleQueryIdSuspected = false;
 
     try {
@@ -283,7 +305,9 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       // handler against an unexpected exception so the loop can never die
       // silently, leaving scanBtn disabled and the progress marker stuck.
       await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
-      for (const tweet of currentResults) {
+      for (const tweet of selected) {
+        if (cancelController.cancelled) break;
+        processedItems.push(tweet);
         try {
           // GraphQL DeleteTweet mutation
           const variables = { tweet_id: tweet.id, dark_request: false };
@@ -312,22 +336,35 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
           : `Deleted ${deletedCount} of ${totalCount}`;
         await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
 
+        if (cancelController.cancelled) break;
         // strict 2.5 second delay to avoid rate limits and account suspension flags
         await delay(2500);
       }
       await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
 
-      currentResults = [];
-      resultsCount.textContent = "0 items found";
+      // Anything scanned but not selected, plus anything selected but never
+      // reached because a cancel broke the loop early, stays visible -- only
+      // items actually attempted (succeeded or failed) are removed from view.
+      currentResults = currentResults.filter(item => !processedItems.includes(item));
+      if (currentResults.length > 0) {
+        renderResultRows(currentResults);
+      } else {
+        itemList.innerHTML = '';
+      }
+      resultsCount.textContent = formatScanCount(currentResults.length, { truncated: false });
 
-      if (failures.length === 0) {
+      if (cancelController.cancelled) {
+        statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
+        statusText.style.color = "#ef4444";
+        if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+      } else if (failures.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
-        renderEmptyState(itemList, "Deletion finished.");
+        if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
       } else {
         statusText.textContent = `Deletion finished: ${deletedCount} deleted, ${failures.length} failed.`;
         statusText.style.color = "#ef4444";
-        renderEmptyState(itemList, "Deletion finished (see error summary).");
+        if (currentResults.length === 0) renderEmptyState(itemList, "Deletion finished (see error summary).");
 
         const shown = failures.slice(0, 10).map(f => `#${f.id}: ${f.message}`).join('\n');
         const more = failures.length > 10 ? `\n...and ${failures.length - 10} more (see console for full list)` : '';
@@ -335,15 +372,17 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
           ? "\n\nSome failures look like X.com rejected this extension's DeleteTweet query ID. " +
             "X frequently rotates these; the extension may need an update with refreshed query IDs."
           : '';
-        alert(`Delete failed for ${failures.length} of ${totalCount} tweet(s):\n\n${shown}${more}${hint}`);
+        await showAlert(`Delete failed for ${failures.length} of ${totalCount} tweet(s):\n\n${shown}${more}${hint}`);
       }
     } catch (err) {
       console.error("X delete loop stopped unexpectedly:", err);
-      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} tweets were deleted before this happened.`);
+      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} tweets were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {
       scanBtn.disabled = false;
+      deleteBtn.disabled = currentResults.length === 0;
+      resetCancelButton(cancelBtn);
     }
   });
 });

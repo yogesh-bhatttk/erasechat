@@ -1,16 +1,21 @@
 document.addEventListener('DOMContentLoaded', async () => {
-  const data = await chrome.storage.local.get(['mstdn_host', 'mstdn_token', 'mstdn_user_id', 'mstdn_username']);
-  if (!data.mstdn_host || !data.mstdn_token || !data.mstdn_user_id) {
-    alert("Not logged in. Please log in from the extension popup first.");
+  const [localData, sessionData] = await Promise.all([
+    chrome.storage.local.get(['mstdn_host', 'mstdn_user_id', 'mstdn_username']),
+    chrome.storage.session.get(['mstdn_token'])
+  ]);
+  if (!localData.mstdn_host || !sessionData.mstdn_token || !localData.mstdn_user_id) {
+    await showAlert("Not connected. Please connect Mastodon from the extension popup first.");
     window.close();
     return;
   }
 
-  const { mstdn_host: host, mstdn_token: token, mstdn_user_id: accountId, mstdn_username: username } = data;
-  document.getElementById('connected-as').textContent = `(Connected: @${username})`;
+  const { mstdn_host: host, mstdn_user_id: accountId, mstdn_username: username } = localData;
+  const { mstdn_token: token } = sessionData;
+  document.getElementById('connected-as').textContent = t("dashConnectedAs", `(Connected: @${username})`, [`@${username}`]);
 
   const scanBtn = document.getElementById('scan-btn');
   const deleteBtn = document.getElementById('delete-btn');
+  const cancelBtn = document.getElementById('sc-btn-cancel');
   const filterInput = document.getElementById('text-filter');
   const itemList = document.getElementById('item-list');
   const resultsCount = document.getElementById('results-count');
@@ -69,6 +74,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const response = await fetchWithRetry(url, options);
     if (!response.ok) {
       if (response.status === 429) throw new Error('Rate limit exceeded');
+      if (response.status === 401) {
+        const authErr = new Error("Your Mastodon access token appears to be invalid or revoked. Reconnect from the extension popup with a fresh token.");
+        authErr.expiredAuth = true;
+        throw authErr;
+      }
       const err = await response.json().catch(() => ({}));
       throw new Error(err.error || `API Error ${response.status} on ${endpoint}`);
     }
@@ -79,6 +89,40 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // delay/fetchWithRetry: see platforms/shared/dashboard-fetch-utils.js, loaded
   // before this file by dashboard-mastodon.html.
+
+  // Shared by the scan-success render and the post-delete "remaining items"
+  // render (a partial/cancelled/selective delete leaves some scanned items
+  // un-deleted -- those stay visible with fresh checkboxes, not discarded).
+  function renderResultRows(items) {
+    itemList.innerHTML = '';
+    resetSelection(items);
+    const selectAllBox = renderSelectAllControl(itemList);
+    const rowCheckboxes = [];
+    items.forEach(status => {
+      const plainText = (status.content || status.reblog?.content || '').replace(/<[^>]+>/g, '');
+      const div = document.createElement('div');
+      div.className = 'post-item';
+
+      const timeDiv = document.createElement('div');
+      timeDiv.className = 'post-time';
+      timeDiv.textContent = new Date(status.created_at).toLocaleString();
+
+      const textDiv = document.createElement('div');
+      if (plainText) {
+        textDiv.textContent = plainText;
+      } else {
+        const i = document.createElement('i');
+        i.textContent = '[Media only / Reblog]';
+        textDiv.appendChild(i);
+      }
+
+      div.appendChild(timeDiv);
+      div.appendChild(textDiv);
+      addRowCheckbox(div, status, rowCheckboxes);
+      itemList.appendChild(div);
+    });
+    wireSelectAll(selectAllBox, items, rowCheckboxes);
+  }
 
   scanBtn.addEventListener('click', async () => {
     const filterText = filterInput.value.trim().toLowerCase();
@@ -149,37 +193,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
 
       if (currentResults.length > 0) {
-        itemList.innerHTML = '';
-        currentResults.forEach(status => {
-          const plainText = (status.content || status.reblog?.content || '').replace(/<[^>]+>/g, '');
-          const div = document.createElement('div');
-          div.className = 'post-item';
-
-          const timeDiv = document.createElement('div');
-          timeDiv.className = 'post-time';
-          timeDiv.textContent = new Date(status.created_at).toLocaleString();
-
-          const textDiv = document.createElement('div');
-          if (plainText) {
-            textDiv.textContent = plainText;
-          } else {
-            const i = document.createElement('i');
-            i.textContent = '[Media only / Reblog]';
-            textDiv.appendChild(i);
-          }
-
-          div.appendChild(timeDiv);
-          div.appendChild(textDiv);
-          itemList.appendChild(div);
-        });
+        renderResultRows(currentResults);
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
       } else {
         renderEmptyState(itemList, "No toots matched your criteria.");
-        statusText.textContent = "Ready";
+        statusText.textContent = t("dashReady", "Ready");
       }
     } catch (err) {
-      alert("Scan failed: " + err.message);
+      await showAlert("Scan failed: " + err.message);
       statusText.textContent = "Error";
     } finally {
       scanBtn.disabled = false;
@@ -187,22 +209,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   deleteBtn.addEventListener('click', async () => {
-    if (!confirmBulkDelete(currentResults.length, "toots")) return;
+    const selected = getSelectedItems(currentResults);
+    if (selected.length === 0) {
+      await showAlert(t("dashNoItemsSelected", "No items are selected. Check at least one item, or use Select All, before deleting."));
+      return;
+    }
+    if (!(await confirmBulkDelete(selected.length, "toots"))) return;
 
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
-    statusText.textContent = "Deleting...";
+    statusText.textContent = t("dashDeleting", "Deleting...");
     statusText.style.color = "#ef4444";
     progressText.textContent = `Starting deletion...`;
-    
+
+    const cancelController = createCancelController();
+    armCancelButton(cancelBtn, cancelController);
+
     // Mastodon does not support batch deletion. We must delete one by one.
     // Deletes (shared with un-reblog) are capped at 30 per rolling 30-minute
     // window, so we pace against that real limit instead of a flat delay.
     deleteTimestamps = [];
 
-    const totalCount = currentResults.length;
+    const totalCount = selected.length;
     let deletedCount = 0;
     const failures = [];
+    const processedItems = [];
     try {
       // The inner per-item try/catch below isolates one item's failure from the
       // rest of the batch. This outer try/finally is separate: it guards the
@@ -210,8 +241,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       // handler against an unexpected exception so the loop can never die
       // silently, leaving scanBtn disabled and the progress marker stuck.
       await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
-      for (const status of currentResults) {
+      let expiredAuth = false;
+      for (const status of selected) {
+        if (cancelController.cancelled) break;
         await waitForDeleteRateLimit();
+        if (cancelController.cancelled) break;
+        processedItems.push(status);
 
         try {
           await apiFetch(`/api/v1/statuses/${status.id}`, 'DELETE');
@@ -219,14 +254,42 @@ document.addEventListener('DOMContentLoaded', async () => {
           deletedCount++;
         } catch (err) {
           failures.push({ id: status.id, message: err.message });
+          // An invalid/revoked token fails every remaining item identically -- stop
+          // immediately with one clear reconnect message instead of retrying each
+          // remaining item only to fail the same way.
+          if (err.expiredAuth) {
+            expiredAuth = true;
+            break;
+          }
         }
-        progressText.textContent = `Deleted ${deletedCount} of ${totalCount}`;
+        progressText.textContent = failures.length > 0
+          ? `Processed ${deletedCount + failures.length} of ${totalCount} (${deletedCount} deleted, ${failures.length} failed)`
+          : `Deleted ${deletedCount} of ${totalCount}`;
         await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
+        if (expiredAuth || cancelController.cancelled) break;
         await delay(DELETE_MIN_SPACING_MS);
       }
       await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
 
-      if (failures.length === 0) {
+      // Anything scanned but not selected, plus anything selected but never
+      // reached because a cancel/expired-auth break happened early, stays
+      // visible -- only items actually attempted are removed from view.
+      currentResults = currentResults.filter(item => !processedItems.includes(item));
+      if (currentResults.length > 0) {
+        renderResultRows(currentResults);
+      } else {
+        itemList.innerHTML = '';
+      }
+      resultsCount.textContent = formatScanCount(currentResults.length, { truncated: false });
+
+      if (expiredAuth) {
+        statusText.textContent = "Access token invalid — reconnect required.";
+        statusText.style.color = "#ef4444";
+        await showAlert(`Stopped: your Mastodon access token appears to be invalid or revoked. ${deletedCount} of ${totalCount} toots were deleted before this happened. Reconnect from the extension popup with a fresh token to finish.`);
+      } else if (cancelController.cancelled) {
+        statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
+        statusText.style.color = "#ef4444";
+      } else if (failures.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
       } else {
@@ -234,16 +297,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusText.style.color = "#ef4444";
         console.warn("Mastodon delete failures:", failures);
       }
-      currentResults = [];
-      renderEmptyState(itemList, "Deletion finished.");
-      resultsCount.textContent = "0 items found";
+      if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
     } catch (err) {
       console.error("Mastodon delete loop stopped unexpectedly:", err);
-      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} toots were deleted before this happened.`);
+      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} toots were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {
       scanBtn.disabled = false;
+      deleteBtn.disabled = currentResults.length === 0;
+      resetCancelButton(cancelBtn);
     }
   });
 });

@@ -28,9 +28,16 @@ async function invokeWithFloodWait(invokeFn, { maxRetries = 5, onWait } = {}) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const data = await chrome.storage.local.get(['tg_session', 'tg_api_id', 'tg_api_hash']);
+  // tg_session lives in chrome.storage.session (memory-only) -- see the matching
+  // comment in telegram-popup.src.js; api_id/api_hash are app identity, not user
+  // credentials, and stay in local storage.
+  const [sessionData, localData] = await Promise.all([
+    chrome.storage.session.get(['tg_session']),
+    chrome.storage.local.get(['tg_api_id', 'tg_api_hash'])
+  ]);
+  const data = { ...sessionData, ...localData };
   if (!data.tg_session || !data.tg_api_id || !data.tg_api_hash) {
-    alert("Not logged in. Please log in from the extension popup first.");
+    await showAlert("Not logged in. Please log in from the extension popup first.");
     window.close();
     return;
   }
@@ -48,13 +55,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     await client.connect(); // Connect without login prompt
     document.getElementById('connected-as').textContent = '(Connected)';
   } catch (e) {
-    alert("Failed to connect to Telegram. " + e.message);
+    await showAlert("Failed to connect to Telegram. " + e.message);
     window.close();
     return;
   }
 
   const scanBtn = document.getElementById('scan-btn');
   const deleteBtn = document.getElementById('delete-btn');
+  const cancelBtn = document.getElementById('sc-btn-cancel');
   const targetChatInput = document.getElementById('target-chat');
   const filterInput = document.getElementById('text-filter');
   const itemList = document.getElementById('item-list');
@@ -75,6 +83,39 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Set by the scan handler, read by the delete handler -- see the delete handler
   // for why the resolved entity (not just the raw peer string) matters.
   let lastPeer = 'me';
+
+  // Shared by the scan-success render and the post-delete "remaining items"
+  // render (a cancelled delete leaves some scanned items un-deleted -- those
+  // stay visible with fresh checkboxes, not discarded).
+  function renderResultRows(items) {
+    itemList.innerHTML = '';
+    resetSelection(items);
+    const selectAllBox = renderSelectAllControl(itemList);
+    const rowCheckboxes = [];
+    items.forEach(msg => {
+      const div = document.createElement('div');
+      div.className = 'post-item';
+
+      const timeDiv = document.createElement('div');
+      timeDiv.className = 'post-time';
+      timeDiv.textContent = new Date(msg.date * 1000).toLocaleString();
+
+      const textDiv = document.createElement('div');
+      if (msg.message) {
+        textDiv.textContent = msg.message;
+      } else {
+        const i = document.createElement('i');
+        i.textContent = '[No text/Media only]';
+        textDiv.appendChild(i);
+      }
+
+      div.appendChild(timeDiv);
+      div.appendChild(textDiv);
+      addRowCheckbox(div, msg, rowCheckboxes);
+      itemList.appendChild(div);
+    });
+    wireSelectAll(selectAllBox, items, rowCheckboxes);
+  }
 
   scanBtn.addEventListener('click', async () => {
     const peer = targetChatInput.value.trim() || 'me';
@@ -100,7 +141,15 @@ document.addEventListener('DOMContentLoaded', async () => {
           () => client.invoke(
             new Api.messages.Search({
               peer: peer,
-              q: filterText,
+              // Always search with an empty query and filter locally below (see the
+              // loop just under this call) instead of sending filterText to
+              // Telegram's own server-side search. That search is token/word-based --
+              // a substring like "wor" would not match "word" the way it does on
+              // every other platform's dashboard, which does a plain
+              // case-insensitive .includes() -- so relying on it here would give the
+              // same "Text Filter" control silently different semantics depending on
+              // which platform is active.
+              q: '',
               filter: new Api.InputMessagesFilterEmpty(),
               minDate: 0,
               maxDate: 0,
@@ -126,9 +175,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         for (const msg of result.messages) {
-          if (msg.className === 'Message' || msg.className === 'MessageService') {
-            currentResults.push(msg);
-          }
+          if (msg.className !== 'Message' && msg.className !== 'MessageService') continue;
+          // Same case-insensitive substring match as every other platform dashboard,
+          // applied locally so "Text Filter" means the same thing everywhere.
+          if (filterText && !(msg.message || '').toLowerCase().includes(filterText)) continue;
+          currentResults.push(msg);
         }
         
         offsetId = result.messages[result.messages.length - 1].id;
@@ -137,41 +188,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         truncated = pageCount >= MAX_PAGES && hasMore;
       }
 
-      resultsCount.textContent = truncated
-        ? `${currentResults.length} items found (stopped after ${MAX_PAGES} pages -- older messages may exist)`
-        : `${currentResults.length} items found`;
-      
+      resultsCount.textContent = formatScanCount(currentResults.length, {
+        truncated, maxPages: MAX_PAGES, note: "older messages may exist"
+      });
+
       if (currentResults.length > 0) {
-        itemList.innerHTML = '';
-        currentResults.forEach(msg => {
-          const div = document.createElement('div');
-          div.className = 'post-item';
-
-          const timeDiv = document.createElement('div');
-          timeDiv.className = 'post-time';
-          timeDiv.textContent = new Date(msg.date * 1000).toLocaleString();
-
-          const textDiv = document.createElement('div');
-          if (msg.message) {
-            textDiv.textContent = msg.message;
-          } else {
-            const i = document.createElement('i');
-            i.textContent = '[No text/Media only]';
-            textDiv.appendChild(i);
-          }
-
-          div.appendChild(timeDiv);
-          div.appendChild(textDiv);
-          itemList.appendChild(div);
-        });
+        renderResultRows(currentResults);
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
       } else {
         itemList.innerHTML = '<div class="empty-state">No messages matched your criteria.</div>';
-        statusText.textContent = "Ready";
+        statusText.textContent = t("dashReady", "Ready");
       }
     } catch (err) {
-      alert("Scan failed: " + err.message);
+      await showAlert("Scan failed: " + err.message);
       statusText.textContent = "Error";
     } finally {
       scanBtn.disabled = false;
@@ -179,33 +209,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   deleteBtn.addEventListener('click', async () => {
-    // Above LARGE_DELETE_THRESHOLD, a fixed literal like "DELETE" is the same
-    // low-friction confirm regardless of whether 2 or thousands of messages are
-    // about to be permanently destroyed for everyone. Require typing the exact
-    // count instead, so the number is something the user has to actually
-    // notice and act on, not just habitually retype.
-    const count = currentResults.length;
-    const LARGE_DELETE_THRESHOLD = 100;
-    const isLarge = count > LARGE_DELETE_THRESHOLD;
-    const expected = isLarge ? String(count) : "DELETE";
-    const promptText = isLarge
-      ? `You are about to permanently delete ${count} messages for everyone -- more than ${LARGE_DELETE_THRESHOLD}. Type the exact number ${count} to confirm.`
-      : `Type DELETE to permanently delete ${count} messages for everyone.`;
-    const confirmation = prompt(promptText);
-    if (confirmation !== expected) {
-      alert("Deletion cancelled.");
+    const selected = getSelectedItems(currentResults);
+    if (selected.length === 0) {
+      await showAlert(t("dashNoItemsSelected", "No items are selected. Check at least one item, or use Select All, before deleting."));
       return;
     }
+    // confirmBulkDelete's own copy talks about "items"/a generic noun; Telegram's
+    // deletion is instead "for everyone" (revoke: true below), which matters enough
+    // to say explicitly rather than reuse the generic prompt text.
+    if (!(await confirmBulkDelete(selected.length, "messages for everyone"))) return;
 
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
-    statusText.textContent = "Deleting...";
+    statusText.textContent = t("dashDeleting", "Deleting...");
     statusText.style.color = "#ef4444";
     progressText.textContent = `Starting deletion...`;
-    
+
+    const cancelController = createCancelController();
+    armCancelButton(cancelBtn, cancelController);
+
     const BATCH_SIZE = 100;
     let deletedCount = 0;
     const failedChunks = [];
+    let cancelledEarly = false;
 
     try {
       // messages.DeleteMessages operates on the user/basic-group message-ID
@@ -232,9 +258,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       // the chrome.storage.local calls (progress marker) and everything else in
       // this handler against an unexpected exception so the loop can never die
       // silently, leaving scanBtn disabled and the progress marker stuck.
-      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: 0 } });
-      for (let i = 0; i < currentResults.length; i += BATCH_SIZE) {
-        const chunk = currentResults.slice(i, i + BATCH_SIZE).map(m => m.id);
+      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: selected.length, done: 0 } });
+      for (let i = 0; i < selected.length; i += BATCH_SIZE) {
+        if (cancelController.cancelled) { cancelledEarly = true; break; }
+        const chunk = selected.slice(i, i + BATCH_SIZE).map(m => m.id);
 
         try {
           // DeleteMessages is atomic per call -- isolate each chunk so one failed
@@ -257,16 +284,24 @@ document.addEventListener('DOMContentLoaded', async () => {
           failedChunks.push({ count: chunk.length, message: err.message });
         }
 
-        progressText.textContent = `Deleted ${deletedCount} of ${currentResults.length}`;
+        progressText.textContent = `Deleted ${deletedCount} of ${selected.length}`;
         const processedSoFar = deletedCount + failedChunks.reduce((sum, c) => sum + c.count, 0);
-        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: currentResults.length, done: processedSoFar } });
+        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: selected.length, done: processedSoFar } });
       }
       await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
 
+      // Whether the run finished, partly failed, or was cancelled, the whole
+      // scanned set is now stale (some of it may have just been deleted) --
+      // a rescan is required before another delete, same as the failure path
+      // below always required.
       currentResults = [];
       resultsCount.textContent = "0 items found";
 
-      if (failedChunks.length === 0) {
+      if (cancelledEarly) {
+        statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${selected.length} processed.`, [String(deletedCount), String(selected.length)]);
+        statusText.style.color = "#ef4444";
+        itemList.innerHTML = '<div class="empty-state">Deletion finished.</div>';
+      } else if (failedChunks.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
         itemList.innerHTML = '<div class="empty-state">Deletion finished.</div>';
@@ -276,7 +311,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusText.style.color = "#ef4444";
         itemList.innerHTML = '<div class="empty-state">Deletion finished (see error summary).</div>';
         console.warn("Telegram delete chunk failures:", failedChunks);
-        alert(
+        await showAlert(
           `Delete failed for ${failedCount} of ${deletedCount + failedCount} message(s). ` +
           `The Delete button will stay disabled -- please Scan again before retrying, ` +
           `since some of the originally scanned messages may already be gone.`
@@ -287,11 +322,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       // from stale in-memory state.
     } catch (err) {
       console.error("Telegram delete loop stopped unexpectedly:", err);
-      alert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${currentResults.length} messages were deleted before this happened.`);
+      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${selected.length} messages were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {
       scanBtn.disabled = false;
+      resetCancelButton(cancelBtn);
     }
   });
 });

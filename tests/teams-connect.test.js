@@ -9,6 +9,9 @@ test("connectTeams opens Teams and returns immediately when no token exists", as
   let openedUrl = null;
   global.chrome = {
     storage: {
+      session: {
+        get: async () => ({})
+      },
       local: {
         get: async () => ({})
       }
@@ -31,8 +34,11 @@ test("connectTeams succeeds without opening another tab when a token is already 
   let opened = false;
   global.chrome = {
     storage: {
+      session: {
+        get: async () => ({ teams_token: "Bearer token" })
+      },
       local: {
-        get: async () => ({ teams_token: "Bearer token", teams_base_url: "https://teams.microsoft.com" })
+        get: async () => ({ teams_base_url: "https://teams.microsoft.com" })
       }
     },
     tabs: {

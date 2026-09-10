@@ -51,10 +51,14 @@ function registerTeamsWebRequestListener() {
       }
       if (!path.includes("/v1/users/ME/")) return;
 
-      chrome.storage.local.set({
-        teams_token: authHeader.value,
-        teams_base_url: new URL(details.url).origin
-      });
+      // The captured Bearer token is a live credential (decodable to the user's own
+      // AAD identity) refreshed continuously as long as a Teams tab is open, so it's
+      // stored session-only (chrome.storage.session, memory-only, cleared on browser
+      // close) -- matching the Slack token's own discipline. teams_base_url is not
+      // sensitive and stays in local storage so the dashboard doesn't need Teams
+      // traffic to have fired again yet just to know which origin to call.
+      chrome.storage.session.set({ teams_token: authHeader.value });
+      chrome.storage.local.set({ teams_base_url: new URL(details.url).origin });
     },
     { urls: ["*://*.msg.teams.microsoft.com/v1/users/ME/*", "*://*.teams.microsoft.com/api/*"] },
     ["requestHeaders", "extraHeaders"]
