@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+### Follow-up audit pass: ReDoS backstop, Slack engine parity, cross-platform consistency
+
+A fresh audit (four parallel passes: Slack's `background.js` engine, `content.js`/
+`shared-filters.js`, the five non-Slack dashboards, and popup/manifest/i18n/docs)
+independently re-verified the prior pass's fixes rather than trusting the changelog, and
+found the two highest-stakes gaps below plus a set of smaller correctness/parity issues.
+All findings were fixed and reverified: lint clean (0 warnings), 144/144 unit tests pass
+(35 new), both store packages build.
+
+#### Critical — ReDoS guard was bypassable with an ordinary ~4000-char message, not just adversarial input
+
+`isSafeRegex()`'s pattern-shape heuristic (this is its ~4th patch) still classified
+`/a*[ab]{4}a*b/` as safe, but running it against one Slack-message-limit-length string
+took over 10 seconds on the single-threaded background worker — no crafted input
+required. Rather than patch the heuristic again, `shared-filters.js`'s `MAX_REGEX_INPUT`
+backstop (previously 20000, sized for an assumed-quadratic worst case) is now a
+measured, deterministic 300 characters: the same repro now completes in ~6ms. Static
+pattern-shape detection can't cover every ReDoS shape, so this length cap is the actual
+safety boundary now, not the heuristic.
+
+#### Critical — `privacy.html` contradicted the code and the other privacy docs
+
+It stated Reddit/X/Mastodon/Teams/Telegram credentials are stored in
+`chrome.storage.local`; the code (and `PRIVACY_POLICY.md`/`SECURITY.md`, which already
+had this fix) puts all five in `chrome.storage.session` (memory-only). This is the
+document that ships to store reviewers, so the stale claim was corrected to match.
+
+#### High — Slack's own delete/scan engine hadn't received two fixes already applied to the other five platforms
+
+The rate-limit retry counter (`_rateLimitRetries`) lived only in memory, so a service-
+worker restart during a long `Retry-After` wait silently reset it — a persistently-
+throttled item could retry forever without ever pausing. It's now persisted across
+`saveJobState`/`recoverAllJobs`. Separately, structural Slack errors
+(`not_allowed_token_type`, `missing_scope`, `channel_not_found`, etc.) were treated as
+ordinary per-item failures instead of stopping the queue immediately, unlike the
+fail-fast fix already shipped for Mastodon/Reddit/Teams — now Slack's queue fails fast
+on these too, and a distinct locale-keyed message reports fatal permission/access errors
+separately from an invalid-session message. The scan path's own uncapped rate-limit wait
+(no `chrome.alarms` fallback, unlike the delete queue) now fails fast past the same
+threshold instead of risking a silently dropped `RUN_SCAN` response.
+
+#### High — per-platform parity gaps
+
+Mastodon's cancel button didn't actually interrupt a mid-rate-limit-wait, contrary to
+its own changelog entry. X and Telegram never got the "fail fast on an expired/revoked
+credential" fix Mastodon/Reddit/Teams already had — both now stop immediately with
+reconnect guidance instead of retrying every remaining item. Teams' first-connect tab
+opened active, blurring/closing the popup before its "sign in, then click the icon
+again" instruction could be seen; it now opens inactive with a `chrome.storage.session`
+fallback that redisplays the hint on popup reopen. Telegram's popup login flow
+(phone/code/2FA) had zero i18n despite everything else being localized — 33 new keys
+added across `en`/`de`/`es`/`fr`, verified identical key sets across all four.
+
+#### Medium/Low — smaller correctness and consistency fixes
+
+Silent regex-rejection fallback now warns the user instead of quietly matching nothing;
+text filters now also search attachment preview/fallback/title text, not just files;
+`START_DELETION` now refuses to silently overwrite an existing *paused* job (surfaced a
+related pre-existing bug in the same area: some pause paths never cleared `isRunning`,
+fixed alongside it); `SET_SESSION` now awaits its storage write and reports failure
+instead of always claiming success; Telegram's live progress now shows failure counts
+and uses the shared safety module (`reportInterruptedDelete`/`renderEmptyState`/
+`maybeSaveDeleteProgress`) instead of duplicating it; X's pagination now dedups by
+tweet id and stops instead of re-fetching a stale cursor; the previously dead
+`showConfirm()` helper is now wired into a real "Stop this deletion?" confirmation
+shared by all five non-Slack dashboards; Reddit/X/Mastodon connect-time error strings
+and the platform-list `aria-label` are now localized; `README.md`'s manifest-loading
+table no longer omits `teams-webrequest.js`; the saved-filter-preset cap is now enforced
+post-hoc (trims oldest-first) rather than only pre-checked.
+
 ### Cross-platform audit remediation
 
 A four-pass audit (Slack core re-audit, the five non-Slack platforms, security/privacy,

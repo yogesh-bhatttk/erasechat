@@ -116,8 +116,8 @@ ships two manifests with identical everything else:
 
 | File | Target | Background |
 |---|---|---|
-| [`manifest.json`](manifest.json) | Chrome / Chromium | `service_worker: background.js` (loads `shared-filters.js` via `importScripts`) |
-| [`manifest.firefox.json`](manifest.firefox.json) | Firefox 142+ | `scripts: ["shared-filters.js", "background.js"]` + `gecko` settings |
+| [`manifest.json`](manifest.json) | Chrome / Chromium | `service_worker: background.js` (loads `shared-filters.js` and `platforms/teams/teams-webrequest.js` via `importScripts`) |
+| [`manifest.firefox.json`](manifest.firefox.json) | Firefox 142+ | `scripts: ["shared-filters.js", "platforms/teams/teams-webrequest.js", "background.js"]` + `gecko` settings |
 
 ## Project layout
 

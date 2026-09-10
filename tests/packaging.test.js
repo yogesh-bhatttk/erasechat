@@ -573,3 +573,67 @@ test("the five non-Slack platforms' account credentials are never written to sto
       `${file} must read/write ${key} via chrome.storage.session`);
   }
 });
+
+test("all five non-Slack delete loops fail fast on an expired/revoked credential", () => {
+  // Reddit/Mastodon/Teams originally had this (an auth failure otherwise looks
+  // identical to any other per-item failure and retries every remaining item at
+  // full pacing delay before giving up). X and Telegram were later brought up to
+  // the same bar -- verify all five still detect it explicitly rather than
+  // silently regressing back to "retry everything, fail slowly".
+  const EXPIRED_AUTH_FILES = [
+    "platforms/reddit/dashboard-reddit.js",
+    "platforms/mastodon/dashboard-mastodon.js",
+    "platforms/teams/dashboard-teams.js",
+    "platforms/x/dashboard-x.js"
+  ];
+  for (const file of EXPIRED_AUTH_FILES) {
+    const src = fs.readFileSync(path.join(ROOT, file), "utf8");
+    assert.match(src, /expiredAuth/, `${file} must flag an auth failure distinctly (expiredAuth)`);
+    assert.match(src, /if\s*\(\s*expiredAuth/, `${file} must branch on expiredAuth to stop the delete loop early`);
+  }
+  // Telegram detects the same condition via teleproto's own RPC error hierarchy
+  // rather than an HTTP status, so it earns its own check.
+  const telegramSrc = fs.readFileSync(path.join(ROOT, "platforms/telegram/telegram-dashboard.src.js"), "utf8");
+  assert.match(telegramSrc, /errors\.UnauthorizedError/, "telegram-dashboard.src.js must detect teleproto's UnauthorizedError family (AuthKeyUnregistered/Invalid, SessionExpired/Revoked, UserDeactivated*)");
+  assert.match(telegramSrc, /expiredAuth/, "telegram-dashboard.src.js must flag an auth failure distinctly (expiredAuth)");
+});
+
+test("all five non-Slack delete loops report live failure counts during the run, not just in the final summary", () => {
+  // "Processed N of M (X deleted, Y failed)" -- verified present (not just
+  // reachable in theory) by requiring the literal "failed)" progress-text
+  // fragment every platform now shares.
+  const PROGRESS_FILES = [
+    "platforms/reddit/dashboard-reddit.js",
+    "platforms/mastodon/dashboard-mastodon.js",
+    "platforms/teams/dashboard-teams.js",
+    "platforms/x/dashboard-x.js",
+    "platforms/telegram/telegram-dashboard.src.js"
+  ];
+  for (const file of PROGRESS_FILES) {
+    const src = fs.readFileSync(path.join(ROOT, file), "utf8");
+    assert.match(src, /failed\)/, `${file} must render a live "(N deleted, M failed)"-style progress string`);
+  }
+});
+
+test("Telegram's dashboard uses the shared dashboard-fetch-utils.js helpers instead of re-duplicating them", () => {
+  // Regression guard for the exact drift this shared module exists to prevent:
+  // Telegram used to hand-roll its own interrupted-delete report, its own
+  // "empty state" placeholders, and its own local sleep() instead of calling the
+  // shared helpers every other platform already uses.
+  const src = fs.readFileSync(path.join(ROOT, "platforms/telegram/telegram-dashboard.src.js"), "utf8");
+  assert.match(src, /\breportInterruptedDelete\(/, "must call the shared reportInterruptedDelete() instead of duplicating the interrupted-delete check");
+  assert.match(src, /\brenderEmptyState\(/, "must call the shared renderEmptyState() for its placeholder states");
+  assert.match(src, /\bmaybeSaveDeleteProgress\(/, "must call the shared maybeSaveDeleteProgress() instead of an unthrottled per-chunk storage.local write");
+  assert.doesNotMatch(src, /function\s+sleep\s*\(/, "must not define its own local sleep() -- use the shared delay() from dashboard-fetch-utils.js");
+});
+
+test("showConfirm (the shared non-blocking Yes/No modal) has a real caller", () => {
+  // Previously dead code (defined in dashboard-fetch-utils.js, called nowhere).
+  // It's now wired into armCancelButton's own click handler, shared by all five
+  // non-Slack dashboards.
+  const src = fs.readFileSync(path.join(ROOT, "platforms/shared/dashboard-fetch-utils.js"), "utf8");
+  const showConfirmDef = src.indexOf("function showConfirm(");
+  const showConfirmCallSites = [...src.matchAll(/\bshowConfirm\(/g)].length;
+  assert.ok(showConfirmDef >= 0, "showConfirm must still be defined");
+  assert.ok(showConfirmCallSites > 1, "showConfirm must be called somewhere besides its own definition");
+});

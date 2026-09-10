@@ -59,7 +59,7 @@
            the zero-extra-click experience this popup had before other platforms
            were added. -->
       <div id="platform-list-state" class="state-container">
-        <ul class="platform-list" id="platform-list" aria-label="Choose a platform to clean"></ul>
+        <ul class="platform-list" id="platform-list" data-i18n-aria="popupPlatformListAria" aria-label="Choose a platform to clean"></ul>
         <p id="platform-connect-error" class="error-text hidden"></p>
       </div>
 
@@ -163,64 +163,64 @@
 
         <div id="step-credentials" class="step active">
           <div class="form-group">
-            <label for="api-id">API ID</label>
-            <input type="text" id="api-id" placeholder="e.g. 123456" autocomplete="off" inputmode="numeric">
+            <label for="api-id" data-i18n="telegramPopupApiIdLabel">API ID</label>
+            <input type="text" id="api-id" placeholder="e.g. 123456" data-i18n-ph="telegramPopupApiIdPlaceholder" autocomplete="off" inputmode="numeric">
           </div>
           <div class="form-group">
-            <label for="api-hash">API Hash</label>
-            <input type="text" id="api-hash" placeholder="Your api_hash" autocomplete="off">
+            <label for="api-hash" data-i18n="telegramPopupApiHashLabel">API Hash</label>
+            <input type="text" id="api-hash" placeholder="Your api_hash" data-i18n-ph="telegramPopupApiHashPlaceholder" autocomplete="off">
           </div>
           <div class="form-group">
-            <label for="phone">Phone Number</label>
-            <input type="tel" id="phone" placeholder="+1 555 555 5555" autocomplete="off">
+            <label for="phone" data-i18n="telegramPopupPhoneLabel">Phone Number</label>
+            <input type="tel" id="phone" placeholder="+1 555 555 5555" data-i18n-ph="telegramPopupPhonePlaceholder" autocomplete="off">
           </div>
           <button id="btn-request-code" class="btn btn-primary" style="background: linear-gradient(135deg, #2AABEE, #229ED9); border:none; color:white;">
-            <span>Request Code</span>
+            <span data-i18n="telegramPopupRequestCode">Request Code</span>
           </button>
-          <p class="hint-text">Get your own <code>api_id</code> / <code>api_hash</code> at <strong>my.telegram.org</strong>. Never shared with anyone.</p>
+          <p class="hint-text"><span data-i18n="telegramPopupHintPre">Get your own</span> <code>api_id</code> / <code>api_hash</code> <span data-i18n="telegramPopupHintMid">at</span> <strong>my.telegram.org</strong><span data-i18n="telegramPopupHintEnd">. Never shared with anyone.</span></p>
         </div>
 
         <div id="step-code" class="step">
           <div class="status-card inactive">
             <div class="warning-dot"></div>
-            <p>Code sent to your Telegram app</p>
+            <p data-i18n="telegramPopupCodeSent">Code sent to your Telegram app</p>
           </div>
           <div class="form-group">
-            <label for="auth-code">Login Code</label>
-            <input type="text" id="auth-code" placeholder="12345" autocomplete="off" inputmode="numeric">
+            <label for="auth-code" data-i18n="telegramPopupLoginCodeLabel">Login Code</label>
+            <input type="text" id="auth-code" placeholder="12345" data-i18n-ph="telegramPopupLoginCodePlaceholder" autocomplete="off" inputmode="numeric">
           </div>
           <button id="btn-submit-code" class="btn btn-primary" style="background: linear-gradient(135deg, #2AABEE, #229ED9); border:none; color:white;">
-            <span>Submit Code</span>
+            <span data-i18n="telegramPopupSubmitCode">Submit Code</span>
           </button>
         </div>
 
         <div id="step-password" class="step">
           <div class="status-card inactive">
             <div class="warning-dot"></div>
-            <p>2FA password required</p>
+            <p data-i18n="telegramPopup2faRequired">2FA password required</p>
           </div>
           <div class="form-group">
-            <label for="2fa-password">Cloud Password</label>
-            <input type="password" id="2fa-password" placeholder="Your 2FA password" autocomplete="off">
+            <label for="2fa-password" data-i18n="telegramPopupCloudPasswordLabel">Cloud Password</label>
+            <input type="password" id="2fa-password" placeholder="Your 2FA password" data-i18n-ph="telegramPopupCloudPasswordPlaceholder" autocomplete="off">
           </div>
           <button id="btn-submit-password" class="btn btn-primary" style="background: linear-gradient(135deg, #2AABEE, #229ED9); border:none; color:white;">
-            <span>Submit Password</span>
+            <span data-i18n="telegramPopupSubmitPassword">Submit Password</span>
           </button>
         </div>
 
         <div id="step-success" class="step">
           <div class="status-card">
             <div class="pulse-indicator" style="background: #2AABEE;"></div>
-            <p>Connected</p>
+            <p data-i18n="telegramPopupConnected">Connected</p>
           </div>
           <button id="btn-dashboard" class="btn btn-primary" style="background: linear-gradient(135deg, #2AABEE, #229ED9); border:none; color:white;">
-            <span>Open Dashboard</span>
+            <span data-i18n="telegramPopupOpenDashboard">Open Dashboard</span>
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="5" y1="12" x2="19" y2="12"></line>
               <polyline points="12 5 19 12 12 19"></polyline>
             </svg>
           </button>
-          <button id="btn-logout" class="btn btn-secondary">Log Out</button>
+          <button id="btn-logout" class="btn btn-secondary" data-i18n="telegramPopupLogOut">Log Out</button>
         </div>
 
         <div id="error-msg-telegram" class="error-msg"></div>

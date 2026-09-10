@@ -1,14 +1,15 @@
 import { TelegramClient, Api, extensions } from 'teleproto';
 import { StringSession } from 'teleproto/sessions/index.js';
 
+// t(): see popup.js, loaded before this bundle by popup.html -- same bare-global
+// reliance pattern telegram-dashboard.src.js already uses for dashboard-fetch-utils.js's
+// t(), so this flow's labels/buttons/validation text localize the same way every other
+// platform's UI does instead of staying hardcoded English.
+
 let client;
 let resolveCode, resolvePassword;
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const stepCredentials = document.getElementById('step-credentials');
-  const stepCode = document.getElementById('step-code');
-  const stepPassword = document.getElementById('step-password');
-  const stepSuccess = document.getElementById('step-success');
   const errorMsg = document.getElementById('error-msg-telegram');
 
   const btnRequest = document.getElementById('btn-request-code');
@@ -48,12 +49,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const phone = document.getElementById('phone').value.trim();
 
     if (!apiId || !apiHash || !phone) {
-      showError('All fields are required.');
+      showError(t('telegramPopupAllFieldsRequired', 'All fields are required.'));
       return;
     }
 
     btnRequest.disabled = true;
-    btnRequest.textContent = 'Requesting...';
+    btnRequest.textContent = t('telegramPopupRequesting', 'Requesting...');
 
     const stringSession = new StringSession('');
     client = new TelegramClient(stringSession, apiId, apiHash, {
@@ -82,11 +83,11 @@ document.addEventListener('DOMContentLoaded', async () => {
           // reset all three so whichever one is actually stuck disabled/"Submitting..."
           // is always recoverable without reopening the popup.
           btnRequest.disabled = false;
-          btnRequest.textContent = 'Request Code';
+          btnRequest.textContent = t('telegramPopupRequestCode', 'Request Code');
           btnCode.disabled = false;
-          btnCode.textContent = 'Submit Code';
+          btnCode.textContent = t('telegramPopupSubmitCode', 'Submit Code');
           btnPassword.disabled = false;
-          btnPassword.textContent = 'Submit Password';
+          btnPassword.textContent = t('telegramPopupSubmitPassword', 'Submit Password');
         },
       }).then(() => {
         const sessionStr = client.session.save();
@@ -100,12 +101,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         // the popup.
         showError(err.message || String(err));
         btnRequest.disabled = false;
-        btnRequest.textContent = 'Request Code';
+        btnRequest.textContent = t('telegramPopupRequestCode', 'Request Code');
       });
     } catch (err) {
       showError(err.message || String(err));
       btnRequest.disabled = false;
-      btnRequest.textContent = 'Request Code';
+      btnRequest.textContent = t('telegramPopupRequestCode', 'Request Code');
     }
   });
 
@@ -113,7 +114,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const code = document.getElementById('auth-code').value.trim();
     if (code && resolveCode) {
       btnCode.disabled = true;
-      btnCode.textContent = 'Submitting...';
+      btnCode.textContent = t('telegramPopupSubmitting', 'Submitting...');
       resolveCode(code);
     }
   });
@@ -122,7 +123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const password = document.getElementById('2fa-password').value.trim();
     if (password && resolvePassword) {
       btnPassword.disabled = true;
-      btnPassword.textContent = 'Submitting...';
+      btnPassword.textContent = t('telegramPopupSubmitting', 'Submitting...');
       resolvePassword(password);
     }
   });

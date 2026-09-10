@@ -16,8 +16,63 @@ function matchesActiveWorkspaceChannel(reqChannelId, reqTeamId, activeChannel, a
   return !!(activeChannel && activeTeam && reqChannelId === activeChannel.id && reqTeamId === activeTeam.id);
 }
 
+// ADVISORY-ONLY mirror of shared-filters.js's isSafeRegex(), for one purpose only:
+// warning the user, before a scan runs, that their Text Match pattern will be
+// silently downgraded to a literal substring search. It is NEVER used to decide
+// what gets scanned or deleted — that decision is made exclusively by the real
+// isSafeRegex()/qualifies() in shared-filters.js, loaded only into the background
+// worker (per manifest.json), which content.js has no way to import directly without
+// a manifest change (out of scope here). Worst case if this drifts out of sync with
+// the real check: a wrong or missing warning banner, never a wrong delete — the
+// safety-critical gate is untouched by this file. This copy is asserted against the
+// real isSafeRegex() across a shared pattern battery in tests/content.test.js, so any
+// future edit to one without the other fails CI rather than silently drifting.
+// KEEP THIS IN SYNC WITH shared-filters.js's isSafeRegex() / its constants.
+const PREVIEW_MAX_REGEX_PATTERN_LENGTH = 100;
+const PREVIEW_MAX_QUANTIFIERS = 10;
+const PREVIEW_MAX_UNBOUNDED_QUANTIFIERS = 2;
+
+function isSafeRegexPreview(pattern) {
+  if (pattern.length > PREVIEW_MAX_REGEX_PATTERN_LENGTH) return false;
+  if (/[+*?]{2,}/.test(pattern)) return false;
+  if (/\([^)]*[+*]\)[+*?{]/.test(pattern)) return false;
+  if (/\([^()]*[+*][^()]*\)[^(]*\)[+*?{]/.test(pattern)) return false;
+  if (/\([^)]*\|[^)]*\)[+*]/.test(pattern)) return false;
+  if (/\([^)]*\{[^}]+\}[^)]*\)[+*{]/.test(pattern)) return false;
+  if (/\([^)]*\\[0-9]+[^)]*\)[+*]/.test(pattern)) return false;
+
+  const quantifiers = (pattern.match(/(?<!\\)[*+?{]/g) || []).length;
+  if (quantifiers > PREVIEW_MAX_QUANTIFIERS) return false;
+
+  const unbounded = (pattern.match(/(?<!\\)[*+]/g) || []).length
+                  + (pattern.match(/(?<!\\)\{\d*,\}/g) || []).length;
+  if (unbounded > PREVIEW_MAX_UNBOUNDED_QUANTIFIERS) return false;
+
+  if (/(?<!\\)[*+].{0,3}(?<!\\)[*+]/.test(pattern)) return false;
+
+  return true;
+}
+
+// Returns null (pattern is fine, or textFilter isn't a /regex/) or a reason string
+// ("unsafe" | "invalid") describing why the background worker's real isSafeRegex()
+// is expected to reject this pattern and fall back to a literal substring match.
+function checkTextFilterPattern(textFilter) {
+  const keyword = (textFilter || "").toLowerCase();
+  if (!(keyword.startsWith("/") && keyword.endsWith("/") && keyword.length > 2)) {
+    return null;
+  }
+  const pattern = textFilter.substring(1, textFilter.length - 1);
+  if (!isSafeRegexPreview(pattern)) return "unsafe";
+  try {
+    new RegExp(pattern, "i");
+  } catch (e) {
+    return "invalid";
+  }
+  return null;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { matchesActiveWorkspaceChannel };
+  module.exports = { matchesActiveWorkspaceChannel, isSafeRegexPreview, checkTextFilterPattern };
 }
 
 if (!window.slackCleanInitialized) {
@@ -1694,6 +1749,18 @@ if (!window.slackCleanInitialized) {
               presets.push({ id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name, ...state });
             }
 
+            // Post-hoc cap enforcement: the length check above is a plain read-then-
+            // write with no transaction (chrome.storage.local has none), so two tabs
+            // saving a preset within the same instant could both pass it and each add
+            // one, briefly landing above MAX_FILTER_PRESETS. Trimming the oldest
+            // entries here — applied on every save — turns that into a transient blip
+            // (corrected by whichever save lands second) rather than a permanent
+            // overshoot, since the cap is re-enforced every time regardless of how the
+            // in-memory `presets` array arrived at this point.
+            while (presets.length > MAX_FILTER_PRESETS) {
+              presets.shift();
+            }
+
             await saveFilterPresets(presets);
             populatePresetSelect(presets);
             getEl("sc-preset-select").value = existing ? existing.id : presets[presets.length - 1].id;
@@ -1908,6 +1975,27 @@ if (!window.slackCleanInitialized) {
       const onlyAttachments = shadowRoot.getElementById("sc-filter-attachments").checked;
       const invertText = shadowRoot.getElementById("sc-filter-invert-text").checked;
       const excludePinned = shadowRoot.getElementById("sc-filter-skip-pinned").checked;
+
+      // Warn up front if the background worker's real isSafeRegex() is expected to
+      // reject this pattern — it would otherwise fall back to a literal substring
+      // match on the raw pattern text with no explanation, near-guaranteeing 0
+      // results and leaving the user to wonder why. This is an advisory check only
+      // (see isSafeRegexPreview above); the actual decision is always made by
+      // shared-filters.js in the background worker.
+      //
+      // Deliberately NOT run through t()/data-i18n: this is a diagnostic edge case
+      // (an invalid or unsafe filter pattern), and this codebase's existing i18n
+      // scope decision already leaves comparable diagnostic text — the live
+      // execution-log narration — English-only (see CHANGELOG.md). Adding new
+      // locale keys here is out of scope for this change.
+      const patternIssue = checkTextFilterPattern(filterText);
+      if (patternIssue) {
+        const warnMsg = patternIssue === "unsafe"
+          ? `Your /regex/ text filter ("${filterText}") looks unsafe (too long, or shaped like a runaway backtracking pattern) and will be treated as a plain literal substring instead of a regex — it will likely match nothing. Simplify the pattern if you intended it as a regex.`
+          : `Your /regex/ text filter ("${filterText}") isn't a valid regular expression and will be treated as a plain literal substring instead — it will likely match nothing. Check the pattern syntax.`;
+        logConsole(warnMsg, "warn");
+        showCustomAlert("Text Filter Pattern Rejected", warnMsg);
+      }
 
       let oldest = 0;
       let latest = Math.floor(Date.now() / 1000);

@@ -665,3 +665,291 @@ test("isAutoResumeAllowed: permits resumption after SW suspension (session stora
   const warmWake = await isAutoResumeAllowed("slack_state_T1_C1");
   assert.strictEqual(warmWake, true, "Must permit resumption if run token survived in session storage");
 });
+
+// Minimal persistent chrome.storage.local backed by a plain object, so a test can
+// simulate state actually surviving a service-worker restart (the default harness
+// mock's `get` always returns {} regardless of what was `set`).
+function makePersistentLocalStorage() {
+  const store = {};
+  return {
+    store,
+    local: {
+      get: async (keys) => {
+        if (keys === null || keys === undefined) return { ...store };
+        if (typeof keys === "string") return (keys in store) ? { [keys]: store[keys] } : {};
+        if (Array.isArray(keys)) {
+          const out = {};
+          for (const k of keys) if (k in store) out[k] = store[k];
+          return out;
+        }
+        return {};
+      },
+      set: async (items) => { Object.assign(store, items); },
+      remove: async (keys) => {
+        for (const k of (Array.isArray(keys) ? keys : [keys])) delete store[k];
+      }
+    }
+  };
+}
+
+test("saveJobState persists rate-limit/transient retry streaks, and recoverAllJobs restores them across a simulated SW restart", async () => {
+  const { sandbox, context } = loadBackground();
+  const { local } = makePersistentLocalStorage();
+  sandbox.chrome.storage.local = local;
+
+  const activeJobs = vm.runInContext("activeJobs", context);
+  const saveJobState = vm.runInContext("saveJobState", context);
+  const saveJobQueue = vm.runInContext("saveJobQueue", context);
+  const recoverAllJobs = vm.runInContext("recoverAllJobs", context);
+
+  const key = "slack_state_T1_C1";
+  const job = {
+    teamId: "T1",
+    channelId: "C1",
+    deleteQueue: [{ ts: "123", action: "delete" }],
+    deleteIndex: 0,
+    stats: { success: 0, fail: 0, skipped: 0, total: 1 },
+    isRunning: true,
+    isPaused: false,
+    throttleDelay: 1000,
+    filterAttachments: false,
+    _rateLimitRetries: 7,
+    _transientRetries: 2
+  };
+  await saveJobQueue(job);
+  await saveJobState(key, job, true);
+
+  // Simulate the SW dying and restarting: the in-memory map is gone, only what
+  // was persisted to chrome.storage.local (via the mock above) survives.
+  delete activeJobs[key];
+  await recoverAllJobs();
+
+  assert.ok(activeJobs[key], "job must be recovered from storage");
+  assert.strictEqual(activeJobs[key]._rateLimitRetries, 7,
+    "rate-limit retry streak must survive a simulated SW restart, not reset to 0");
+  assert.strictEqual(activeJobs[key]._transientRetries, 2,
+    "transient retry streak must survive a simulated SW restart, not reset to 0");
+});
+
+test("MAX_RATELIMIT_RETRIES: a persisted retry streak from a previous SW lifetime is honored after recovery, not reset to 0", async () => {
+  const MAX_RATELIMIT_RETRIES = 20; // mirrors background.js's own constant
+  const key = "slack_state_T1_C1";
+
+  // Every attempt at chat.delete comes back as HTTP 429 — the exact "perpetually
+  // throttled item" scenario MAX_RATELIMIT_RETRIES exists to bound.
+  const fetchImpl = async () => ({
+    status: 429,
+    headers: { get: (h) => (h === "Retry-After" ? "5" : null) },
+    json: async () => ({ ok: false })
+  });
+
+  const { sandbox, context } = loadBackground({
+    fetchImpl,
+    sessionTokens: {
+      sc_token_T1: "xoxc-test",
+      // Browser-restart-safe "was actually running" flag — required for
+      // executeQueue's recovery path to auto-resume a job it didn't start.
+      [`sc_run_${key}`]: true
+    }
+  });
+  const { local, store } = makePersistentLocalStorage();
+  sandbox.chrome.storage.local = local;
+
+  // Pre-seed storage as if a previous SW lifetime had already retried this exact
+  // item MAX_RATELIMIT_RETRIES times (persisted by the fix under test) and then
+  // died again before a 21st attempt could run.
+  store[key] = {
+    deleteIndex: 0,
+    stats: { success: 0, fail: 0, skipped: 0, total: 1 },
+    isRunning: true,
+    isPaused: false,
+    throttleDelay: 1000,
+    filterAttachments: false,
+    rateLimitRetries: MAX_RATELIMIT_RETRIES,
+    transientRetries: 0
+  };
+  store["slack_q_T1_C1"] = [{ ts: "123", action: "delete" }];
+
+  const activeJobs = vm.runInContext("activeJobs", context);
+  assert.strictEqual(activeJobs[key], undefined, "activeJobs must start empty, as after a real SW restart");
+
+  const executeQueue = vm.runInContext("executeQueue", context);
+  await executeQueue(key);
+
+  const job = activeJobs[key];
+  assert.ok(job, "job must have been recovered");
+  assert.strictEqual(job.isPaused, true,
+    "must pause immediately on the very next 429 instead of granting a fresh 20-retry budget");
+  assert.strictEqual(job.isRunning, false);
+  assert.strictEqual(job.deleteIndex, 0, "the stuck item must not be counted as processed");
+});
+
+test("executeQueue: a structural/permission error (not_allowed_token_type) pauses the job immediately instead of failing one item at a time", async () => {
+  let deleteCalls = 0;
+  const stub = makeSlackFetch({
+    "chat.delete": () => {
+      deleteCalls++;
+      return { ok: false, error: "not_allowed_token_type" };
+    }
+  });
+
+  const { context } = loadBackground({ fetchImpl: stub.fetch });
+  const activeJobs = vm.runInContext("activeJobs", context);
+  const key = "slack_state_T1_C1";
+  activeJobs[key] = {
+    teamId: "T1",
+    channelId: "C1",
+    token: "xoxc-test",
+    isRunning: true,
+    isPaused: false,
+    deleteQueue: [
+      { ts: "1", action: "delete" },
+      { ts: "2", action: "delete" }
+    ],
+    deleteIndex: 0,
+    stats: { success: 0, fail: 0, skipped: 0, total: 2 }
+  };
+
+  const executeQueue = vm.runInContext("executeQueue", context);
+  await executeQueue(key);
+
+  const job = activeJobs[key];
+  assert.strictEqual(deleteCalls, 1, "must stop after the first structural failure, not try the second item");
+  assert.strictEqual(job.isPaused, true);
+  assert.strictEqual(job.isRunning, false);
+  assert.strictEqual(job.deleteIndex, 0, "the failed item must not be counted as processed");
+  assert.strictEqual(job.stats.fail, 0,
+    "a structural/job-wide error is not a per-item failure and must not inflate the fail count");
+});
+
+test("executeQueue: channel_not_found (a structural error not in the original hardcoded auth list) also pauses immediately", async () => {
+  const stub = makeSlackFetch({
+    "chat.delete": () => ({ ok: false, error: "channel_not_found" })
+  });
+
+  const { context } = loadBackground({ fetchImpl: stub.fetch });
+  const activeJobs = vm.runInContext("activeJobs", context);
+  const key = "slack_state_T1_C1";
+  activeJobs[key] = {
+    teamId: "T1",
+    channelId: "C1",
+    token: "xoxc-test",
+    isRunning: true,
+    isPaused: false,
+    deleteQueue: [{ ts: "1", action: "delete" }],
+    deleteIndex: 0,
+    stats: { success: 0, fail: 0, skipped: 0, total: 1 }
+  };
+
+  const executeQueue = vm.runInContext("executeQueue", context);
+  await executeQueue(key);
+
+  assert.strictEqual(activeJobs[key].isPaused, true);
+  assert.strictEqual(activeJobs[key].stats.fail, 0);
+});
+
+test("START_DELETION: refuses to overwrite an existing PAUSED job's queue/progress", async () => {
+  const { handlers, context } = loadBackground();
+  const activeJobs = vm.runInContext("activeJobs", context);
+  const key = "slack_state_T1_C1";
+  const originalQueue = [{ ts: "1" }, { ts: "2" }, { ts: "3" }];
+  const pausedJob = {
+    teamId: "T1",
+    channelId: "C1",
+    token: "xoxc-old",
+    isRunning: false,
+    isPaused: true,
+    deleteQueue: originalQueue,
+    deleteIndex: 1,
+    stats: { success: 1, fail: 0, skipped: 0, total: 3 }
+  };
+  activeJobs[key] = pausedJob;
+
+  const res = await sendMessage(handlers, {
+    type: "START_DELETION",
+    teamId: "T1",
+    channelId: "C1",
+    deleteQueue: [{ ts: "999" }], // a brand-new, unrelated scan's queue
+    throttleDelay: 1000
+  });
+
+  assert.strictEqual(res.success, false);
+  assert.strictEqual(res.error, "job_already_paused");
+  // The paused job's queue/progress must be completely untouched, not silently
+  // replaced by the new one.
+  assert.strictEqual(activeJobs[key], pausedJob, "must not replace the job object");
+  assert.strictEqual(activeJobs[key].deleteQueue, originalQueue);
+  assert.strictEqual(activeJobs[key].deleteIndex, 1);
+});
+
+test("START_DELETION: still refused while a job is actively RUNNING (existing guard unaffected by the isPaused addition)", async () => {
+  const { handlers, context } = loadBackground();
+  const activeJobs = vm.runInContext("activeJobs", context);
+  const key = "slack_state_T1_C1";
+  activeJobs[key] = {
+    teamId: "T1", channelId: "C1", isRunning: true, isPaused: false,
+    deleteQueue: [{ ts: "1" }], deleteIndex: 0,
+    stats: { success: 0, fail: 0, skipped: 0, total: 1 }
+  };
+
+  const res = await sendMessage(handlers, {
+    type: "START_DELETION", teamId: "T1", channelId: "C1",
+    deleteQueue: [{ ts: "999" }], throttleDelay: 1000
+  });
+
+  assert.strictEqual(res.success, false);
+  assert.strictEqual(res.error, "job_already_running");
+});
+
+test("SET_SESSION: propagates a session-storage write failure to the caller, but still caches the token in memory", async () => {
+  const { sandbox, handlers, context } = loadBackground();
+  sandbox.chrome.storage.session.set = async () => { throw new Error("quota_exceeded"); };
+
+  const res = await sendMessage(handlers, { type: "SET_SESSION", teamId: "T1", token: "xoxc-new" });
+  assert.strictEqual(res.success, false);
+  assert.strictEqual(res.error, "session_storage_failed");
+
+  // The in-memory cache must still have been updated, so the token is usable for
+  // the rest of this service-worker lifetime even though it won't survive a
+  // restart.
+  const userTokens = vm.runInContext("userTokens", context);
+  assert.strictEqual(userTokens.T1, "xoxc-new");
+  const getRes = await sendMessage(handlers, { type: "GET_SESSION", teamId: "T1" });
+  assert.strictEqual(getRes.token, "xoxc-new");
+});
+
+test("SET_SESSION: reports success once the session-storage write actually resolves", async () => {
+  const { handlers } = loadBackground();
+  const res = await sendMessage(handlers, { type: "SET_SESSION", teamId: "T1", token: "xoxc-ok" });
+  assert.strictEqual(res.success, true);
+});
+
+test("slackAPICallWithRetry (via runScanInBg): a very long Retry-After fails fast instead of an uncapped wait", async () => {
+  const fetchImpl = async (url) => {
+    const endpoint = String(url).split("/api/")[1];
+    if (endpoint === "conversations.history") {
+      return {
+        status: 429,
+        // Far beyond SETTIMEOUT_MAX_MS (25s) — the exact case where an uncapped
+        // setTimeout risks the SW dying mid-wait and silently losing the scan.
+        headers: { get: (h) => (h === "Retry-After" ? "9999" : null) },
+        json: async () => ({ ok: false })
+      };
+    }
+    throw new Error(`unexpected endpoint: ${endpoint}`);
+  };
+
+  const { context } = loadBackground({ fetchImpl });
+  const runScanInBg = vm.runInContext("runScanInBg", context);
+
+  const start = Date.now();
+  await assert.rejects(
+    runScanInBg("xoxc-test", {
+      channelId: "C123", oldest: 0, latest: 9999999999, includeThreads: false,
+      filterSender: "all", filterText: "", onlyAttachments: false, userId: "U1"
+    }),
+    /rate_limited_too_long/
+  );
+  const elapsedMs = Date.now() - start;
+  assert.ok(elapsedMs < 2000, `must fail fast, not actually wait ~9999s (took ${elapsedMs}ms)`);
+});

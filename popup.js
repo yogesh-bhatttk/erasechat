@@ -45,6 +45,13 @@ function localizeI18n(root) {
       const m = chrome.i18n.getMessage(el.getAttribute("data-i18n-aria"));
       if (m) el.setAttribute("aria-label", m);
     });
+    // Same pattern dashboard-fetch-utils.js already uses for platform dashboards --
+    // added here so the Telegram popup's inputs (API ID/hash, phone, code, password)
+    // can have their placeholders translated too, not just their labels/buttons.
+    root.querySelectorAll("[data-i18n-ph]").forEach((el) => {
+      const m = chrome.i18n.getMessage(el.getAttribute("data-i18n-ph"));
+      if (m) el.setAttribute("placeholder", m);
+    });
   } catch (e) { /* i18n unavailable */ }
 }
 
@@ -91,6 +98,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   renderPlatformList();
+  showPendingTeamsConnectHint();
 
   document.getElementById("btn-back-to-platforms").addEventListener("click", showPlatformList);
   document.getElementById("btn-back-to-platforms-telegram").addEventListener("click", showPlatformList);
@@ -269,6 +277,27 @@ function clearPlatformConnectError() {
   if (!el) return;
   el.textContent = "";
   el.classList.add("hidden");
+}
+
+// Teams' connect() (see connect-teams.js) opens a teams.microsoft.com tab as inactive
+// so creating it doesn't itself blur/close this popup, and shows a "sign in, then
+// reopen this popup" instruction via showPlatformConnectError. As a belt-and-suspenders
+// fallback -- some browser/focus models might still deactivate an action popup on any
+// new tab regardless of `active: false` -- connect-teams.js also persists that same
+// instruction to chrome.storage.session, so a freshly reopened popup can show it again
+// here even if the first popup closed before the user got to read it. connect-teams.js
+// clears the stored hint itself once Teams actually finishes connecting, so this never
+// shows a stale reminder for an already-connected platform.
+function showPendingTeamsConnectHint() {
+  try {
+    if (!chrome.storage || !chrome.storage.session || typeof chrome.storage.session.get !== "function") return;
+    chrome.storage.session.get(["teams_connect_pending"], (data) => {
+      void chrome.runtime.lastError;
+      if (data && data.teams_connect_pending) {
+        showPlatformConnectError(data.teams_connect_pending);
+      }
+    });
+  } catch (e) { /* best-effort only -- never block popup load over this */ }
 }
 
 // Request a platform's optional permission (from this click's user gesture, as

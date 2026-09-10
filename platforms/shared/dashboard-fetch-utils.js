@@ -338,7 +338,20 @@ function armCancelButton(cancelBtn, controller) {
   cancelBtn.hidden = false;
   cancelBtn.disabled = false;
   cancelBtn.textContent = t("dashCancel", "Cancel");
-  function onClick() {
+  async function onClick() {
+    // A real yes/no gate, not just an alert: cancelling mid-run doesn't undo
+    // anything already deleted, and a stray/accidental click on a button that
+    // sits right next to Delete shouldn't interrupt a live run with no way to
+    // back out. Disable immediately so a second click can't stack a duplicate
+    // confirm dialog while this one is still open.
+    cancelBtn.disabled = true;
+    const confirmed = await showConfirm(
+      "Stop this deletion? Items already processed will stay deleted; anything not yet reached will remain, and can be reviewed again after a rescan."
+    );
+    if (!confirmed) {
+      cancelBtn.disabled = false;
+      return;
+    }
     controller.cancel();
     cancelBtn.disabled = true;
     cancelBtn.textContent = t("dashCancelling", "Cancelling...");
@@ -355,4 +368,31 @@ function resetCancelButton(cancelBtn) {
   cancelBtn.hidden = true;
   cancelBtn.disabled = false;
   cancelBtn.textContent = t("dashCancel", "Cancel");
+}
+
+// Export for Node (tests/lint); in a dashboard page these stay plain globals, shared
+// with the platform script loaded right after this one (see the file header comment).
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    delay,
+    fetchWithRetry,
+    t,
+    localizeI18n,
+    showAlert,
+    showConfirm,
+    showPrompt,
+    confirmBulkDelete,
+    reportInterruptedDelete,
+    maybeSaveDeleteProgress,
+    renderEmptyState,
+    formatScanCount,
+    resetSelection,
+    getSelectedItems,
+    renderSelectAllControl,
+    addRowCheckbox,
+    wireSelectAll,
+    createCancelController,
+    armCancelButton,
+    resetCancelButton
+  };
 }

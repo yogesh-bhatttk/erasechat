@@ -167,6 +167,20 @@ test('qualifies: empty text filter matches everything', () => {
   assert.equal(qualifies(msg, CURRENT_USER, 'all', '', false), true);
 });
 
+test('qualifies: keyword searches attachment text/fallback/title (link-unfurl preview content)', () => {
+  // Attachments (e.g. link unfurls) carry their own visible text separate from
+  // files/message text — a filter must be able to match what the user actually
+  // sees in Slack's preview card.
+  const byText = { ts: '1', user: CURRENT_USER, text: '', attachments: [{ text: 'Quarterly Report Draft' }] };
+  const byFallback = { ts: '2', user: CURRENT_USER, text: '', attachments: [{ fallback: 'Project Falcon status' }] };
+  const byTitle = { ts: '3', user: CURRENT_USER, text: '', attachments: [{ title: 'Falcon Launch Update' }] };
+
+  assert.equal(qualifies(byText, CURRENT_USER, 'all', 'quarterly', false), true);
+  assert.equal(qualifies(byFallback, CURRENT_USER, 'all', 'falcon', false), true);
+  assert.equal(qualifies(byTitle, CURRENT_USER, 'all', 'launch', false), true);
+  assert.equal(qualifies(byText, CURRENT_USER, 'all', 'unrelated-keyword', false), false);
+});
+
 // ============================================================
 // qualifies — Regex Pattern Filtering
 // ============================================================
@@ -248,6 +262,32 @@ test('qualifies: sequential-unbounded ReDoS pattern is blocked and executes quic
   assert.ok(Date.now() - start < 100, 'sequential-unbounded regex must not backtrack');
   // Rejected as unsafe -> literal fallback for "a*a*...b", which the text lacks.
   assert.equal(q, false);
+});
+
+test('isSafeRegex: bounded-quantifier-sandwiched-between-unbounded-quantifiers pattern is still admitted (documents the known heuristic gap MAX_REGEX_INPUT backstops)', () => {
+  // `a*[ab]{4}a*b` has exactly 2 unbounded quantifiers (allowed) and they are NOT
+  // narrowly adjacent (8 chars of "[ab]{4}" sit between them), so it slips past every
+  // structural rule in isSafeRegex() — this is a real, previously-unguarded ReDoS
+  // shape (confirmed to take ~10 SECONDS against a single ordinary 4000-char message
+  // before the MAX_REGEX_INPUT cap below was tightened). No pattern-shape heuristic
+  // catches every ReDoS shape, so isSafeRegex() is expected to still say "safe" here —
+  // the fix is the deterministic input-length backstop, asserted next.
+  assert.equal(isSafeRegex('a*[ab]{4}a*b'), true);
+});
+
+test('qualifies: the heuristic-bypassing pattern above now executes in bounded time regardless of message length (MAX_REGEX_INPUT backstop)', () => {
+  const pattern = '/a*[ab]{4}a*b/';
+  // Its worst case is a run of "a" with no trailing "b" (never matches, exhausts
+  // every backtracking split). Test at several lengths well past Slack's own
+  // 4000-char default message limit — previously ~10s at 4000 chars alone.
+  for (const len of [300, 1000, 4000, 20000]) {
+    const msg = { ts: '100.0', user: CURRENT_USER, text: 'a'.repeat(len) };
+    const start = Date.now();
+    const q = qualifies(msg, CURRENT_USER, 'all', pattern, false);
+    const duration = Date.now() - start;
+    assert.ok(duration < 500, `len=${len} took ${duration}ms — expected well under 500ms (was ~10000ms at 4000 chars pre-fix)`);
+    assert.equal(q, false); // no "b" anywhere -> never matches -> literal message not selected
+  }
 });
 
 test('qualifies: empty-string-matching regex selects NOTHING (never the whole channel)', () => {

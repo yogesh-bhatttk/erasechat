@@ -114,13 +114,23 @@
         <tr><th>Platform</th><th>Credential accessed</th><th>Storage</th><th>Retention</th></tr>
       </thead>
       <tbody>
-        <tr><td><strong>Reddit</strong></td><td>Your existing reddit.com session cookie (read live, never copied into storage) plus a "modhash" and username Reddit's own API requires for delete calls</td><td><code>chrome.storage.local</code> (modhash/username only)</td><td>Until you disconnect/reconnect Reddit</td></tr>
-        <tr><td><strong>X</strong></td><td>Your existing x.com/twitter.com session's CSRF token (<code>ct0</code>) — never your password or the underlying session cookie itself</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect X</td></tr>
-        <tr><td><strong>Mastodon</strong></td><td>The instance URL you type and a personal access token you generate yourself on that instance</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect Mastodon</td></tr>
-        <tr><td><strong>Microsoft Teams</strong></td><td>A Bearer token passively observed from your own already-authenticated Teams traffic</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect Teams</td></tr>
-        <tr><td><strong>Telegram</strong></td><td>Your own <code>api_id</code>/<code>api_hash</code> (from Telegram's developer portal) and an MTProto session from your phone/code/2FA login</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect (logout also revokes the session server-side)</td></tr>
+        <tr><td rowspan="2"><strong>Reddit</strong></td><td>A "modhash" Reddit's own API requires to authorize a delete call (the reddit.com session cookie itself is read live via <code>credentials: "include"</code> and never copied into storage)</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
+        <tr><td>Your Reddit username</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect Reddit</td></tr>
+        <tr><td><strong>X</strong></td><td>Your existing x.com/twitter.com session's CSRF token (<code>ct0</code>) — never your password or the underlying session cookie itself</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
+        <tr><td rowspan="2"><strong>Mastodon</strong></td><td>A personal access token you generate yourself on that instance</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
+        <tr><td>The instance URL you type and your account username</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect Mastodon</td></tr>
+        <tr><td rowspan="2"><strong>Microsoft Teams</strong></td><td>A Bearer token passively observed from your own already-authenticated Teams traffic</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
+        <tr><td>The Teams API base URL your tenant uses</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect Teams</td></tr>
+        <tr><td rowspan="2"><strong>Telegram</strong></td><td>Your MTProto session string (created after your phone/code/2FA login)</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes (logout also revokes the session server-side)</td></tr>
+        <tr><td>Your own <code>api_id</code>/<code>api_hash</code> (from Telegram's developer portal — identifies the app, not your account)</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect</td></tr>
       </tbody>
     </table>
+    <p>Every credential above — Slack's session token included — is memory-only
+      (<code>chrome.storage.session</code>), cleared the moment the browser closes, and
+      never written to disk. Only the non-sensitive labels marked
+      <code>chrome.storage.local</code> above persist across a restart, purely so the
+      popup can show you're still connected without asking you to reconnect every time;
+      none of them can authenticate a request on their own.</p>
     <p>Mastodon's host permission is requested narrowly for the one instance you typed —
       never a blanket grant across every Mastodon server. Telegram needs no host
       permission at all: it talks to Telegram's own MTProto servers over WebSockets.</p>
@@ -158,11 +168,15 @@
         directly from your browser to the platform being managed — Slack, reddit.com,
         x.com, your chosen Mastodon instance, teams.microsoft.com, or Telegram's own
         MTProto servers.</li>
-      <li><strong>Slack's session token is never written to disk</strong> — it lives only
-        in <code>chrome.storage.session</code> (memory-only, cleared on browser close).
-        The other platforms' credentials are stored locally in <code>chrome.storage.local</code>
-        so you don't have to reconnect every time — this never leaves your device and is
-        never synced to any account.</li>
+      <li><strong>No platform's credential is ever written to disk.</strong> Slack's
+        session token, Reddit's modhash, X's CSRF token, Mastodon's access token, the
+        Teams Bearer token, and Telegram's session string all live only in
+        <code>chrome.storage.session</code> (memory-only, cleared on browser close).
+        Only non-sensitive labels — your Reddit/Mastodon username, the Mastodon instance
+        URL, the Teams API base URL, and Telegram's <code>api_id</code>/<code>api_hash</code>
+        — persist in <code>chrome.storage.local</code> so you don't have to reconnect
+        every time; none of them can authenticate a request on their own, none ever
+        leaves your device, and none is synced to any account.</li>
       <li><strong>No analytics, telemetry, tracking, advertising, or data brokers, on any
         platform.</strong> Nothing is shared with any entity other than the platform
         you're directly operating on, at your own direction.</li>
@@ -178,7 +192,9 @@
 
     <h2>Security</h2>
     <ul>
-      <li>Slack's session token is memory-only and never persisted to disk; other platforms' tokens stay local to your device and are never sent anywhere but that platform's own API.</li>
+      <li>Every platform's credential — Slack included — is memory-only
+        (<code>chrome.storage.session</code>) and never persisted to disk; each is sent
+        only to that platform's own API, never anywhere else.</li>
       <li>The Slack dashboard renders inside a Shadow DOM, isolated from the host page.</li>
       <li>Message sender origins are validated before processing.</li>
       <li>User text filters are guarded against regex denial-of-service (ReDoS).</li>

@@ -6,12 +6,23 @@
 // functions, this one takes the form values the unified popup collected (see
 // platform-registry.js's "form" field) instead of reading cookies -- there's no
 // ambient session to check for a federated, self-hosted service.
+// Tiny, dependency-free i18n helper (same shape as popup.js's own t()) -- self-contained
+// so this file's fallback English text doesn't depend on script load order or on any
+// other file having run first.
+function mastodonT(key, fallback, substitutions) {
+  try {
+    const m = chrome.i18n.getMessage(key, substitutions);
+    if (m) return m;
+  } catch (e) { /* i18n unavailable */ }
+  return fallback;
+}
+
 async function connectMastodon(values) {
   let host = (values["instance-url"] || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
   const token = (values["access-token"] || "").trim();
 
   if (!host || !token) {
-    return { ok: false, message: "Instance URL and Access Token are required." };
+    return { ok: false, message: mastodonT("mastodonConnectMissingFields", "Instance URL and Access Token are required.") };
   }
 
   try {
@@ -19,7 +30,7 @@ async function connectMastodon(values) {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (!response.ok) {
-      throw new Error(`Authentication failed (${response.status})`);
+      throw new Error(mastodonT("mastodonConnectAuthFailed", `Authentication failed (${response.status})`, [String(response.status)]));
     }
 
     const account = await response.json();
@@ -37,7 +48,7 @@ async function connectMastodon(values) {
 
     return { ok: true };
   } catch (err) {
-    return { ok: false, message: err.message || "Failed to connect. Check your URL and token." };
+    return { ok: false, message: err.message || mastodonT("mastodonConnectFailed", "Failed to connect. Check your URL and token.") };
   }
 }
 

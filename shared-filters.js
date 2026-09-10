@@ -22,11 +22,30 @@ const MAX_QUANTIFIERS = 10;
 // hard; two is the most that stays merely quadratic (and is further bounded below).
 const MAX_UNBOUNDED_QUANTIFIERS = 2;
 // Final backstop: the length of text a (safe, ≤2-unbounded) regex is actually run
-// against. Slack allows very long messages (default limit 4000 chars, and code
-// blocks/snippets can run much longer); capping keeps even a quadratic pattern on
-// a pathological repeated run well under a second. Chosen far above any real message,
-// so ordinary matching is unaffected (over-long input under-matches, the safe way).
-const MAX_REGEX_INPUT = 20000;
+// against. This is deliberately SMALL, and the smallness is load-bearing rather than
+// a nicety — measured directly against the worst adversarial-but-"safe" pattern this
+// guard is known to still admit (`a*[ab]{4}a*b`, which isSafeRegex() above passes:
+// only 2 unbounded quantifiers, not narrowly adjacent), run against a string of
+// repeated "a"s (its worst case — no trailing "b", so it never matches and exhausts
+// every backtracking split):
+//   input length -> time to test (measured cold, i.e. worst case for a service worker
+//   that just woke from idle and has no JIT warm-up yet):
+//     300 chars ->  ~36ms   325 chars -> ~45ms   350 chars -> ~55ms
+//     500 chars -> ~156ms   600 chars -> ~263ms  4000 chars -> ~10 SECONDS
+// The growth is worse than the quadratic this file's comments used to assume (2x
+// input roughly 7-8x's the time, i.e. degree ~3), so the previous 20000-char cap —
+// chosen on that quadratic assumption — left a multi-second stall reachable via one
+// ordinary-length Slack message (well under Slack's own 4000-char default limit, no
+// adversarial input needed) on the single-threaded background worker. No static
+// pattern-shape heuristic can cover every ReDoS shape (this is the ~4th such patch to
+// this file per CHANGELOG.md), so this cap is a DETERMINISTIC backstop independent of
+// the heuristic above: even a pattern the heuristic wrongly admits can only ever run
+// against this many characters. 300 is chosen to keep the measured worst case
+// comfortably under ~50ms even cold/unwarmed; ordinary text-filter matching is
+// unaffected in practice (nobody filters on content past the first ~300 characters of
+// a message) and, as before, over-long input under-matches rather than over-matches —
+// the safe direction for a permanent-delete tool.
+const MAX_REGEX_INPUT = 300;
 
 // System / no-op message subtypes that are never the user's own deletable content.
 // Dropped by subtype regardless of text: Slack's join/leave/topic/purpose/name/archive
@@ -140,6 +159,23 @@ function qualifies(msg, userId, senderMode, textFilter, onlyAttachments, options
         if (f) {
           if (f.name) msgText += " " + f.name.toLowerCase();
           if (f.title) msgText += " " + f.title.toLowerCase();
+        }
+      });
+    }
+
+    // Attachments (e.g. link unfurls) carry their own visible text separate from
+    // files — `text`/`fallback` is the body Slack renders in the preview card and
+    // `title` is its heading. Without these a text filter could silently fail to
+    // match content the user plainly sees in the message, in either direction:
+    // missing a match that should qualify, or (with Invert Text) wrongly qualifying
+    // something the user meant to keep because its visible attachment text was
+    // invisible to the filter.
+    if (hasAttach) {
+      msg.attachments.forEach(a => {
+        if (a) {
+          if (a.text) msgText += " " + a.text.toLowerCase();
+          if (a.fallback) msgText += " " + a.fallback.toLowerCase();
+          if (a.title) msgText += " " + a.title.toLowerCase();
         }
       });
     }

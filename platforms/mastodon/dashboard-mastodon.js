@@ -1,4 +1,34 @@
-document.addEventListener('DOMContentLoaded', async () => {
+// Pure helper: given already-pruned delete timestamps (i.e. only the ones still
+// inside the rolling rate-limit window), returns the timestamp new deletes may
+// resume at, or null if we're already under the cap and don't need to wait at
+// all. Extracted to module scope (and exported below) so this arithmetic is
+// unit-testable without a live DOM -- see tests/mastodon-dashboard.test.js.
+function computeRateLimitResumeAt(prunedTimestamps, max, windowMs) {
+  if (prunedTimestamps.length < max) return null;
+  return prunedTimestamps[0] + windowMs + 1000; // +1s buffer past the oldest delete's window
+}
+
+// Cancel-aware wait loop, decoupled from the real clock/sleep/progress-UI so it's
+// unit testable (see tests/mastodon-dashboard.test.js) without waiting out a real
+// 30-minute rate-limit window. `sleep`/`now` are injected by the real caller
+// (delay/Date.now) and faked by tests. Returns true the instant cancellation is
+// observed, instead of running the full remaining wait out first -- this is what
+// makes the Cancel button responsive during a paced rate-limit wait.
+async function runCancelableWait(resumeAt, cancelController, sleep, now, onTick) {
+  while (now() < resumeAt) {
+    if (cancelController && cancelController.cancelled) return true;
+    const remainingMs = resumeAt - now();
+    if (onTick) onTick(remainingMs);
+    await sleep(Math.min(1000, remainingMs));
+  }
+  return false;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { computeRateLimitResumeAt, runCancelableWait };
+}
+
+if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
   const [localData, sessionData] = await Promise.all([
     chrome.storage.local.get(['mstdn_host', 'mstdn_user_id', 'mstdn_username']),
     chrome.storage.session.get(['mstdn_token'])
@@ -43,23 +73,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Blocks (with a live countdown in progressText) until issuing another
-  // delete would stay within the 30-per-30-minute window.
-  async function waitForDeleteRateLimit() {
+  // delete would stay within the 30-per-30-minute window. Checks
+  // cancelController every tick (via runCancelableWait) so a Cancel click during
+  // this wait -- which can be up to ~30 minutes -- stops promptly instead of
+  // running the full remaining wait out first.
+  async function waitForDeleteRateLimit(cancelController) {
     pruneDeleteTimestamps();
-    if (deleteTimestamps.length < DELETE_RATE_LIMIT_MAX) return;
+    const resumeAt = computeRateLimitResumeAt(deleteTimestamps, DELETE_RATE_LIMIT_MAX, DELETE_RATE_LIMIT_WINDOW_MS);
+    if (resumeAt === null) return;
 
-    const oldest = deleteTimestamps[0];
-    let resumeAt = oldest + DELETE_RATE_LIMIT_WINDOW_MS + 1000; // +1s buffer
-
-    while (Date.now() < resumeAt) {
-      const remainingMs = resumeAt - Date.now();
+    const cancelled = await runCancelableWait(resumeAt, cancelController, delay, Date.now, (remainingMs) => {
       const remainingSec = Math.ceil(remainingMs / 1000);
       const mins = Math.floor(remainingSec / 60);
       const secs = remainingSec % 60;
       progressText.textContent =
         `Rate limit paced: 30 deletes per 30 min reached. Resuming in ${mins}m ${secs}s...`;
-      await delay(Math.min(1000, remainingMs));
-    }
+    });
+    if (cancelled) return;
 
     pruneDeleteTimestamps();
   }
@@ -244,7 +274,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       let expiredAuth = false;
       for (const status of selected) {
         if (cancelController.cancelled) break;
-        await waitForDeleteRateLimit();
+        await waitForDeleteRateLimit(cancelController);
         if (cancelController.cancelled) break;
         processedItems.push(status);
 

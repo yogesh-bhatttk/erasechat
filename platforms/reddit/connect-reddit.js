@@ -23,12 +23,23 @@
 // never throws, so callers don't need their own try/catch for the network fetch.
 const REDDIT_SESSION_COOKIE_NAMES = ["reddit_session", "token_v2", "session_tracker"];
 
+// Tiny, dependency-free i18n helper (same shape as popup.js's own t()) -- self-contained
+// so this file's fallback English text doesn't depend on script load order or on any
+// other file having run first.
+function redditT(key, fallback, substitutions) {
+  try {
+    const m = chrome.i18n.getMessage(key, substitutions);
+    if (m) return m;
+  } catch (e) { /* i18n unavailable */ }
+  return fallback;
+}
+
 async function connectReddit() {
   try {
     const cookies = await chrome.cookies.getAll({ domain: "reddit.com" });
     const hasSessionCookie = cookies.some(c => REDDIT_SESSION_COOKIE_NAMES.includes(c.name));
     if (!hasSessionCookie) {
-      return { ok: false, message: "Could not find an active Reddit session. Please log in to Reddit.com first." };
+      return { ok: false, message: redditT("redditConnectNoSession", "Could not find an active Reddit session. Please log in to Reddit.com first.") };
     }
 
     const response = await fetch("https://www.reddit.com/api/me.json", { credentials: "include" });
@@ -53,7 +64,7 @@ async function connectReddit() {
 
     return { ok: true, username: name };
   } catch (err) {
-    return { ok: false, message: "Error connecting to Reddit. Make sure you are logged in. " + err.message };
+    return { ok: false, message: redditT("redditConnectError", `Error connecting to Reddit. Make sure you are logged in. ${err.message}`, [err.message]) };
   }
 }
 

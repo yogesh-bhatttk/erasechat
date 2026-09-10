@@ -38,6 +38,25 @@ const TRANSIENT_RETRY_DELAY_MS = 3000;
 // item finally resolves, so normal throttled progress never trips it.
 const MAX_RATELIMIT_RETRIES = 20;
 
+// Auth/session errors: the Slack session backing the token is no longer valid at
+// all, so every remaining item would fail identically until the user
+// re-authenticates.
+const AUTH_INVALID_ERRORS = new Set([
+  "token_revoked", "not_authed", "account_inactive", "invalid_auth", "token_expired"
+]);
+// Structural/permission errors: not about the specific message (unlike a genuine
+// per-item failure such as cant_delete_message), but about what the current
+// token/channel/workspace can do at all — so the identical error recurs on every
+// remaining item. Stopping immediately avoids burning through the whole queue
+// failing one item at a time at full throttle pace before the user learns
+// anything is wrong. Mirrors the equivalent "fail fast on auth failure" fix
+// already applied to the non-Slack platforms (see CHANGELOG), closing the same
+// gap in this core Slack engine.
+const STRUCTURAL_JOB_ERRORS = new Set([
+  "not_allowed_token_type", "missing_scope", "no_permission", "channel_not_found",
+  "org_login_required", "ekm_access_denied", "compliance_exports_prevent_deletion"
+]);
+
 // Queue engine timing.
 // Pacing under this bound uses setTimeout for accurate sub-30s throttling
 // (chrome.alarms clamps to a ~30s floor, which is useless for per-message pacing).
@@ -291,7 +310,13 @@ async function recoverAllJobs() {
             throttleDelay: val.throttleDelay || DEFAULT_THROTTLE_DELAY,
             filterAttachments: val.filterAttachments || false,
             nextRunAt: 0,     // 0 => immediately due to the watchdog after a crash
-            _timer: null
+            _timer: null,
+            // Restore retry streaks across a SW restart (see saveJobState) so a
+            // rate-limit/transient backoff that survives via chrome.alarms keeps
+            // counting toward MAX_RATELIMIT_RETRIES/MAX_TRANSIENT_RETRIES instead
+            // of silently starting back over at 0.
+            _rateLimitRetries: val.rateLimitRetries || 0,
+            _transientRetries: val.transientRetries || 0
           };
         }
       }
@@ -367,8 +392,23 @@ async function slackAPICallWithRetry(token, endpoint, params = {}, maxRetries = 
     if (data.ok) return data;
 
     if (data.error === "rate_limited") {
-      const waitTime = (data.retryAfter || 10) + 1;
-      await new Promise(resolve => setTimeout(resolve, waitTime * 1000));
+      const waitMs = ((data.retryAfter || 10) + 1) * 1000;
+      // A scan holds no persisted, resumable state (unlike the delete queue,
+      // which routes waits this long through chrome.alarms specifically
+      // BECAUSE the service worker is expected to be torn down while they're
+      // pending — see scheduleNextStep). An uncapped setTimeout wait here risks
+      // the SW dying mid-wait with the whole in-flight RUN_SCAN response lost
+      // silently (its sendResponse never fires). Fail fast with a clear error
+      // instead of gambling on the worker surviving an arbitrarily long
+      // Retry-After; the caller can simply re-scan.
+      if (waitMs > SETTIMEOUT_MAX_MS) {
+        return {
+          ok: false,
+          error: "rate_limited_too_long",
+          message: `Slack asked to wait ${Math.round(waitMs / 1000)}s before retrying — too long to safely wait in the background. Try scanning again shortly.`
+        };
+      }
+      await new Promise(resolve => setTimeout(resolve, waitMs));
       attempt++;
     } else {
       return data;
@@ -405,12 +445,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.type === "SET_SESSION") {
     userTokens[request.teamId] = request.token;
-    // Persist token in session storage (memory-only, cleared on browser close)
-    try {
-      chrome.storage.session.set({ [`sc_token_${request.teamId}`]: request.token });
-    } catch (e) { /* session storage unavailable in older browsers */ }
-    sendResponse({ success: true });
-    return false;
+    // Persist token in session storage (memory-only, cleared on browser close).
+    // Awaited (not fire-and-forget) so a failed write is actually reported to the
+    // caller instead of claiming success regardless — the in-memory cache above
+    // still makes the token usable for the rest of THIS service-worker lifetime,
+    // but only a persisted copy survives a SW idle-death, so the caller deserves
+    // to know when that durability didn't actually happen.
+    (async () => {
+      try {
+        await chrome.storage.session.set({ [`sc_token_${request.teamId}`]: request.token });
+        sendResponse({ success: true });
+      } catch (e) {
+        // session storage unavailable/failed (older browsers, quota, etc.)
+        sendResponse({ success: false, error: "session_storage_failed", message: e && e.message });
+      }
+    })();
+    return true; // async response
   }
 
   else if (request.type === "GET_SESSION") {
@@ -523,8 +573,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // check correctly stops the superseded run rather than corrupting it, but the
     // first tab is left showing "Deleting…" forever with no error, and its remaining
     // items are simply abandoned. Mirrors the inFlightScans guard for RUN_SCAN.
-    if (activeJobs[key] && activeJobs[key].isRunning) {
-      sendResponse({ success: false, error: "job_already_running" });
+    //
+    // Also refuse when a PAUSED job already exists for this channel: accepting a
+    // fresh queue here would silently overwrite activeJobs[key] and both of its
+    // storage keys (saveJobQueue/saveJobState), discarding the paused job's
+    // progress with no error ever surfaced to the caller. The paused job must be
+    // explicitly resumed (RESUME_DELETION) or discarded (CANCEL_DELETION) first —
+    // content.js's own resume/discard prompt already does this before ever
+    // reaching this code path, so a legitimate caller is unaffected.
+    if (activeJobs[key] && (activeJobs[key].isRunning || activeJobs[key].isPaused)) {
+      const error = activeJobs[key].isRunning ? "job_already_running" : "job_already_paused";
+      sendResponse({ success: false, error });
       return true;
     }
 
@@ -534,10 +593,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
       }
 
-      // Re-check after the async token fetch: another START_DELETION could have
-      // started and begun running while this one was awaiting ensureToken().
-      if (activeJobs[key] && activeJobs[key].isRunning) {
-        sendResponse({ success: false, error: "job_already_running" });
+      // Re-check after the async token fetch: another START_DELETION/PAUSE could
+      // have landed while this one was awaiting ensureToken().
+      if (activeJobs[key] && (activeJobs[key].isRunning || activeJobs[key].isPaused)) {
+        const error = activeJobs[key].isRunning ? "job_already_running" : "job_already_paused";
+        sendResponse({ success: false, error });
         return;
       }
 
@@ -593,6 +653,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (!activeJobs[key]) await recoverAllJobs();
       const job = activeJobs[key];
       if (job) {
+        // isRunning=false alongside isPaused=true — matches every other pause
+        // path (see the identical note in handleRateLimitBackoff) so a paused
+        // job is never mistaken for a running one, e.g. by START_DELETION's
+        // job_already_running vs. job_already_paused guard.
+        job.isRunning = false;
         job.isPaused = true;
         clearScheduled(key);
         markRunning(key, false);
@@ -938,7 +1003,7 @@ function itemAction(item) {
 // sleeps for, so the dashboard countdown stays in sync. Caller must `return` right
 // after invoking this (the same item is retried after the backoff, or the job is
 // paused). `job._rateLimitRetries` is reset once an item finally resolves.
-function handleRateLimitBackoff(job, key, pauseTime, context) {
+async function handleRateLimitBackoff(job, key, pauseTime, context) {
   // If the job was cancelled/replaced while an API call was in flight, do nothing —
   // otherwise the exceeded-retries branch below would saveJobState() and resurrect a
   // job the user just cancelled (its companion queue is already gone → a ghost record).
@@ -946,10 +1011,15 @@ function handleRateLimitBackoff(job, key, pauseTime, context) {
   job._rateLimitRetries = (job._rateLimitRetries || 0) + 1;
   if (job._rateLimitRetries > MAX_RATELIMIT_RETRIES) {
     sendLogMessage(job, t("bgLogRateLimitPaused", `[Rate Limited] Slack is still throttling after ${MAX_RATELIMIT_RETRIES} retries. Pausing — reopen the dashboard to resume once throttling clears.`, [String(MAX_RATELIMIT_RETRIES)]), "error");
+    // isRunning=false alongside isPaused=true, matching every other pause path
+    // (AUTH_INVALID_ERRORS/STRUCTURAL_JOB_ERRORS, token-lost, browser-restart
+    // force-pause) — left inconsistent before, this mattered once START_DELETION
+    // started checking isRunning to label its refusal (see job_already_paused).
+    job.isRunning = false;
     job.isPaused = true;
     clearScheduled(key);
     markRunning(key, false);
-    saveJobState(key, job, true);
+    await saveJobState(key, job, true);
     broadcastJobUpdate(job);
     maybeClearWatchdog();
     return;
@@ -957,7 +1027,26 @@ function handleRateLimitBackoff(job, key, pauseTime, context) {
   const waitSec = pauseTime + 1; // small buffer past Retry-After
   sendLogMessage(job, t("bgLogRateLimitBackoff", `[Rate Limited] ${context} Backing off ${waitSec}s (retry ${job._rateLimitRetries}/${MAX_RATELIMIT_RETRIES})...`, [String(context), String(waitSec), String(job._rateLimitRetries), String(MAX_RATELIMIT_RETRIES)]), "warn");
   broadcastRateLimit(job, waitSec);
+  // Persist the bumped retry streak BEFORE scheduling the wait: a wait this long
+  // routes through chrome.alarms (see scheduleNextStep), and the SW is expected to
+  // be torn down while it's pending. Save first so a restart mid-wait recovers the
+  // correct count (see recoverAllJobs) instead of resetting it to 0.
+  await saveJobState(key, job, true);
   scheduleNextStep(key, waitSec * 1000);
+}
+
+// Shared pause-on-fatal-error path for AUTH_INVALID_ERRORS/STRUCTURAL_JOB_ERRORS:
+// stop the job and preserve its queue/progress (never discard it) so the user
+// can resume once the underlying session/permission/access problem is fixed.
+async function pauseJobForFatalError(job, key, message) {
+  sendLogMessage(job, message, "error");
+  job.isRunning = false;
+  job.isPaused = true;
+  clearScheduled(key);
+  markRunning(key, false);
+  await saveJobState(key, job, true);
+  broadcastJobUpdate(job);
+  maybeClearWatchdog();
 }
 
 // Queue Loop execution handler
@@ -1081,22 +1170,26 @@ async function executeQueue(key) {
     if (response.error === "rate_limited") {
       // Do NOT advance deleteIndex: retry the same item after the backoff (or pause
       // the job if it has been throttled too many times in a row).
-      handleRateLimitBackoff(job, key, response.retryAfter || 15, "Slack API throttled.");
+      await handleRateLimitBackoff(job, key, response.retryAfter || 15, "Slack API throttled.");
       return;
     }
 
-    if (response.error === "token_revoked" || response.error === "not_authed" || response.error === "account_inactive") {
-      // Session invalidated. PAUSE and preserve the queue/progress rather than
-      // discarding it: after the user re-authenticates to Slack and re-opens the
-      // dashboard (re-sending a valid token), the job can resume from where it halted.
-      sendLogMessage(job, t("bgLogSessionInvalidPaused", `[Paused] Slack session invalid (${response.error}). Re-log in to Slack, re-open the dashboard, then resume.`, [String(response.error)]), "error");
-      job.isRunning = false;
-      job.isPaused = true;
-      clearScheduled(key);
-      markRunning(key, false);
-      await saveJobState(key, job, true);
-      broadcastJobUpdate(job);
-      maybeClearWatchdog();
+    if (AUTH_INVALID_ERRORS.has(response.error) || STRUCTURAL_JOB_ERRORS.has(response.error)) {
+      // Session invalidated OR a structural/permission error (see
+      // STRUCTURAL_JOB_ERRORS above) — either way, the same failure will recur
+      // on every remaining item, so continuing would just burn through the
+      // whole queue failing one at a time at full throttle pace instead of
+      // telling the user what's actually wrong. PAUSE and preserve the
+      // queue/progress rather than discarding it: the job can resume once the
+      // session/permission/access problem is fixed and the dashboard reopened.
+      // Distinct locale keys/wording per error class: AUTH_INVALID_ERRORS really
+      // is an invalid/expired session, but STRUCTURAL_JOB_ERRORS (missing_scope,
+      // channel_not_found, etc.) is not — reusing "session invalid" wording for
+      // those would misdiagnose the problem.
+      const message = AUTH_INVALID_ERRORS.has(response.error)
+        ? t("bgLogSessionInvalidPaused", `[Paused] Slack session invalid (${response.error}). Re-log in to Slack, re-open the dashboard, then resume.`, [String(response.error)])
+        : t("bgLogJobPausedFatalError", `[Paused] Slack rejected this operation (${response.error}) and it will recur on every remaining item. Check your permissions/channel access, re-open the dashboard, then resume.`, [String(response.error)]);
+      await pauseJobForFatalError(job, key, message);
       return;
     }
 
@@ -1112,6 +1205,11 @@ async function executeQueue(key) {
       job._transientRetries = (job._transientRetries || 0) + 1;
       if (job._transientRetries <= MAX_TRANSIENT_RETRIES) {
         sendLogMessage(job, t("bgLogTransientRetry", `[Network] Transient error at ${msg.time} (attempt ${job._transientRetries}/${MAX_TRANSIENT_RETRIES}). Retrying...`, [String(msg.time), String(job._transientRetries), String(MAX_TRANSIENT_RETRIES)]), "warn");
+        // Persist the bumped streak before retrying (see handleRateLimitBackoff's
+        // identical reasoning) so a SW restart mid-retry recovers the correct
+        // count instead of resetting it to 0 and letting a permanently-failing
+        // item retry forever across restarts.
+        await saveJobState(key, job, true);
         scheduleNextStep(key, TRANSIENT_RETRY_DELAY_MS);
         return; // do NOT advance — retry the same item
       }
@@ -1291,6 +1389,16 @@ async function saveJobState(key, job, forceImmediate = false) {
         isPaused: job.isPaused,
         throttleDelay: job.throttleDelay,
         filterAttachments: job.filterAttachments,
+        // Per-item retry streaks. Persisted (not just kept in memory) because a
+        // long rate-limit backoff deliberately routes through chrome.alarms
+        // (see scheduleNextStep) specifically because the service worker is
+        // expected to be torn down while such a wait is pending. Without this,
+        // recoverAllJobs would restore the job with these counters reset to 0,
+        // silently defeating MAX_RATELIMIT_RETRIES/MAX_TRANSIENT_RETRIES and
+        // letting a perpetually-throttled/failing item retry forever across
+        // repeated SW restarts.
+        rateLimitRetries: job._rateLimitRetries || 0,
+        transientRetries: job._transientRetries || 0,
         timestamp: Date.now()
       }
     });

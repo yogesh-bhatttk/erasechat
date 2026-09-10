@@ -4,9 +4,9 @@ import { StringSession } from 'teleproto/sessions/index.js';
 let client;
 let currentResults = [];
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+// delay: see platforms/shared/dashboard-fetch-utils.js, loaded before this bundle
+// by dashboard-telegram.html -- used in place of a local sleep()/setTimeout
+// helper so pacing logic isn't duplicated per platform.
 
 // Retries an invoke() call when Telegram signals a flood-wait, pausing for the
 // duration the server asked for instead of letting the whole batch throw.
@@ -22,9 +22,26 @@ async function invokeWithFloodWait(invokeFn, { maxRetries = 5, onWait } = {}) {
       }
       const waitMs = (err.seconds || 1) * 1000 + 250; // small buffer past the required wait
       if (onWait) onWait(err.seconds || 1, attempt + 1);
-      await sleep(waitMs);
+      await delay(waitMs);
     }
   }
+}
+
+// An invalid/revoked/expired session (session logged out elsewhere, account
+// deactivated, auth key unregistered, etc.) surfaces from teleproto as an
+// errors.UnauthorizedError subclass (AuthKeyUnregisteredError,
+// AuthKeyInvalidError, SessionExpiredError, SessionRevokedError,
+// UserDeactivatedError/-BanError all extend it, per RPCBaseErrors.js), so
+// checking the base class covers every variant without enumerating each one;
+// the errorMessage regex is a defensive fallback should a future teleproto
+// version surface the same condition as a plain error. Every remaining chunk
+// would fail identically, so this is Telegram's equivalent of Reddit/Mastodon/
+// Teams/X's `expiredAuth` fail-fast.
+function isTelegramAuthError(err) {
+  return err instanceof errors.UnauthorizedError ||
+    /AUTH_KEY_(UNREGISTERED|INVALID|PERM_EMPTY)|SESSION_(REVOKED|EXPIRED)|USER_DEACTIVATED/i.test(
+      (err && (err.errorMessage || err.message)) || ''
+    );
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -70,15 +87,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusText = document.getElementById('status-text');
   const progressText = document.getElementById('progress-text');
 
-  // See the matching comment in platforms/reddit/dashboard-reddit.js: this marker
-  // only informs the next session that a delete was interrupted -- it does not
-  // resume the delete itself, since a fresh scan is required to see current state.
+  // reportInterruptedDelete: see platforms/shared/dashboard-fetch-utils.js, loaded
+  // before this bundle by dashboard-telegram.html -- this marker only informs the
+  // next session that a delete was interrupted; it does not resume the delete
+  // itself, since a fresh scan is required to see current state.
   const DELETE_PROGRESS_KEY = 'telegram_delete_progress';
-  const leftover = (await chrome.storage.local.get([DELETE_PROGRESS_KEY]))[DELETE_PROGRESS_KEY];
-  if (leftover) {
-    statusText.textContent = `A previous deletion was interrupted (${leftover.done} of ${leftover.total} processed). Scan again to see current state.`;
-    await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
-  }
+  await reportInterruptedDelete(DELETE_PROGRESS_KEY, statusText);
 
   // Set by the scan handler, read by the delete handler -- see the delete handler
   // for why the resolved entity (not just the raw peer string) matters.
@@ -125,7 +139,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     scanBtn.disabled = true;
     deleteBtn.disabled = true;
     statusText.textContent = "Scanning...";
-    itemList.innerHTML = '<div class="empty-state">Scanning messages...</div>';
+    renderEmptyState(itemList, "Scanning messages...");
     currentResults = [];
 
     try {
@@ -197,7 +211,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
       } else {
-        itemList.innerHTML = '<div class="empty-state">No messages matched your criteria.</div>';
+        renderEmptyState(itemList, "No messages matched your criteria.");
         statusText.textContent = t("dashReady", "Ready");
       }
     } catch (err) {
@@ -232,6 +246,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let deletedCount = 0;
     const failedChunks = [];
     let cancelledEarly = false;
+    let expiredAuth = false;
 
     try {
       // messages.DeleteMessages operates on the user/basic-group message-ID
@@ -282,11 +297,23 @@ document.addEventListener('DOMContentLoaded', async () => {
           deletedCount += chunk.length;
         } catch (err) {
           failedChunks.push({ count: chunk.length, message: err.message });
+          // A revoked/expired session fails every remaining chunk identically --
+          // stop immediately with one clear reconnect message instead of
+          // retrying each remaining chunk only to fail the same way (matches
+          // Reddit/Mastodon/Teams/X's expiredAuth fail-fast).
+          if (isTelegramAuthError(err)) {
+            expiredAuth = true;
+          }
         }
 
-        progressText.textContent = `Deleted ${deletedCount} of ${selected.length}`;
-        const processedSoFar = deletedCount + failedChunks.reduce((sum, c) => sum + c.count, 0);
-        await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: selected.length, done: processedSoFar } });
+        const failedSoFar = failedChunks.reduce((sum, c) => sum + c.count, 0);
+        const processedSoFar = deletedCount + failedSoFar;
+        progressText.textContent = failedSoFar > 0
+          ? `Processed ${processedSoFar} of ${selected.length} (${deletedCount} deleted, ${failedSoFar} failed)`
+          : `Deleted ${deletedCount} of ${selected.length}`;
+        await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, processedSoFar, selected.length);
+
+        if (expiredAuth) break;
       }
       await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
 
@@ -297,19 +324,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       currentResults = [];
       resultsCount.textContent = "0 items found";
 
-      if (cancelledEarly) {
+      if (expiredAuth) {
+        statusText.textContent = "Session invalid — reconnect required.";
+        statusText.style.color = "#ef4444";
+        renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+        await showAlert(`Stopped: your Telegram session appears to be invalid or revoked. ${deletedCount} of ${selected.length} messages were deleted before this happened. Reconnect from the extension popup to finish.`);
+      } else if (cancelledEarly) {
         statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${selected.length} processed.`, [String(deletedCount), String(selected.length)]);
         statusText.style.color = "#ef4444";
-        itemList.innerHTML = '<div class="empty-state">Deletion finished.</div>';
+        renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
       } else if (failedChunks.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
-        itemList.innerHTML = '<div class="empty-state">Deletion finished.</div>';
+        renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
       } else {
         const failedCount = failedChunks.reduce((sum, c) => sum + c.count, 0);
         statusText.textContent = `Deletion finished: ${deletedCount} deleted, ${failedCount} failed.`;
         statusText.style.color = "#ef4444";
-        itemList.innerHTML = '<div class="empty-state">Deletion finished (see error summary).</div>';
+        renderEmptyState(itemList, "Deletion finished (see error summary).");
         console.warn("Telegram delete chunk failures:", failedChunks);
         await showAlert(
           `Delete failed for ${failedCount} of ${deletedCount + failedCount} message(s). ` +

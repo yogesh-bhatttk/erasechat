@@ -2,7 +2,44 @@ function resolveXScriptUrl(src) {
   return new URL(src, 'https://x.com/').href;
 }
 
-if (typeof module !== 'undefined') module.exports = { resolveXScriptUrl };
+// Pulls tweets + the next pagination cursor out of one UserTweets timeline page.
+// Extracted as a pure-ish helper (its only side effect is recording ids into the
+// caller-owned `seenTweetIds` Set) so the cursor-advance and de-dup logic is unit
+// testable without a live GraphQL response -- see tests/x-dashboard.test.js.
+//
+// Returns { tweets, nextCursor }: `nextCursor` is null when the page carried no
+// cursor-bottom entry at all -- the caller must stop rather than reuse a stale
+// cursor and silently re-request the same page forever (bounded only by
+// MAX_PAGES). An entry present but with an empty value is the ordinary "no more
+// pages" signal (also treated as "stop"), same as before this fix.
+function extractTweetsFromEntries(entries, seenTweetIds, filterText) {
+  const tweets = [];
+  let nextCursor = null;
+  for (const entry of entries) {
+    if (entry.entryId.startsWith('tweet-')) {
+      const result = entry.itemContent?.tweet_results?.result;
+      if (result) {
+        const tweetId = result.rest_id;
+        // Defensive de-dup: without this, any page that repeats a tweet (the
+        // cursor-stuck case this fix closes, or an overlap X's own timeline
+        // occasionally returns) would show the same tweet twice in the results
+        // and inflate "N items found".
+        if (!tweetId || seenTweetIds.has(tweetId)) continue;
+        seenTweetIds.add(tweetId);
+        const text = result.legacy?.full_text || '';
+        const createdAt = result.legacy?.created_at || '';
+        if (!filterText || text.toLowerCase().includes(filterText)) {
+          tweets.push({ id: tweetId, text, time: createdAt });
+        }
+      }
+    } else if (entry.entryId.startsWith('cursor-bottom')) {
+      nextCursor = entry.content?.value || '';
+    }
+  }
+  return { tweets, nextCursor };
+}
+
+if (typeof module !== 'undefined') module.exports = { resolveXScriptUrl, extractTweetsFromEntries };
 
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
   const data = await chrome.storage.session.get(['x_csrf']);
@@ -71,6 +108,17 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     if (!response.ok) {
       let bodyText = '';
       try { bodyText = await response.text(); } catch (_) { /* ignore */ }
+      // A 401/403 here means ct0/the session cookie X is riding along is no
+      // longer valid (expired, logged out elsewhere, or revoked) -- the same
+      // shape Reddit/Mastodon/Teams already fail-fast on. Every remaining
+      // selected tweet would fail identically, so flag it the same way their
+      // `expiredAuth` does instead of retrying each one at the full pacing delay.
+      if (response.status === 401 || response.status === 403) {
+        const authErr = new Error("Your X.com session (ct0) appears to be invalid or expired. Reconnect from the extension popup.");
+        authErr.status = response.status;
+        authErr.expiredAuth = true;
+        throw authErr;
+      }
       const err = new Error(`API Error ${response.status}`);
       err.status = response.status;
       err.body = bodyText;
@@ -176,6 +224,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
       let cursor = '';
       let pageCount = 0;
+      const seenTweetIds = new Set();
       const MAX_PAGES = 5; // Fetch a reasonable amount to avoid rate limits on scan
 
       while (pageCount < MAX_PAGES) {
@@ -216,28 +265,20 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         
         const res = await apiFetch(url);
         const instructions = res?.data?.user?.result?.timeline_v2?.timeline?.instructions || [];
-        
+
         const entries = instructions.find(i => i.type === 'TimelineAddEntries')?.entries || [];
         if (entries.length === 0) break;
 
-        for (const entry of entries) {
-          if (entry.entryId.startsWith('tweet-')) {
-            const result = entry.itemContent?.tweet_results?.result;
-            if (result) {
-              const tweetId = result.rest_id;
-              const text = result.legacy?.full_text || '';
-              const createdAt = result.legacy?.created_at || '';
-              
-              if (!filterText || text.toLowerCase().includes(filterText)) {
-                currentResults.push({ id: tweetId, text, time: createdAt });
-              }
-            }
-          } else if (entry.entryId.startsWith('cursor-bottom')) {
-            cursor = entry.content?.value || '';
-          }
-        }
-        
-        if (!cursor) break;
+        const { tweets, nextCursor } = extractTweetsFromEntries(entries, seenTweetIds, filterText);
+        currentResults.push(...tweets);
+
+        // No cursor-bottom entry at all means X gave us nothing to advance
+        // on -- continuing would re-request this SAME page (bounded only by
+        // MAX_PAGES, not by ever making real progress) instead of stopping like
+        // a genuine end-of-timeline does. An entry present but with an empty
+        // value is the ordinary "no more pages" signal, same as before.
+        if (!nextCursor) break;
+        cursor = nextCursor;
         pageCount++;
         await delay(1000); // 1s delay between pagination requests
       }
@@ -305,6 +346,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       // handler against an unexpected exception so the loop can never die
       // silently, leaving scanBtn disabled and the progress marker stuck.
       await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
+      let expiredAuth = false;
       for (const tweet of selected) {
         if (cancelController.cancelled) break;
         processedItems.push(tweet);
@@ -329,6 +371,14 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
             staleQueryIdSuspected = true;
             queryIdsStale = true;
           }
+          // An invalid/expired ct0 fails every remaining item identically --
+          // stop immediately with one clear reconnect message instead of
+          // retrying each remaining tweet at the full pacing delay only to
+          // fail the same way (matches Reddit/Mastodon/Teams).
+          if (err.expiredAuth) {
+            expiredAuth = true;
+            break;
+          }
         }
 
         progressText.textContent = failures.length > 0
@@ -336,7 +386,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
           : `Deleted ${deletedCount} of ${totalCount}`;
         await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
 
-        if (cancelController.cancelled) break;
+        if (expiredAuth || cancelController.cancelled) break;
         // strict 2.5 second delay to avoid rate limits and account suspension flags
         await delay(2500);
       }
@@ -353,7 +403,12 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       }
       resultsCount.textContent = formatScanCount(currentResults.length, { truncated: false });
 
-      if (cancelController.cancelled) {
+      if (expiredAuth) {
+        statusText.textContent = "Session invalid — reconnect required.";
+        statusText.style.color = "#ef4444";
+        if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+        await showAlert(`Stopped: your X.com session (ct0) appears to be invalid or expired. ${deletedCount} of ${totalCount} tweets were deleted before this happened. Reconnect from the extension popup to finish.`);
+      } else if (cancelController.cancelled) {
         statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
         statusText.style.color = "#ef4444";
         if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
