@@ -20,7 +20,7 @@
     "verify": "npm run lint && npm test && npm run test:e2e && npm run build && npm run validate:firefox"
   },
   "devDependencies": {
-    "@playwright/test": "^1.44.0",
-    "eslint": "^10.8.0"
+    "@playwright/test": "^1.63.0",
+    "eslint": "^10.10.0"
   }
 }
