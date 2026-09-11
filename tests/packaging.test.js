@@ -599,20 +599,29 @@ test("all five non-Slack delete loops fail fast on an expired/revoked credential
 });
 
 test("all five non-Slack delete loops report live failure counts during the run, not just in the final summary", () => {
-  // "Processed N of M (X deleted, Y failed)" -- verified present (not just
-  // reachable in theory) by requiring the literal "failed)" progress-text
-  // fragment every platform now shares.
-  const PROGRESS_FILES = [
+  // "Processed N of M (X deleted, Y failed)" -- Reddit/Mastodon/Teams/X get this
+  // from the shared runDeleteLoop() (dashboard-fetch-utils.js) rather than each
+  // rendering it inline, so verify it lives there AND that each of those four
+  // actually calls runDeleteLoop (i.e. really gets the behavior, not just
+  // physically able to reach the string). Telegram still hand-rolls its own loop
+  // (its MTProto batch/channel-entity handling doesn't fit the shared shape), so it
+  // keeps the original direct check.
+  const sharedSrc = fs.readFileSync(path.join(ROOT, "platforms/shared/dashboard-fetch-utils.js"), "utf8");
+  assert.match(sharedSrc, /failed\)/, "dashboard-fetch-utils.js's runDeleteLoop must render a live \"(N deleted, M failed)\"-style progress string");
+
+  const RUN_DELETE_LOOP_CALLERS = [
     "platforms/reddit/dashboard-reddit.js",
     "platforms/mastodon/dashboard-mastodon.js",
     "platforms/teams/dashboard-teams.js",
-    "platforms/x/dashboard-x.js",
-    "platforms/telegram/telegram-dashboard.src.js"
+    "platforms/x/dashboard-x.js"
   ];
-  for (const file of PROGRESS_FILES) {
+  for (const file of RUN_DELETE_LOOP_CALLERS) {
     const src = fs.readFileSync(path.join(ROOT, file), "utf8");
-    assert.match(src, /failed\)/, `${file} must render a live "(N deleted, M failed)"-style progress string`);
+    assert.match(src, /\brunDeleteLoop\(/, `${file} must use the shared runDeleteLoop() to get live progress reporting`);
   }
+
+  const telegramSrc = fs.readFileSync(path.join(ROOT, "platforms/telegram/telegram-dashboard.src.js"), "utf8");
+  assert.match(telegramSrc, /failed\)/, "telegram-dashboard.src.js must render a live \"(N deleted, M failed)\"-style progress string");
 });
 
 test("Telegram's dashboard uses the shared dashboard-fetch-utils.js helpers instead of re-duplicating them", () => {
@@ -636,4 +645,17 @@ test("showConfirm (the shared non-blocking Yes/No modal) has a real caller", () 
   const showConfirmCallSites = [...src.matchAll(/\bshowConfirm\(/g)].length;
   assert.ok(showConfirmDef >= 0, "showConfirm must still be defined");
   assert.ok(showConfirmCallSites > 1, "showConfirm must be called somewhere besides its own definition");
+});
+
+test("dashboard-base.css keeps the [hidden] attribute override that makes el.hidden actually hide a .dashboard-btn", () => {
+  // Regression guard for a real bug found via manual verification: .dashboard-btn's
+  // own `display: flex` has the same specificity as the browser's default
+  // `[hidden] { display: none }` rule and loads later in the cascade, so it silently
+  // won -- armCancelButton/resetCancelButton set cancelBtn.hidden via the boolean DOM
+  // attribute (not a class), so without this override the Cancel button stayed
+  // visibly rendered on all five non-Slack dashboards at every point it was
+  // supposed to be hidden, including on first page load before any delete had run.
+  const src = fs.readFileSync(path.join(ROOT, "platforms/shared/dashboard-base.css"), "utf8");
+  assert.match(src, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/,
+    "dashboard-base.css must force [hidden] elements to display:none, overriding .dashboard-btn's own display:flex");
 });

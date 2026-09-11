@@ -1,4 +1,54 @@
-document.addEventListener('DOMContentLoaded', async () => {
+// Decodes a JWT's payload (no signature verification -- this only ever reads claims
+// from a token we already trust, captured passively from the user's own Teams
+// traffic, never used to authenticate anything). Kept at module scope, with the two
+// functions below, so both are unit-testable without a DOM -- see
+// tests/teams-dashboard.test.js.
+function base64UrlDecode(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  return atob(str);
+}
+
+// The captured Bearer token is a JWT whose `oid` (or `sub`) claim is the signed-in
+// user's own AAD object id. Teams' internal chatsvc API embeds that same GUID inside
+// a message's `from` MRI string (e.g. "8:orgid:<oid>") regardless of exact MRI shape,
+// so matching on the GUID substring is more robust than assuming a fixed prefix.
+// This is the only reliable way to tell "my message" from "someone else's message" --
+// `imdisplayname` is present on every message regardless of sender and must never be
+// used as an ownership signal.
+function getOwnUserId(bearerToken) {
+  try {
+    const jwt = bearerToken.replace(/^Bearer\s+/i, '');
+    const payload = jwt.split('.')[1];
+    if (!payload) return null;
+    const claims = JSON.parse(base64UrlDecode(payload));
+    return claims.oid || claims.sub || null;
+  } catch {
+    return null;
+  }
+}
+
+// Purely cosmetic "Connected as ..." label (unlike getOwnUserId, which is
+// security-relevant -- the "is this my message" check). A missing/unusual claim
+// here just leaves the label blank; it never affects what gets deleted. Falls
+// back through the AAD claims most likely to carry a human-readable identity.
+function getOwnDisplayIdentity(bearerToken) {
+  try {
+    const jwt = bearerToken.replace(/^Bearer\s+/i, '');
+    const payload = jwt.split('.')[1];
+    if (!payload) return null;
+    const claims = JSON.parse(base64UrlDecode(payload));
+    return claims.preferred_username || claims.upn || claims.unique_name || claims.name || null;
+  } catch {
+    return null;
+  }
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { getOwnUserId, getOwnDisplayIdentity };
+}
+
+if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
   const [sessionData, localData] = await Promise.all([
     chrome.storage.session.get(['teams_token']),
     chrome.storage.local.get(['teams_base_url'])
@@ -12,32 +62,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   const { teams_base_url: baseUrl } = localData;
   const data = sessionData;
 
-  // The captured Bearer token is a JWT whose `oid` (or `sub`) claim is the signed-in
-  // user's own AAD object id. Teams' internal chatsvc API embeds that same GUID inside
-  // a message's `from` MRI string (e.g. "8:orgid:<oid>") regardless of exact MRI shape,
-  // so matching on the GUID substring is more robust than assuming a fixed prefix.
-  // This is the only reliable way to tell "my message" from "someone else's message" --
-  // `imdisplayname` is present on every message regardless of sender and must never be
-  // used as an ownership signal.
-  function base64UrlDecode(str) {
-    str = str.replace(/-/g, '+').replace(/_/g, '/');
-    while (str.length % 4) str += '=';
-    return atob(str);
-  }
-
-  function getOwnUserId(bearerToken) {
-    try {
-      const jwt = bearerToken.replace(/^Bearer\s+/i, '');
-      const payload = jwt.split('.')[1];
-      if (!payload) return null;
-      const claims = JSON.parse(base64UrlDecode(payload));
-      return claims.oid || claims.sub || null;
-    } catch {
-      return null;
-    }
-  }
-
   const ownUserId = getOwnUserId(data.teams_token);
+  const ownDisplayIdentity = getOwnDisplayIdentity(data.teams_token);
+  const connectedAsEl = document.getElementById('connected-as');
+  if (connectedAsEl && ownDisplayIdentity) {
+    connectedAsEl.textContent = t("dashConnectedAs", `(Connected: ${ownDisplayIdentity})`, [ownDisplayIdentity]);
+  }
 
   // Cached rather than re-read from chrome.storage.local on every apiFetch call
   // (every scan page, up to MAX_PAGES, and every delete item) -- the token rarely
@@ -58,6 +88,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const DELETE_PROGRESS_KEY = 'teams_delete_progress';
   await reportInterruptedDelete(DELETE_PROGRESS_KEY, statusText);
+  initActivityLog('sc-activity-log');
 
   let currentResults = [];
 
@@ -191,6 +222,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusText.textContent = "Scanning...";
     renderEmptyState(itemList, "Scanning messages...");
     currentResults = [];
+    logActivity('sc-activity-log', `Scan started (chat: ${chatId}${filterText ? `, filter: "${filterText}"` : ''}).`);
 
     try {
       // Fetch recent messages in chat, capped at MAX_PAGES (like the mastodon/reddit/x
@@ -240,13 +272,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderResultRows(currentResults);
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
+        logActivity('sc-activity-log', `Scan complete: ${currentResults.length} message(s) found${truncated ? ' (truncated -- more may exist)' : ''}.`);
       } else {
-        renderEmptyState(itemList, "No matching messages found in this chat.");
+        renderEmptyState(itemList, "No matching messages found in this chat. Try widening your text filter, or pick a different chat.");
         statusText.textContent = t("dashReady", "Ready");
+        logActivity('sc-activity-log', 'Scan complete: 0 messages found.');
       }
     } catch (err) {
       await showAlert("Scan failed: " + err.message);
       statusText.textContent = "Error";
+      logActivity('sc-activity-log', `Scan failed: ${err.message}`, 'error');
     } finally {
       scanBtn.disabled = false;
     }
@@ -272,44 +307,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const totalCount = selected.length;
     let deletedCount = 0;
-    const failures = [];
-    const processedItems = [];
+    let failures = [];
+    logActivity('sc-activity-log', `Delete started: ${totalCount} message(s) selected.`);
     try {
-      // The inner per-item try/catch below isolates one item's failure from the
-      // rest of the batch. This outer try/finally is separate: it guards the
-      // chrome.storage.local calls (progress marker) and everything else in this
-      // handler against an unexpected exception so the loop can never die
-      // silently, leaving scanBtn disabled and the progress marker stuck.
-      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
-      let expiredAuth = false;
-      for (const msg of selected) {
-        if (cancelController.cancelled) break;
-        processedItems.push(msg);
-        try {
+      const result = await runDeleteLoop(selected, {
+        cancelController,
+        progressKey: DELETE_PROGRESS_KEY,
+        progressText,
+        // Strict 2.5 second delay to avoid enterprise security alarms / rate limits
+        postItemDelayMs: 2500,
+        deleteItem: async (msg) => {
           // DELETE /v1/users/ME/conversations/{chatId}/messages/{messageId}
           const endpoint = `/v1/users/ME/conversations/${encodeURIComponent(chatId)}/messages/${msg.id}`;
           await apiFetch(endpoint, 'DELETE');
-          deletedCount++;
-        } catch (err) {
-          failures.push({ id: msg.id, message: err.message });
-          // An expired token fails every remaining item identically -- stop
-          // immediately with one clear reconnect message instead of retrying each
-          // remaining item at the full pacing delay only to fail the same way.
-          if (err.expiredAuth) {
-            expiredAuth = true;
-            break;
-          }
         }
-        progressText.textContent = failures.length > 0
-          ? `Processed ${deletedCount + failures.length} of ${totalCount} (${deletedCount} deleted, ${failures.length} failed)`
-          : `Deleted ${deletedCount} of ${totalCount}`;
-        await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
-
-        if (expiredAuth || cancelController.cancelled) break;
-        // Strict 2.5 second delay to avoid enterprise security alarms / rate limits
-        await delay(2500);
-      }
-      await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
+      });
+      deletedCount = result.deletedCount;
+      failures = result.failures;
+      const { processedItems, expiredAuth, cancelled } = result;
 
       // Anything scanned but not selected, plus anything selected but never
       // reached because a cancel/expired-auth break happened early, stays
@@ -325,22 +340,28 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (expiredAuth) {
         statusText.textContent = "Session expired — reconnect required.";
         statusText.style.color = "#ef4444";
+        logActivity('sc-activity-log', `Delete stopped: session expired (${deletedCount}/${totalCount} deleted).`, 'error');
         await showAlert(`Stopped: your Teams session appears to have expired. ${deletedCount} of ${totalCount} messages were deleted before this happened. Reopen teams.microsoft.com, sign in, then click the Erasechat toolbar icon again to reconnect and finish.`);
-      } else if (cancelController.cancelled) {
+      } else if (cancelled) {
         statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
         statusText.style.color = "#ef4444";
+        logActivity('sc-activity-log', `Delete cancelled: ${deletedCount}/${totalCount} processed.`, 'warn');
       } else if (failures.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
+        logActivity('sc-activity-log', `Delete complete: ${deletedCount}/${totalCount} deleted.`);
       } else {
         statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${totalCount}.`;
         statusText.style.color = "#ef4444";
         console.warn("Teams delete failures:", failures);
+        logActivity('sc-activity-log', `Delete finished: ${deletedCount} deleted, ${failures.length} failed out of ${totalCount}.`, 'warn');
       }
       if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
     } catch (err) {
+      const progress = err.deleteLoopProgress || { deletedCount };
       console.error("Teams delete loop stopped unexpectedly:", err);
-      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} messages were deleted before this happened.`);
+      logActivity('sc-activity-log', `Delete stopped unexpectedly: ${err.message}`, 'error');
+      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${progress.deletedCount} of ${totalCount} messages were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {

@@ -1,4 +1,37 @@
-document.addEventListener('DOMContentLoaded', async () => {
+// Pure: given one page's raw `children` (from Reddit's overview/comments/submitted
+// listing JSON) and the lowercased filter text, returns the result objects to add to
+// currentResults. Extracted to module scope (mirroring dashboard-x.js's
+// extractTweetsFromEntries) so the "what counts as a real, still-deletable item"
+// logic -- skipping already-deleted/removed items and "more"-type stub children,
+// telling a comment from a post, applying the text filter -- is unit-tested
+// directly instead of only reachable through a live scan. See
+// tests/reddit-dashboard.test.js.
+function extractRedditItemsFromChildren(children, filterText) {
+  const results = [];
+  for (const child of children) {
+    const item = child.data;
+    // Skip items that are already deleted/removed -- nothing left to clean up.
+    if (!item || !item.name) continue; // e.g. a "more"-type stub child, not a real post/comment
+    if (item.author === '[deleted]' || item.removed_by_category) continue;
+    const isComment = item.name.startsWith('t1_');
+    const text = isComment ? item.body : item.title;
+    if (filterText && !(text || '').toLowerCase().includes(filterText)) continue;
+    results.push({
+      id: item.name, // e.g. t1_xxxx or t3_xxxx
+      type: isComment ? 'Comment' : 'Post',
+      text: text,
+      subreddit: item.subreddit_name_prefixed,
+      time: item.created_utc * 1000 // Convert to ms
+    });
+  }
+  return results;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { extractRedditItemsFromChildren };
+}
+
+if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
   const [sessionData, localData] = await Promise.all([
     chrome.storage.session.get(['reddit_modhash']),
     chrome.storage.local.get(['reddit_username'])
@@ -26,6 +59,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const DELETE_PROGRESS_KEY = 'reddit_delete_progress';
   await reportInterruptedDelete(DELETE_PROGRESS_KEY, statusText);
+  initActivityLog('sc-activity-log');
 
   let currentResults = [];
 
@@ -76,6 +110,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusText.textContent = "Scanning...";
     renderEmptyState(itemList, "Scanning history...");
     currentResults = [];
+    logActivity('sc-activity-log', `Scan started (target: ${targetType}${isDeepScan ? ', deep scan' : ''}${filterText ? `, filter: "${filterText}"` : ''}).`);
 
     try {
       let after = '';
@@ -99,22 +134,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const children = resJson.data?.children || [];
         if (children.length === 0) break;
 
-        for (const child of children) {
-          const item = child.data;
-          // Skip items that are already deleted/removed — nothing left to clean up.
-          if (!item || !item.name) continue; // e.g. a "more"-type stub child, not a real post/comment
-          if (item.author === '[deleted]' || item.removed_by_category) continue;
-          const isComment = item.name.startsWith('t1_');
-          const text = isComment ? item.body : item.title;
-          if (filterText && !(text || '').toLowerCase().includes(filterText)) continue;
-          currentResults.push({
-            id: item.name, // e.g. t1_xxxx or t3_xxxx
-            type: isComment ? 'Comment' : 'Post',
-            text: text,
-            subreddit: item.subreddit_name_prefixed,
-            time: item.created_utc * 1000 // Convert to ms
-          });
-        }
+        currentResults.push(...extractRedditItemsFromChildren(children, filterText));
         
         after = resJson.data.after;
         if (!after) break;
@@ -136,13 +156,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderResultRows(currentResults);
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
+        logActivity('sc-activity-log', `Scan complete: ${currentResults.length} item(s) found${truncated ? ' (truncated -- more may exist)' : ''}.`);
       } else {
-        renderEmptyState(itemList, "No items found.");
+        renderEmptyState(itemList, "No items found. Try widening your filters, or enable Deep Scan for more history.");
         statusText.textContent = t("dashReady", "Ready");
+        logActivity('sc-activity-log', 'Scan complete: 0 items found.');
       }
     } catch (err) {
       await showAlert("Scan failed: " + err.message);
       statusText.textContent = "Error";
+      logActivity('sc-activity-log', `Scan failed: ${err.message}`, 'error');
     } finally {
       scanBtn.disabled = false;
     }
@@ -167,21 +190,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const totalCount = selected.length;
     let deletedCount = 0;
-    const failures = [];
-    const processedItems = [];
+    let failures = [];
+    logActivity('sc-activity-log', `Delete started: ${totalCount} item(s) selected.`);
     try {
-      // The inner per-item try/catch below isolates one item's failure from the
-      // rest of the batch. This outer try/finally is separate: it guards the
-      // chrome.storage.local calls (progress marker) and everything else in this
-      // handler against an unexpected exception (e.g. the extension being
-      // reloaded mid-run invalidates the extension context) so the loop can never
-      // die silently, leaving scanBtn disabled and the progress marker stuck.
-      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
-      let expiredAuth = false;
-      for (const item of selected) {
-        if (cancelController.cancelled) break;
-        processedItems.push(item);
-        try {
+      const result = await runDeleteLoop(selected, {
+        cancelController,
+        progressKey: DELETE_PROGRESS_KEY,
+        progressText,
+        // strict 1.5 second delay to avoid rate limits
+        postItemDelayMs: 1500,
+        deleteItem: async (item) => {
           // POST to /api/del
           const formData = new URLSearchParams();
           formData.append('id', item.id);
@@ -204,27 +222,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             throw new Error(`status ${response.status}`);
           }
-          deletedCount++;
-        } catch (err) {
-          failures.push({ id: item.id, message: err.message });
-          // An invalid session/modhash fails every remaining item identically --
-          // stop immediately with one clear reconnect message instead of retrying
-          // each remaining item only to fail the same way.
-          if (err.expiredAuth) {
-            expiredAuth = true;
-            break;
-          }
         }
-        progressText.textContent = failures.length > 0
-          ? `Processed ${deletedCount + failures.length} of ${totalCount} (${deletedCount} deleted, ${failures.length} failed)`
-          : `Deleted ${deletedCount} of ${totalCount}`;
-        await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
-
-        if (expiredAuth || cancelController.cancelled) break;
-        // strict 1.5 second delay to avoid rate limits
-        await delay(1500);
-      }
-      await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
+      });
+      deletedCount = result.deletedCount;
+      failures = result.failures;
+      const { processedItems, expiredAuth, cancelled } = result;
 
       // Anything scanned but not selected, plus anything selected but never
       // reached because a cancel/expired-auth break happened early, stays
@@ -240,22 +242,28 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (expiredAuth) {
         statusText.textContent = "Session invalid — reconnect required.";
         statusText.style.color = "#ef4444";
+        logActivity('sc-activity-log', `Delete stopped: session invalid (${deletedCount}/${totalCount} deleted).`, 'error');
         await showAlert(`Stopped: your Reddit session appears to be invalid. ${deletedCount} of ${totalCount} items were deleted before this happened. Reconnect from the extension popup to finish.`);
-      } else if (cancelController.cancelled) {
+      } else if (cancelled) {
         statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
         statusText.style.color = "#ef4444";
+        logActivity('sc-activity-log', `Delete cancelled: ${deletedCount}/${totalCount} processed.`, 'warn');
       } else if (failures.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
+        logActivity('sc-activity-log', `Delete complete: ${deletedCount}/${totalCount} deleted.`);
       } else {
         statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${totalCount}.`;
         statusText.style.color = "#ef4444";
         console.warn("Reddit delete failures:", failures);
+        logActivity('sc-activity-log', `Delete finished: ${deletedCount} deleted, ${failures.length} failed out of ${totalCount}.`, 'warn');
       }
       if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
     } catch (err) {
+      const progress = err.deleteLoopProgress || { deletedCount };
       console.error("Reddit delete loop stopped unexpectedly:", err);
-      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} items were deleted before this happened.`);
+      logActivity('sc-activity-log', `Delete stopped unexpectedly: ${err.message}`, 'error');
+      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${progress.deletedCount} of ${totalCount} items were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {

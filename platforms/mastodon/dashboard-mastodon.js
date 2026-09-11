@@ -54,6 +54,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
   const DELETE_PROGRESS_KEY = 'mastodon_delete_progress';
   await reportInterruptedDelete(DELETE_PROGRESS_KEY, statusText);
+  initActivityLog('sc-activity-log');
 
   let currentResults = [];
 
@@ -162,6 +163,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     statusText.textContent = "Scanning...";
     renderEmptyState(itemList, "Scanning toots...");
     currentResults = [];
+    logActivity('sc-activity-log', `Scan started${filterText ? ` (filter: "${filterText}")` : ''}.`);
 
     try {
       let maxId = '';
@@ -226,13 +228,16 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         renderResultRows(currentResults);
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
+        logActivity('sc-activity-log', `Scan complete: ${currentResults.length} toot(s) found${truncated ? ' (truncated -- more may exist)' : ''}.`);
       } else {
-        renderEmptyState(itemList, "No toots matched your criteria.");
+        renderEmptyState(itemList, "No toots matched your criteria. Try widening your text filter.");
         statusText.textContent = t("dashReady", "Ready");
+        logActivity('sc-activity-log', 'Scan complete: 0 toots found.');
       }
     } catch (err) {
       await showAlert("Scan failed: " + err.message);
       statusText.textContent = "Error";
+      logActivity('sc-activity-log', `Scan failed: ${err.message}`, 'error');
     } finally {
       scanBtn.disabled = false;
     }
@@ -262,44 +267,23 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
     const totalCount = selected.length;
     let deletedCount = 0;
-    const failures = [];
-    const processedItems = [];
+    let failures = [];
+    logActivity('sc-activity-log', `Delete started: ${totalCount} toot(s) selected.`);
     try {
-      // The inner per-item try/catch below isolates one item's failure from the
-      // rest of the batch. This outer try/finally is separate: it guards the
-      // chrome.storage.local calls (progress marker) and everything else in this
-      // handler against an unexpected exception so the loop can never die
-      // silently, leaving scanBtn disabled and the progress marker stuck.
-      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
-      let expiredAuth = false;
-      for (const status of selected) {
-        if (cancelController.cancelled) break;
-        await waitForDeleteRateLimit(cancelController);
-        if (cancelController.cancelled) break;
-        processedItems.push(status);
-
-        try {
+      const result = await runDeleteLoop(selected, {
+        cancelController,
+        progressKey: DELETE_PROGRESS_KEY,
+        progressText,
+        preItemWait: waitForDeleteRateLimit,
+        postItemDelayMs: DELETE_MIN_SPACING_MS,
+        deleteItem: async (status) => {
           await apiFetch(`/api/v1/statuses/${status.id}`, 'DELETE');
           deleteTimestamps.push(Date.now());
-          deletedCount++;
-        } catch (err) {
-          failures.push({ id: status.id, message: err.message });
-          // An invalid/revoked token fails every remaining item identically -- stop
-          // immediately with one clear reconnect message instead of retrying each
-          // remaining item only to fail the same way.
-          if (err.expiredAuth) {
-            expiredAuth = true;
-            break;
-          }
         }
-        progressText.textContent = failures.length > 0
-          ? `Processed ${deletedCount + failures.length} of ${totalCount} (${deletedCount} deleted, ${failures.length} failed)`
-          : `Deleted ${deletedCount} of ${totalCount}`;
-        await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
-        if (expiredAuth || cancelController.cancelled) break;
-        await delay(DELETE_MIN_SPACING_MS);
-      }
-      await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
+      });
+      deletedCount = result.deletedCount;
+      failures = result.failures;
+      const { processedItems, expiredAuth, cancelled } = result;
 
       // Anything scanned but not selected, plus anything selected but never
       // reached because a cancel/expired-auth break happened early, stays
@@ -315,22 +299,28 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       if (expiredAuth) {
         statusText.textContent = "Access token invalid — reconnect required.";
         statusText.style.color = "#ef4444";
+        logActivity('sc-activity-log', `Delete stopped: access token invalid (${deletedCount}/${totalCount} deleted).`, 'error');
         await showAlert(`Stopped: your Mastodon access token appears to be invalid or revoked. ${deletedCount} of ${totalCount} toots were deleted before this happened. Reconnect from the extension popup with a fresh token to finish.`);
-      } else if (cancelController.cancelled) {
+      } else if (cancelled) {
         statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
         statusText.style.color = "#ef4444";
+        logActivity('sc-activity-log', `Delete cancelled: ${deletedCount}/${totalCount} processed.`, 'warn');
       } else if (failures.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
+        logActivity('sc-activity-log', `Delete complete: ${deletedCount}/${totalCount} deleted.`);
       } else {
         statusText.textContent = `Deletion finished with ${failures.length} failure(s) out of ${totalCount}.`;
         statusText.style.color = "#ef4444";
         console.warn("Mastodon delete failures:", failures);
+        logActivity('sc-activity-log', `Delete finished: ${deletedCount} deleted, ${failures.length} failed out of ${totalCount}.`, 'warn');
       }
       if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
     } catch (err) {
+      const progress = err.deleteLoopProgress || { deletedCount };
       console.error("Mastodon delete loop stopped unexpectedly:", err);
-      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} toots were deleted before this happened.`);
+      logActivity('sc-activity-log', `Delete stopped unexpectedly: ${err.message}`, 'error');
+      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${progress.deletedCount} of ${totalCount} toots were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {

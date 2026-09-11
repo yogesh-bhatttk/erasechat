@@ -210,6 +210,14 @@ function qualifies(msg, userId, senderMode, textFilter, onlyAttachments, options
             // Bound the input a safe regex actually runs against (see
             // MAX_REGEX_INPUT) — a final backstop so even a ≤2-unbounded
             // (quadratic) pattern on a very long repeated run can't stall the worker.
+            // Content past this cap is invisible to the filter -- surface that (via
+            // the optional counter below) rather than leave it a silent, undetectable
+            // under-match. `options.truncationStats` is populated by the caller
+            // (background.js's scan loop) only when it wants this signal; qualifies()
+            // itself stays a pure boolean-returning decision function otherwise.
+            if (msgText.length > MAX_REGEX_INPUT && options && options.truncationStats) {
+              options.truncationStats.count++;
+            }
             matched = regex.test(msgText.slice(0, MAX_REGEX_INPUT));
           }
         } catch (e) {

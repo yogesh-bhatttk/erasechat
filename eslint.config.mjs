@@ -28,7 +28,6 @@ const sharedFilterGlobals = {
   qualifies: "readonly",
   decideItemAction: "readonly",
   isSlackHostname: "readonly",
-  fileShareCount: "readonly",
   isSafeRegex: "readonly",
   stringToColor: "readonly"
 };
@@ -56,7 +55,10 @@ const dashboardFetchUtilsGlobals = {
   wireSelectAll: "readonly",
   createCancelController: "readonly",
   armCancelButton: "readonly",
-  resetCancelButton: "readonly"
+  resetCancelButton: "readonly",
+  runDeleteLoop: "readonly",
+  initActivityLog: "readonly",
+  logActivity: "readonly"
 };
 
 const correctnessRules = {
@@ -295,7 +297,11 @@ export default [
     languageOptions: {
       globals: {
         PLATFORMS: "readonly",
-        connectTeams: "readonly"
+        connectTeams: "readonly",
+        // Real browser global inside page.evaluate() callbacks (used to stub
+        // window.fetch's return value) -- not a Node global, so it needs the same
+        // page-scope declaration as the identifiers above.
+        Response: "readonly"
       }
     }
   }

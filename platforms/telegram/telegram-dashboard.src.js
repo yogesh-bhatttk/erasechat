@@ -1,5 +1,6 @@
 import { TelegramClient, Api, errors, extensions } from 'teleproto';
 import { StringSession } from 'teleproto/sessions/index.js';
+import { FloodWaitCancelledError, cancelableDelay } from './telegram-utils.js';
 
 let client;
 let currentResults = [];
@@ -7,10 +8,17 @@ let currentResults = [];
 // delay: see platforms/shared/dashboard-fetch-utils.js, loaded before this bundle
 // by dashboard-telegram.html -- used in place of a local sleep()/setTimeout
 // helper so pacing logic isn't duplicated per platform.
+//
+// FloodWaitCancelledError/cancelableDelay: see telegram-utils.js -- split out into
+// their own dependency-free module so they're unit-tested directly (see
+// tests/telegram-utils.test.js) rather than only reachable through a live client.
 
 // Retries an invoke() call when Telegram signals a flood-wait, pausing for the
-// duration the server asked for instead of letting the whole batch throw.
-async function invokeWithFloodWait(invokeFn, { maxRetries = 5, onWait } = {}) {
+// duration the server asked for instead of letting the whole batch throw. When
+// a cancelController is supplied (the delete path; scanning has no Cancel
+// button today) a Cancel click during that wait is honored immediately rather
+// than only being noticed once this chunk's retries are exhausted.
+async function invokeWithFloodWait(invokeFn, { maxRetries = 5, onWait, cancelController } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
       return await invokeFn();
@@ -22,7 +30,8 @@ async function invokeWithFloodWait(invokeFn, { maxRetries = 5, onWait } = {}) {
       }
       const waitMs = (err.seconds || 1) * 1000 + 250; // small buffer past the required wait
       if (onWait) onWait(err.seconds || 1, attempt + 1);
-      await delay(waitMs);
+      const cancelled = await cancelableDelay(waitMs, cancelController);
+      if (cancelled) throw new FloodWaitCancelledError();
     }
   }
 }
@@ -93,6 +102,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // itself, since a fresh scan is required to see current state.
   const DELETE_PROGRESS_KEY = 'telegram_delete_progress';
   await reportInterruptedDelete(DELETE_PROGRESS_KEY, statusText);
+  initActivityLog('sc-activity-log');
 
   // Set by the scan handler, read by the delete handler -- see the delete handler
   // for why the resolved entity (not just the raw peer string) matters.
@@ -141,6 +151,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusText.textContent = "Scanning...";
     renderEmptyState(itemList, "Scanning messages...");
     currentResults = [];
+    logActivity('sc-activity-log', `Scan started (target: ${peer}${filterText ? `, filter: "${filterText}"` : ''}).`);
 
     try {
       let offsetId = 0;
@@ -210,13 +221,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderResultRows(currentResults);
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
+        logActivity('sc-activity-log', `Scan complete: ${currentResults.length} message(s) found${truncated ? ' (truncated -- more may exist)' : ''}.`);
       } else {
-        renderEmptyState(itemList, "No messages matched your criteria.");
+        renderEmptyState(itemList, "No messages matched your criteria. Try widening your text filter, or check the target chat.");
         statusText.textContent = t("dashReady", "Ready");
+        logActivity('sc-activity-log', 'Scan complete: 0 messages found.');
       }
     } catch (err) {
       await showAlert("Scan failed: " + err.message);
       statusText.textContent = "Error";
+      logActivity('sc-activity-log', `Scan failed: ${err.message}`, 'error');
     } finally {
       scanBtn.disabled = false;
     }
@@ -241,6 +255,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const cancelController = createCancelController();
     armCancelButton(cancelBtn, cancelController);
+    logActivity('sc-activity-log', `Delete started: ${selected.length} message(s) selected.`);
 
     const BATCH_SIZE = 100;
     let deletedCount = 0;
@@ -289,6 +304,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 : new Api.messages.DeleteMessages({ id: chunk, revoke: true }) // Delete for everyone
             ),
             {
+              cancelController,
               onWait: (seconds, attempt) => {
                 progressText.textContent = `Rate limited by Telegram — waiting ${seconds}s (retry ${attempt})...`;
               },
@@ -296,6 +312,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           );
           deletedCount += chunk.length;
         } catch (err) {
+          if (err instanceof FloodWaitCancelledError) {
+            cancelledEarly = true;
+            break;
+          }
           failedChunks.push({ count: chunk.length, message: err.message });
           // A revoked/expired session fails every remaining chunk identically --
           // stop immediately with one clear reconnect message instead of
@@ -328,21 +348,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         statusText.textContent = "Session invalid — reconnect required.";
         statusText.style.color = "#ef4444";
         renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+        logActivity('sc-activity-log', `Delete stopped: session invalid (${deletedCount}/${selected.length} deleted).`, 'error');
         await showAlert(`Stopped: your Telegram session appears to be invalid or revoked. ${deletedCount} of ${selected.length} messages were deleted before this happened. Reconnect from the extension popup to finish.`);
       } else if (cancelledEarly) {
         statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${selected.length} processed.`, [String(deletedCount), String(selected.length)]);
         statusText.style.color = "#ef4444";
         renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+        logActivity('sc-activity-log', `Delete cancelled: ${deletedCount}/${selected.length} processed.`, 'warn');
       } else if (failedChunks.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
         renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+        logActivity('sc-activity-log', `Delete complete: ${deletedCount}/${selected.length} deleted.`);
       } else {
         const failedCount = failedChunks.reduce((sum, c) => sum + c.count, 0);
         statusText.textContent = `Deletion finished: ${deletedCount} deleted, ${failedCount} failed.`;
         statusText.style.color = "#ef4444";
         renderEmptyState(itemList, "Deletion finished (see error summary).");
         console.warn("Telegram delete chunk failures:", failedChunks);
+        logActivity('sc-activity-log', `Delete finished: ${deletedCount} deleted, ${failedCount} failed out of ${deletedCount + failedCount}.`, 'warn');
         await showAlert(
           `Delete failed for ${failedCount} of ${deletedCount + failedCount} message(s). ` +
           `The Delete button will stay disabled -- please Scan again before retrying, ` +
@@ -354,6 +378,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // from stale in-memory state.
     } catch (err) {
       console.error("Telegram delete loop stopped unexpectedly:", err);
+      logActivity('sc-activity-log', `Delete stopped unexpectedly: ${err.message}`, 'error');
       await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${selected.length} messages were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";

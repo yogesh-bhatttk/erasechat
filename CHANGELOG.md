@@ -2,6 +2,193 @@
 
 ## Unreleased
 
+### Fourth follow-up pass: the two remaining maintainability-only refactors
+
+The audit's last two open findings were pure maintainability refactors (no bug,
+no UX change) against the two largest, most safety-critical functions in the
+codebase — content.js's `setupUIListeners` and background.js's `executeQueue`/
+`runScanInBg`. Confirmed via diff review that each is a purely mechanical
+extraction (identical logic, only regrouped), and reverified throughout: lint
+clean, 207/207 unit tests pass (2 new, directly exercising the riskiest
+extraction), 21/21 Playwright e2e pass, Firefox validation 0 errors, both store
+packages build.
+
+- **content.js's 358-line `setupUIListeners`** split into nine per-concern
+  functions (`setupHeaderControls`, `setupFilterControls`,
+  `setupScanDeleteControls`, `setupSelectAllControl`, `setupPresetControls`,
+  `setupConsoleControls`, `setupVerifyModalControls`, `setupThemeControls`,
+  `setupKeyboardNav`), called in the same order from a now-9-line
+  `setupUIListeners`. No behavior change.
+- **background.js's `runScanInBg`** had its thread-reply pagination loop
+  (conversations.replies, its own nested pagination + per-reply qualifies()
+  loop — the single most deeply-nested piece of the scan) extracted into
+  `expandThreadReplies()`, mutating the same `results`/`seenTs` references and
+  returning `{ capped, threadsTruncated }` for the caller to act on exactly as
+  it did inline.
+- **background.js's `executeQueue`** had its two remaining un-extracted pieces
+  (the rest of its error-branch dispatch was already split out into
+  `handleRateLimitBackoff`/`pauseJobForFatalError` by a prior pass) pulled out
+  to match: `executeQueueItem(job, msg, action)` performs the actual
+  chat.update/chat.delete/skip call, and `handleTransientError(job, key, msg,
+  response)` mirrors the existing handler pattern — returning `true` when a
+  retry was scheduled (caller must return without advancing) or `false` once
+  retries are exhausted. Two new tests in `tests/background.test.js` drive this
+  end-to-end (a transient failure that retries then succeeds, and one that
+  exhausts `MAX_TRANSIENT_RETRIES` and is counted as a genuine failure) — this
+  exact path had only ever been covered for streak *persistence* across a
+  simulated restart, never for the retry-then-give-up behavior itself.
+
+### Third follow-up pass: remaining Medium/Low findings, X identity resolution, and a real [hidden] bug found along the way
+
+Closed out the rest of the two prior passes' findings (X/Teams identity, the plain-text-filter labeling gap, empty-state/copy polish, `runScanInBg`'s partial-result discard, `queueKeyFor`'s parsing fragility, and a lightweight activity log for the five non-Slack dashboards) rather than leaving them as "nice to have." Reverified throughout: lint clean, 205/205 unit tests pass (~50 new, across 4 new test files), 21/21 Playwright e2e pass, Firefox validation 0 errors, both store packages build.
+
+- **A real, previously-undiscovered bug, found via manually verifying the new activity log:** `.dashboard-btn`'s own `display: flex` has the same CSS specificity as the browser's default `[hidden] { display: none }` rule and loads later in the cascade, so it silently won — `armCancelButton`/`resetCancelButton` set `cancelBtn.hidden` via the boolean DOM attribute, so the Cancel button stayed visibly rendered (though non-functional) on all five non-Slack dashboards at every point it was supposed to be hidden, including on first page load before any delete had ever run. Fixed with an explicit `[hidden] { display: none !important; }` rule in `dashboard-base.css`, with a packaging-test regression guard.
+- **X now resolves and displays its own username** instead of asking the user to recall and retype it every session — `connectX()` calls the stable legacy `account/verify_credentials.json` endpoint (best-effort; failure never blocks connecting) and stores it non-sensitively for the dashboard to pre-fill, mirroring Reddit. Teams gets an equivalent "Connected as" label decoded from AAD claims already present in its captured JWT (`preferred_username`/`upn`/`unique_name`/`name`), with `getOwnUserId`/`getOwnDisplayIdentity` hoisted to module scope and unit-tested for the first time.
+- **The five non-Slack dashboards' "Text Filter" field no longer shares Slack's regex-capable label** — it was identical wording on a field that's always plain-substring, so a user who'd learned Slack's `/regex/` convention would reasonably try it elsewhere and get silently wrong results. New `dashTextMatchPlain` label spells out "plain text, no /regex/" instead.
+- **A lightweight, collapsed-by-default Activity Log** added to the shared non-Slack dashboard base (`initActivityLog`/`logActivity` in `dashboard-fetch-utils.js`), logging scan/delete start, completion, cancellation, and failure across all five platforms — troubleshooting no longer relies solely on transient `alert()` popups, closer to (though intentionally simpler than) Slack's own live execution console.
+- **`runScanInBg` no longer discards every already-gathered page when a rate limit is too long to safely wait on mid-scan** — it now returns the partial results with `moreAvailable: true` (reusing the existing "not all messages were scanned" UI path) instead of throwing and forcing an expensive full re-scan.
+- **`queueKeyFor`'s key parsing hardened**: a new `parseJobKey()` validates that a `slack_state_<teamId>_<channelId>` key's parts actually look like real Slack IDs (alphanumeric) before trusting positional `split("_")` indices, rather than only checking the part count.
+- **Content.js's `/regex/` convention is now documented in the UI itself**, not just the README, via a caption under Slack's Text Match field. The filter-depth gap between Slack's rich filters and the other five platforms' single keyword field is now disclosed in-app too, and Slack's own copy ("Deletion Filter Matrix" → "Filters", "Critical Action Verification" → "Confirm Deletion") was simplified to match the plainer tone the other five dashboards already used.
+- **Empty-state messages on all five non-Slack dashboards now suggest a next step** ("try widening your filters"/"enable Deep Scan"/"pick a different chat"), matching Slack's own pattern instead of just restating "nothing found." The bulk-delete confirmation dialogs now visually emphasize the item count (a real DOM `<strong>`, not just prose) the way Slack's own dedicated count element already did, and a `dashCancelNoResumeHint` tooltip on the shared Cancel button clarifies it's a full stop, not a pause (unlike Slack's Start/Pause/Resume cycle). X's stale-query-ID error wording was simplified for a non-technical reader and no longer implies the user did something wrong.
+- **New test coverage**: `tests/reddit-dashboard.test.js` (Reddit's per-page item-extraction/filtering logic, previously the only non-Slack platform with zero dedicated tests), `tests/teams-dashboard.test.js` (JWT claim decoding), `tests/telegram-utils.test.js` (the flood-wait cancellation fix from the prior pass, split into its own dependency-free module so it's unit-tested instead of only reachable through a live MTProto client), and a `parseJobKey` case added to `tests/background.test.js`.
+
+### Second follow-up audit pass: correctness bugs, accessibility, and cross-platform UX consistency
+
+A fresh three-pass audit (correctness/data-safety re-verification, a first dedicated
+usability pass, and code quality/test coverage) found three genuine bugs plus a set of
+accessibility and UX consistency gaps the prior, safety-focused audit rounds hadn't
+covered. All findings below were fixed and reverified: lint clean, 148/148 unit tests
+pass (4 new), 20/20 Playwright e2e pass, Firefox validation 0 errors, both store
+packages build.
+
+#### Bugs
+
+- **Resuming a rate-limited Slack job could instantly re-pause with a false message.**
+  `job._rateLimitRetries`/`_transientRetries` were only ever reset when an item fully
+  resolved, never on a manual `RESUME_DELETION` — a job that auto-paused at
+  `MAX_RATELIMIT_RETRIES` could hit the same ceiling after a single additional retry
+  post-resume and re-pause, logging a stale "paused after 20 retries" message that no
+  longer reflected what had actually happened since Resume. `background.js`.
+- **Telegram's Cancel button didn't interrupt a mid-flood-wait retry** — the same bug
+  class already fixed for Mastodon, missed on Telegram. `invokeWithFloodWait()` now
+  accepts a `cancelController` and ticks its sleep in ≤1s steps (mirroring Mastodon's
+  `runCancelableWait`), throwing a distinguishable `FloodWaitCancelledError` the delete
+  loop treats as a clean cancellation rather than a failed chunk.
+  `platforms/telegram/telegram-dashboard.src.js`.
+- **The delete-confirmation box told users to type the wrong thing.** On Reddit, X,
+  Mastodon, Teams, and Telegram, deleting more than `LARGE_DELETE_THRESHOLD` items asks
+  for the exact count, but the input's own placeholder unconditionally read "Type
+  DELETE to confirm" — a user who typed the most-visible instruction in the dialog got
+  an unconditional "Deletion cancelled." `confirmBulkDelete()` now computes the
+  placeholder from `isLarge` the same way the prompt body already does; new
+  `dashVerifyInputPlaceholderCount` locale key across all four languages.
+  `platforms/shared/dashboard-fetch-utils.js`.
+
+#### Accessibility
+
+- **The platform picker was entirely mouse-only** — a keyboard/screen-reader user
+  could not reach or activate Slack/Reddit/X/Mastodon/Teams/Telegram at all, on every
+  visit. Rows now carry `role="button"`, `tabindex`, an `aria-label`, and Enter/Space
+  activation; disabled ("coming soon") rows are focusable-excluded like a native
+  disabled control. `popup.js`, `popup.css`.
+- **First-run onboarding plus the full platform list could overflow the popup with no
+  scrollbar** (`body { overflow: hidden }`, no `max-height`), risking an undismissable
+  onboarding card. `body` now caps at `max-height: 580px` with `overflow-y: auto`.
+  `popup.css`.
+- **No focus trap or consistent Escape handling in the five non-Slack dashboards'
+  custom modals** — a keyboard user could Tab out of an open alert/confirm/prompt into
+  the still-interactive page behind it, and Escape only worked on `showPrompt`, not
+  `showAlert`/`showConfirm`. `ensureModalHost()` now installs the same trap/Escape
+  keydown handling content.js's Slack dashboard already has for its shadow-root modals.
+  `platforms/shared/dashboard-fetch-utils.js`.
+- **Form labels weren't linked to their inputs on any of the five non-Slack
+  dashboards** — zero `for`/`id` pairs existed, so a screen reader announced nothing
+  meaningful on focus. Added matching `for`/`id` attributes across all five.
+
+#### UX consistency
+
+- **Mastodon's connect form gave zero guidance on generating a Personal Access
+  Token** — likely the highest-friction onboarding step of the five optional
+  platforms. Added an inline hint (new `popupMastodonTokenHint` locale key) describing
+  the instance's own Settings → Development → New application flow.
+  `popup/platform-registry.js`, `popup.js`.
+- **Telegram's `my.telegram.org` reference was plain text**, not a link, with no
+  explanation of the app-creation step that follows. Now a real link plus a short
+  parenthetical (new `telegramPopupHintApp` key). `popup.html`.
+- **Teams' "sign in, then reopen the popup" instruction was styled as an error** (red
+  `.error-text`) even though it's a normal step 2 of 2, not a failure.
+  `connectTeams()` now returns a `pending: true` flag; `showPlatformConnectError()`
+  takes an `isHint` option rendering it as a neutral `.notice-text` note instead.
+  `platforms/teams/connect-teams.js`, `popup.js`, `popup.css`.
+- **No warning that closing a non-Slack tab mid-delete is unrecoverable**, unlike
+  Slack's resumable job. `armCancelButton`/`resetCancelButton` (already called at
+  exactly the right two moments by all five dashboards) now arm/disarm a
+  `beforeunload` warning in lockstep with the Cancel button.
+  `platforms/shared/dashboard-fetch-utils.js`.
+
+#### Correctness/quality
+
+- **The 300-char `MAX_REGEX_INPUT` ReDoS backstop could silently under-match ordinary
+  long messages with no indication anything was skipped.** `qualifies()` now accepts an
+  optional `options.truncationStats` counter (backward compatible — no-op for every
+  other caller); `background.js`'s scan loop populates it and reports
+  `regexTruncatedCount` back to the dashboard, which now logs a warning when it's
+  nonzero. `shared-filters.js`, `background.js`, `content.js`.
+- Removed a stale `fileShareCount` ESLint global (the export it referenced no longer
+  exists) and a redundant `tests/unit.spec.js` (a Playwright-runner duplicate of
+  `tests/unit.test.js`'s more thorough coverage of the same `qualifies()` behavior).
+- `popup.js`'s `isSlackClientTab` — a hostname-spoof check forked from
+  `shared-filters.js`'s `isSlackHostname()` because `popup.html` can't load that file —
+  previously had no sync comment and was never run against the existing spoof-battery
+  tests. Now exported for Node, with a new `tests/popup.test.js` asserting it agrees
+  with `isSlackHostname()` across the full spoof battery. `content.js`'s equivalent
+  `stringToColor()` fork (cosmetic, avatar color) got the same "keep in sync" comment
+  already used for its neighboring `isSafeRegexPreview()` fork.
+
+### Same pass, continued: the two remaining High-severity code-quality findings
+
+The prior pass above deliberately left its two largest, highest-risk findings for a
+dedicated follow-up rather than bundling risky restructuring into the same set of
+surgical fixes. Both are now done: content.js gained real unit coverage for its pure
+logic, and the ~400-line bulk-delete loop duplicated (and already drifting) across
+Reddit/Mastodon/Teams/X is now one shared, independently-tested implementation.
+Reverified afterward: lint clean, 176/176 unit tests pass (28 new, across 2 new test
+files), 20/20 Playwright e2e pass, Firefox validation 0 errors, both store packages
+build. The delete-loop refactor was additionally verified with real-browser
+integration runs (mocked `fetch`) driving Reddit, Mastodon, and Teams' actual dashboard
+pages through clean/partial-failure/expired-auth/cancel scenarios, not just the
+extracted function's own unit tests.
+
+- **content.js test coverage.** Three pure, previously-untested pieces of the Slack
+  dashboard's scan/delete flow were hoisted to module scope (mirroring the existing
+  `matchesActiveWorkspaceChannel`/`isSafeRegexPreview` pattern) and are now covered by
+  17 new tests in `tests/content.test.js`: `computeScanTimeRange` (the actual "how much
+  history gets swept" arithmetic behind the date-range filter, previously inline in
+  `runScan` with zero coverage), `csvSafe`/`buildMessagesCsv` (the CSV export's
+  formula-injection defense, previously a closure inside a click handler), and
+  `buildDeleteQueueFromIndices` (the SC-BUG-03 stale-index guard protecting against a
+  scan-results swap between scan and delete). No behavior changed — each call site now
+  calls the hoisted function instead of its old inline equivalent.
+- **Shared `runDeleteLoop()`.** Extracted the bulk-delete loop skeleton (cancel-check,
+  progress-marker persistence, live progress text, per-item try/catch with
+  `expiredAuth` fail-fast, inter-item pacing) into `platforms/shared/dashboard-fetch-
+  utils.js`, used by Reddit/Mastodon/Teams/X. Deliberately NOT shared: what happens
+  after the loop (status-text wording, auth-invalid messaging, X's extra
+  query-id-staleness reporting) — those differ enough per platform that forcing them
+  through one template would cost more clarity than the line-count win is worth.
+  Two behavior-preservation details worth calling out since they'd otherwise look like
+  bugs on a fresh read: the per-item pacing delay fires after every completed item
+  *including the last one* (matching all four originals — none special-cased "is this
+  the last item"), and a fatal (non-per-item) exception mid-run — e.g. the extension
+  context invalidated by a reload — still reports accurate partial progress via a
+  `deleteLoopProgress` property attached to the rethrown error, rather than silently
+  losing how far the run got. Covered by 11 new tests in
+  `tests/dashboard-fetch-utils.test.js` against a minimal in-memory
+  `chrome.storage.local` mock. Telegram was NOT moved onto this shared loop — its
+  MTProto batch/channel-entity-resolution shape genuinely doesn't fit it.
+  `tests/packaging.test.js`'s existing "live failure counts" check now also asserts
+  each of the four callers actually calls `runDeleteLoop`.
+
 ### Follow-up audit pass: ReDoS backstop, Slack engine parity, cross-platform consistency
 
 A fresh audit (four parallel passes: Slack's `background.js` engine, `content.js`/

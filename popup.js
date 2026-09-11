@@ -87,33 +87,38 @@ function hasSlackAccess() {
   });
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  localizeI18n(document);
+// Guarded so this file can be `require()`d from a plain Node test (see
+// tests/popup.test.js, which exercises isSlackClientTab in isolation) without a
+// real `document` to attach to -- every real popup load always has one.
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", () => {
+    localizeI18n(document);
 
-  // Check for first-run onboarding
-  chrome.storage.local.get(["erasechat_onboarding_complete"], (data) => {
-    if (!data.erasechat_onboarding_complete) {
-      showOnboarding();
-    }
+    // Check for first-run onboarding
+    chrome.storage.local.get(["erasechat_onboarding_complete"], (data) => {
+      if (!data.erasechat_onboarding_complete) {
+        showOnboarding();
+      }
+    });
+
+    renderPlatformList();
+    showPendingTeamsConnectHint();
+
+    document.getElementById("btn-back-to-platforms").addEventListener("click", showPlatformList);
+    document.getElementById("btn-back-to-platforms-telegram").addEventListener("click", showPlatformList);
+
+    // Auto-skip the picker only when the active tab is unambiguously Slack's --
+    // every other platform's own migration step decides its own auto-detect
+    // behavior when it lands (see popup/platform-registry.js's isTabMatch).
+    getActiveTabCached().then((tab) => {
+      const hostname = tab && tab.url ? safeHostname(tab.url) : null;
+      const slackPlatform = PLATFORMS.find((p) => p.id === "slack");
+      if (hostname && slackPlatform.isTabMatch(hostname)) {
+        enterSlackView();
+      }
+    });
   });
-
-  renderPlatformList();
-  showPendingTeamsConnectHint();
-
-  document.getElementById("btn-back-to-platforms").addEventListener("click", showPlatformList);
-  document.getElementById("btn-back-to-platforms-telegram").addEventListener("click", showPlatformList);
-
-  // Auto-skip the picker only when the active tab is unambiguously Slack's --
-  // every other platform's own migration step decides its own auto-detect
-  // behavior when it lands (see popup/platform-registry.js's isTabMatch).
-  getActiveTabCached().then((tab) => {
-    const hostname = tab && tab.url ? safeHostname(tab.url) : null;
-    const slackPlatform = PLATFORMS.find((p) => p.id === "slack");
-    if (hostname && slackPlatform.isTabMatch(hostname)) {
-      enterSlackView();
-    }
-  });
-});
+}
 
 // Cached across every call site that needs the active tab on this popup load
 // (DOMContentLoaded's auto-skip check, renderPlatformList's "This tab" badge, and
@@ -157,6 +162,20 @@ function renderPlatformList() {
       if (isCurrentTab) row.classList.add("is-current-tab");
       if (!platform.ready) row.classList.add("is-disabled");
 
+      // Every row is a real interactive control (it launches a connect flow or a
+      // dashboard), but was previously mouse-only -- a plain <li> with only a
+      // click listener. This is the popup's primary, and first, required action,
+      // so a keyboard/screen-reader user needs a way to reach and activate it.
+      row.setAttribute("role", "button");
+      if (platform.ready) {
+        row.setAttribute("tabindex", "0");
+      } else {
+        // Matches a disabled native button: present to a screen reader, but not
+        // in the tab order, since activating it is a no-op (see onPlatformRowClick).
+        row.setAttribute("tabindex", "-1");
+        row.setAttribute("aria-disabled", "true");
+      }
+
       const dot = document.createElement("span");
       dot.className = "platform-dot";
       dot.style.background = `linear-gradient(135deg, ${platform.accent[0]}, ${platform.accent[1]})`;
@@ -174,7 +193,14 @@ function renderPlatformList() {
           : "";
 
       row.append(dot, name, status);
+      row.setAttribute("aria-label", status.textContent ? `${platform.name} — ${status.textContent}` : platform.name);
       row.addEventListener("click", () => onPlatformRowClick(platform));
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault(); // " " would otherwise scroll the popup
+          onPlatformRowClick(platform);
+        }
+      });
       list.appendChild(row);
     }
   });
@@ -238,6 +264,13 @@ function togglePlatformForm(platform) {
     formEl.append(label, input);
   }
 
+  if (platform.formHelpKey) {
+    const help = document.createElement("p");
+    help.className = "hint-text";
+    help.textContent = t(platform.formHelpKey, platform.formHelpFallback || "");
+    formEl.appendChild(help);
+  }
+
   const connectBtn = document.createElement("button");
   connectBtn.type = "button";
   connectBtn.className = "btn btn-primary platform-form-connect";
@@ -265,10 +298,17 @@ function setPlatformRowStatus(platformId, text, { connecting = false } = {}) {
   if (status) status.textContent = text;
 }
 
-function showPlatformConnectError(message) {
+// isHint: true renders this as a neutral "here's what to do next" note (e.g.
+// Teams' "sign in, then reopen the popup" step) instead of red error-text styling
+// -- the same box was previously always styled as an error regardless of which
+// kind of message it held, which made Teams' perfectly normal two-step connect
+// look like something had gone wrong.
+function showPlatformConnectError(message, { isHint = false } = {}) {
   const el = document.getElementById("platform-connect-error");
   if (!el) return;
   el.textContent = message;
+  el.classList.toggle("notice-text", isHint);
+  el.classList.toggle("error-text", !isHint);
   el.classList.remove("hidden");
 }
 
@@ -294,7 +334,7 @@ function showPendingTeamsConnectHint() {
     chrome.storage.session.get(["teams_connect_pending"], (data) => {
       void chrome.runtime.lastError;
       if (data && data.teams_connect_pending) {
-        showPlatformConnectError(data.teams_connect_pending);
+        showPlatformConnectError(data.teams_connect_pending, { isHint: true });
       }
     });
   } catch (e) { /* best-effort only -- never block popup load over this */ }
@@ -355,7 +395,10 @@ function connectAndLaunchPlatform(platform, formValues) {
         finishPending();
         if (result && result.ok === false) {
           setPlatformRowStatus(platform.id, "");
-          showPlatformConnectError(result.message || t("popupConnectFailed", "Could not connect. Please try again."));
+          showPlatformConnectError(
+            result.message || t("popupConnectFailed", "Could not connect. Please try again."),
+            { isHint: !!result.pending }
+          );
           return;
         }
         if (leftPlatformPicker) {
@@ -514,6 +557,11 @@ function showPermissionRequiredState() {
 
 // True for the Slack web client on any slack.com subdomain (app.slack.com or a
 // workspace subdomain like acme.slack.com). Rejects spoofs and the bare domain.
+//
+// KEEP THIS IN SYNC WITH shared-filters.js's isSlackHostname() -- duplicated only
+// because popup.html can't load shared-filters.js (it's not part of the popup's
+// script chain). Asserted against the same hostname-spoof battery as the real
+// isSlackHostname() in tests/popup.test.js, so the two can't silently drift apart.
 function isSlackClientTab(url) {
   try {
     const parsed = new URL(url);
@@ -521,6 +569,10 @@ function isSlackClientTab(url) {
   } catch (e) {
     return false;
   }
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { isSlackClientTab };
 }
 
 function showActiveState(tabId) {

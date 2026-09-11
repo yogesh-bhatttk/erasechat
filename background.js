@@ -99,6 +99,23 @@ function queueKeyFor(teamId, channelId) {
   return `${QUEUE_PREFIX}${teamId}_${channelId}`;
 }
 
+// Parses a "slack_state_<teamId>_<channelId>" job key back into its parts.
+// Splitting on "_" is only safe because real Slack team/channel IDs (T…/C…/D…/G…)
+// are alphanumeric and never contain one -- validated here (rather than just
+// trusting position, as a bare `.split("_")` + fixed index would) so a key that
+// doesn't actually match that shape (a future Slack ID format change, or any
+// malformed/foreign key) is treated as unparseable instead of silently
+// misattributing the wrong team/channel ID to a companion queue key. Returns
+// null when the key doesn't parse.
+function parseJobKey(key) {
+  const parts = key.split("_");
+  if (parts.length !== 4) return null;
+  const [, , teamId, channelId] = parts;
+  const isSlackId = (s) => /^[A-Za-z0-9]+$/.test(s);
+  if (!isSlackId(teamId) || !isSlackId(channelId)) return null;
+  return { teamId, channelId };
+}
+
 // Return the team's token, recovering it from session storage if the in-memory
 // cache was cleared by a service-worker idle-death mid-session (e.g. the SW died
 // between a scan and a delete). Without this, token-dependent messages fail with
@@ -283,11 +300,9 @@ async function recoverAllJobs() {
         // running job's state is always fresher than what's on disk.
         if (activeJobs[key]) continue;
 
-        const parts = key.split("_");
-        // key format: slack_state_${teamId}_${channelId}
-        if (parts.length >= 4) {
-          const teamId = parts[2];
-          const channelId = parts[3];
+        const parsed = parseJobKey(key);
+        if (parsed) {
+          const { teamId, channelId } = parsed;
 
           // Queue lives in a companion key; fall back to any legacy inline queue.
           const companionQueue = storage[queueKeyFor(teamId, channelId)];
@@ -546,7 +561,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             ok: true,
             results: scan.results,
             moreAvailable: scan.moreAvailable,
-            capped: scan.capped
+            capped: scan.capped,
+            regexTruncatedCount: scan.regexTruncatedCount
           };
         }
       } catch (err) {
@@ -678,6 +694,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (job) {
         job.isPaused = false;
         job.isRunning = true;
+        // A manual resume is a fresh attempt, not a continuation of whatever streak of
+        // 429s/transient errors caused the prior pause — without this, a job that
+        // auto-paused at MAX_RATELIMIT_RETRIES re-pauses after a single additional retry,
+        // logging a stale "after N retries" message that no longer reflects what just
+        // happened since Resume.
+        job._rateLimitRetries = 0;
+        job._transientRetries = 0;
         await saveJobState(key, job, true);
         markRunning(key, true);
         broadcastJobUpdate(job);
@@ -813,9 +836,94 @@ async function runWatchdogSweep() {
 }
 
 // Background Scan Execution
+// Expands one thread root's replies (conversations.replies, paginated), pushing
+// qualifying ones into `opts.results` and deduping against `opts.seenTs` (both
+// mutated in place, exactly as when this was inline in runScanInBg's own loop --
+// isolated into its own function because it was the single most deeply-nested
+// piece of that loop: thread pagination containing a reply loop containing the
+// qualifies() call).
+//
+// Returns { capped, threadsTruncated }: `capped` true means MAX_SCAN_RESULTS was
+// hit while pushing a reply -- the caller must stop the ENTIRE scan immediately
+// (same as before this was extracted), not just this one thread.
+// `threadsTruncated` true means this thread was only partially examined (deeper
+// than MAX_THREAD_PAGES, or the replies call itself failed) -- the caller folds
+// this into the scan's overall moreAvailable signal.
+async function expandThreadReplies(token, channelId, parentTs, opts) {
+  const { oldestNum, latestNum, userId, filterSender, filterText, onlyAttachments, qualifyOpts, seenTs, results } = opts;
+  let threadCursor = "";
+  let threadHasMore = true;
+  let threadPages = 0;
+  let capped = false;
+  let threadsTruncated = false;
+
+  while (threadHasMore) {
+    const threadRes = await slackAPICallWithRetry(token, "conversations.replies", {
+      channel: channelId,
+      ts: parentTs,
+      limit: THREAD_PAGE_LIMIT,
+      cursor: threadCursor
+    });
+
+    if (threadRes && threadRes.ok) {
+      const replies = threadRes.messages || [];
+      for (const reply of replies) {
+        if (reply.ts === parentTs) continue; // Skip parent duplicate
+
+        const replyTsNum = parseFloat(reply.ts);
+        if (replyTsNum < oldestNum || replyTsNum > latestNum) continue;
+
+        if (qualifies(reply, userId, filterSender, filterText, onlyAttachments, qualifyOpts) && !seenTs.has(reply.ts)) {
+          seenTs.add(reply.ts);
+          results.push({
+            ts: reply.ts,
+            user: reply.user,
+            text: reply.text || "",
+            time: new Date(replyTsNum * 1000).toLocaleString(),
+            isThreadReply: true,
+            parentTs: parentTs,
+            files: reply.files || [],
+            attachments: reply.attachments || [],
+            blocks: reply.blocks || [],
+            replyCount: reply.reply_count || 0
+          });
+
+          if (results.length >= MAX_SCAN_RESULTS) {
+            capped = true;
+            return { capped, threadsTruncated };
+          }
+        }
+      }
+      threadCursor = threadRes.response_metadata?.next_cursor || "";
+      threadPages++;
+      threadHasMore = !!threadCursor;
+      if (threadHasMore && threadPages >= MAX_THREAD_PAGES) {
+        // Deeper than we will page. Stop and remember that this thread was
+        // only partially examined, so the UI can say so rather than implying
+        // full coverage.
+        threadsTruncated = true;
+        threadHasMore = false;
+      }
+    } else {
+      // The replies call itself failed (retries exhausted, or a Slack
+      // error other than the cap above) -- this thread was only
+      // partially examined, same as hitting MAX_THREAD_PAGES. Flag it so
+      // moreAvailable reflects the real, incomplete coverage instead of
+      // silently under-reporting matches from this thread.
+      threadsTruncated = true;
+      break;
+    }
+  }
+  return { capped, threadsTruncated };
+}
+
 async function runScanInBg(token, req) {
   const { channelId, oldest, latest, includeThreads, filterSender, filterText, onlyAttachments, userId, invertText, excludePinned } = req;
-  const qualifyOpts = { invertText: !!invertText, excludePinned: !!excludePinned };
+  // Counts messages whose filterable text exceeded shared-filters.js's MAX_REGEX_INPUT
+  // cap during a valid /regex/ match -- content past that cap is invisible to the
+  // filter, which previously failed silently (see CHANGELOG's ReDoS-backstop entry).
+  const truncationStats = { count: 0 };
+  const qualifyOpts = { invertText: !!invertText, excludePinned: !!excludePinned, truncationStats };
   // Numeric bounds for the manual thread-reply time filter below. Coerce defensively:
   // a missing/empty `latest` must mean "no upper bound" (Infinity), not "" — because
   // `replyTsNum > ""` coerces to `> 0` and would drop every reply. Likewise oldest -> 0.
@@ -877,6 +985,17 @@ async function runScanInBg(token, req) {
     });
 
     if (!res.ok) {
+      // A rate limit too long to safely wait on mid-scan is a timing problem, not
+      // a permission/channel problem -- unlike every other failure here (which
+      // means nothing further can be learned, so throwing is correct), this one
+      // would otherwise discard every page already gathered across potentially
+      // dozens of prior requests. Return what's been found so far, honestly
+      // marked incomplete, instead of forcing an expensive full re-scan that
+      // repeats the exact API load that triggered the rate limit in the first
+      // place.
+      if (res.error === "rate_limited_too_long") {
+        return { results, capped, moreAvailable: true, regexTruncatedCount: truncationStats.count };
+      }
       throw new Error(`Conversations history failed: ${res.error}`);
     }
 
@@ -905,71 +1024,18 @@ async function runScanInBg(token, req) {
 
         if (results.length >= MAX_SCAN_RESULTS) {
           capped = true;
-          return { results, capped, moreAvailable: true };
+          return { results, capped, moreAvailable: true, regexTruncatedCount: truncationStats.count };
         }
       }
 
       if (includeThreads && msg.thread_ts && msg.thread_ts === msg.ts) {
-        let threadCursor = "";
-        let threadHasMore = true;
-        let threadPages = 0;
-
-        while (threadHasMore) {
-          const threadRes = await slackAPICallWithRetry(token, "conversations.replies", {
-            channel: channelId,
-            ts: msg.thread_ts,
-            limit: THREAD_PAGE_LIMIT,
-            cursor: threadCursor
-          });
-
-          if (threadRes && threadRes.ok) {
-            const replies = threadRes.messages || [];
-            for (const reply of replies) {
-              if (reply.ts === msg.ts) continue; // Skip parent duplicate
-
-              const replyTsNum = parseFloat(reply.ts);
-              if (replyTsNum < oldestNum || replyTsNum > latestNum) continue;
-
-              if (qualifies(reply, userId, filterSender, filterText, onlyAttachments, qualifyOpts) && !seenTs.has(reply.ts)) {
-                seenTs.add(reply.ts);
-                results.push({
-                  ts: reply.ts,
-                  user: reply.user,
-                  text: reply.text || "",
-                  time: new Date(replyTsNum * 1000).toLocaleString(),
-                  isThreadReply: true,
-                  parentTs: msg.ts,
-                  files: reply.files || [],
-                  attachments: reply.attachments || [],
-                  blocks: reply.blocks || [],
-                  replyCount: reply.reply_count || 0
-                });
-
-                if (results.length >= MAX_SCAN_RESULTS) {
-                  capped = true;
-                  return { results, capped, moreAvailable: true };
-                }
-              }
-            }
-            threadCursor = threadRes.response_metadata?.next_cursor || "";
-            threadPages++;
-            threadHasMore = !!threadCursor;
-            if (threadHasMore && threadPages >= MAX_THREAD_PAGES) {
-              // Deeper than we will page. Stop and remember that this thread was
-              // only partially examined, so the UI can say so rather than implying
-              // full coverage.
-              threadsTruncated = true;
-              threadHasMore = false;
-            }
-          } else {
-            // The replies call itself failed (retries exhausted, or a Slack
-            // error other than the cap above) -- this thread was only
-            // partially examined, same as hitting MAX_THREAD_PAGES. Flag it so
-            // moreAvailable reflects the real, incomplete coverage instead of
-            // silently under-reporting matches from this thread.
-            threadsTruncated = true;
-            break;
-          }
+        const threadResult = await expandThreadReplies(token, channelId, msg.thread_ts, {
+          oldestNum, latestNum, userId, filterSender, filterText, onlyAttachments, qualifyOpts, seenTs, results
+        });
+        if (threadResult.threadsTruncated) threadsTruncated = true;
+        if (threadResult.capped) {
+          capped = true;
+          return { results, capped, moreAvailable: true, regexTruncatedCount: truncationStats.count };
         }
       }
     }
@@ -985,7 +1051,7 @@ async function runScanInBg(token, req) {
   // messages we never examined — either older history (the history page cap) or
   // deeper thread replies (MAX_THREAD_PAGES). Honest truncation signal for the UI.
   const moreAvailable = (!!cursor && pageCount >= maxPages) || threadsTruncated;
-  return { results, capped, moreAvailable };
+  return { results, capped, moreAvailable, regexTruncatedCount: truncationStats.count };
 }
 
 // Read a queued item's resolved action. The decision is made once at enqueue time
@@ -1047,6 +1113,91 @@ async function pauseJobForFatalError(job, key, message) {
   await saveJobState(key, job, true);
   broadcastJobUpdate(job);
   maybeClearWatchdog();
+}
+
+// Transient failure (network blip, a JS exception in the fetch path, or an
+// attachment-mode item whose file op failed transiently): retry the SAME item a
+// few times with a short backoff before giving up, so a momentary hiccup doesn't
+// permanently skip messages/attachments the user asked to remove. `file_delete_failed`
+// is included because in attachment mode a single files.info/files.delete network
+// blip aborts the item (correctly, to never orphan a file) — but that abort must
+// be RETRIED like any other transient error, not counted as a permanent failure on
+// the first blip. The counter is reset once the item is finally resolved (in
+// executeQueue, once a response is treated as ok).
+//
+// Returns true if a retry was scheduled -- the caller must return immediately
+// without advancing deleteIndex. Returns false once retries are exhausted (a log
+// line is emitted, but the caller is responsible for treating `response` as a
+// genuine failure from here).
+async function handleTransientError(job, key, msg, response) {
+  if (response.error !== "network_error" && response.error !== "catch_error" && response.error !== "file_delete_failed") {
+    return false;
+  }
+
+  job._transientRetries = (job._transientRetries || 0) + 1;
+  if (job._transientRetries <= MAX_TRANSIENT_RETRIES) {
+    sendLogMessage(job, t("bgLogTransientRetry", `[Network] Transient error at ${msg.time} (attempt ${job._transientRetries}/${MAX_TRANSIENT_RETRIES}). Retrying...`, [String(msg.time), String(job._transientRetries), String(MAX_TRANSIENT_RETRIES)]), "warn");
+    // Persist the bumped streak before retrying (see handleRateLimitBackoff's
+    // identical reasoning) so a SW restart mid-retry recovers the correct
+    // count instead of resetting it to 0 and letting a permanently-failing
+    // item retry forever across restarts.
+    await saveJobState(key, job, true);
+    scheduleNextStep(key, TRANSIENT_RETRY_DELAY_MS);
+    return true;
+  }
+
+  // Retries exhausted: fall through and let the caller count it as a failure.
+  sendLogMessage(job, t("bgLogTransientGiveUp", `[Network] Giving up on message at ${msg.time} after ${MAX_TRANSIENT_RETRIES} retries.`, [String(msg.time), String(MAX_TRANSIENT_RETRIES)]), "warn");
+  return false;
+}
+
+// Performs the actual Slack API call for one queue item (or, for a "skip"
+// action, no call at all) and returns the raw response -- isolated out of
+// executeQueue's own loop since it's the one self-contained "do the work" step
+// in an otherwise sequential pipeline of error-classification branches. Never
+// throws: an exception from slackAPICall is caught and turned into the same
+// { ok: false, error: "catch_error" } shape executeQueue's transient-error
+// handling already expects.
+async function executeQueueItem(job, msg, action) {
+  if (action === "skip") {
+    // Attachment-only mode, but this item has no attachment/file to clean.
+    // Never delete it — mark processed and move on with no destructive call.
+    return { ok: true, skipped: true };
+  }
+
+  try {
+    // Remove the message's underlying file objects FIRST, for EVERY item that
+    // has files — attachment "trim"/"delete" AND a normal full delete alike.
+    // Neither chat.delete nor chat.update purges an uploaded file from Slack's
+    // file store, so without this a "delete my messages" run would leave the
+    // files behind (still downloadable/searchable). Idempotent on retry.
+    // [MODIFIED] files.delete has been entirely removed to prevent global collateral data loss
+    // in unseen private channels. Only chat.delete and chat.update are used.
+    // A trim operation will remove the file's visual presence from the message in this channel,
+    // but the file itself will remain securely in Slack's workspace storage.
+
+    if (action === "trim") {
+      // Strip attachments/blocks while preserving text.
+      let trimmedBlocks = [];
+      if (msg.blocks && Array.isArray(msg.blocks)) {
+        trimmedBlocks = msg.blocks.filter(b => b && b.type !== "image" && b.type !== "file");
+      }
+      return await slackAPICall(job.token, "chat.update", {
+        channel: job.channelId,
+        ts: msg.ts,
+        text: msg.text || "",
+        attachments: JSON.stringify([]),
+        blocks: trimmedBlocks.length > 0 ? JSON.stringify(trimmedBlocks) : JSON.stringify([])
+      });
+    }
+    return await slackAPICall(job.token, "chat.delete", {
+      channel: job.channelId,
+      ts: msg.ts,
+      as_user: true
+    });
+  } catch (err) {
+    return { ok: false, error: "catch_error", message: err.message };
+  }
 }
 
 // Queue Loop execution handler
@@ -1116,49 +1267,7 @@ async function executeQueue(key) {
 
     const msg = job.deleteQueue[job.deleteIndex];
     const action = itemAction(msg);
-
-    let response;
-    if (action === "skip") {
-      // Attachment-only mode, but this item has no attachment/file to clean.
-      // Never delete it — mark processed and move on with no destructive call.
-      response = { ok: true, skipped: true };
-    } else {
-      // Track whether every file object was actually removed. A message edit/delete
-      try {
-        // Remove the message's underlying file objects FIRST, for EVERY item that
-        // has files — attachment "trim"/"delete" AND a normal full delete alike.
-        // Neither chat.delete nor chat.update purges an uploaded file from Slack's
-        // file store, so without this a "delete my messages" run would leave the
-        // files behind (still downloadable/searchable). Idempotent on retry.
-        // [MODIFIED] files.delete has been entirely removed to prevent global collateral data loss
-        // in unseen private channels. Only chat.delete and chat.update are used.
-        // A trim operation will remove the file's visual presence from the message in this channel,
-        // but the file itself will remain securely in Slack's workspace storage.
-
-        if (action === "trim") {
-          // Strip attachments/blocks while preserving text.
-          let trimmedBlocks = [];
-          if (msg.blocks && Array.isArray(msg.blocks)) {
-             trimmedBlocks = msg.blocks.filter(b => b && b.type !== "image" && b.type !== "file");
-          }
-          response = await slackAPICall(job.token, "chat.update", {
-            channel: job.channelId,
-            ts: msg.ts,
-            text: msg.text || "",
-            attachments: JSON.stringify([]),
-            blocks: trimmedBlocks.length > 0 ? JSON.stringify(trimmedBlocks) : JSON.stringify([])
-          });
-        } else {
-          response = await slackAPICall(job.token, "chat.delete", {
-            channel: job.channelId,
-            ts: msg.ts,
-            as_user: true
-          });
-        }
-      } catch (err) {
-        response = { ok: false, error: "catch_error", message: err.message };
-      }
-    }
+    const response = await executeQueueItem(job, msg, action);
 
     // The job may have been CANCELLED (activeJobs entry deleted) OR REPLACED by a
     // fresh START_DELETION for the same key while we were awaiting the API call above.
@@ -1193,28 +1302,10 @@ async function executeQueue(key) {
       return;
     }
 
-    // Transient failure (network blip, a JS exception in the fetch path, or an
-    // attachment-mode item whose file op failed transiently): retry the SAME item a
-    // few times with a short backoff before giving up, so a momentary hiccup doesn't
-    // permanently skip messages/attachments the user asked to remove. `file_delete_failed`
-    // is included because in attachment mode a single files.info/files.delete network
-    // blip aborts the item (correctly, to never orphan a file) — but that abort must
-    // be RETRIED like any other transient error, not counted as a permanent failure on
-    // the first blip. The counter is reset once the item is finally resolved (below).
-    if (response.error === "network_error" || response.error === "catch_error" || response.error === "file_delete_failed") {
-      job._transientRetries = (job._transientRetries || 0) + 1;
-      if (job._transientRetries <= MAX_TRANSIENT_RETRIES) {
-        sendLogMessage(job, t("bgLogTransientRetry", `[Network] Transient error at ${msg.time} (attempt ${job._transientRetries}/${MAX_TRANSIENT_RETRIES}). Retrying...`, [String(msg.time), String(job._transientRetries), String(MAX_TRANSIENT_RETRIES)]), "warn");
-        // Persist the bumped streak before retrying (see handleRateLimitBackoff's
-        // identical reasoning) so a SW restart mid-retry recovers the correct
-        // count instead of resetting it to 0 and letting a permanently-failing
-        // item retry forever across restarts.
-        await saveJobState(key, job, true);
-        scheduleNextStep(key, TRANSIENT_RETRY_DELAY_MS);
-        return; // do NOT advance — retry the same item
-      }
-      // Retries exhausted: fall through and count it as a failure.
-      sendLogMessage(job, t("bgLogTransientGiveUp", `[Network] Giving up on message at ${msg.time} after ${MAX_TRANSIENT_RETRIES} retries.`, [String(msg.time), String(MAX_TRANSIENT_RETRIES)]), "warn");
+    // Transient failure: retry the SAME item a few times with a short backoff
+    // before counting it as a genuine failure (see handleTransientError).
+    if (await handleTransientError(job, key, msg, response)) {
+      return; // retry scheduled — do NOT advance past this item
     }
 
     // Idempotency: an already-gone message is exactly the end state we wanted
@@ -1413,10 +1504,9 @@ async function clearJobState(key, job) {
     if (job) {
       keysToRemove.push(queueKeyFor(job.teamId, job.channelId));
     } else {
-      // Derive the companion queue key from the job key when no job is passed:
-      // slack_state_${teamId}_${channelId}
-      const parts = key.split("_");
-      if (parts.length >= 4) keysToRemove.push(queueKeyFor(parts[2], parts[3]));
+      // Derive the companion queue key from the job key when no job is passed.
+      const parsed = parseJobKey(key);
+      if (parsed) keysToRemove.push(queueKeyFor(parsed.teamId, parsed.channelId));
     }
     await chrome.storage.local.remove(keysToRemove);
   } catch (err) {

@@ -19,6 +19,35 @@ function xT(key, fallback, substitutions) {
   return fallback;
 }
 
+// Same public web-client bearer token dashboard-x.js's own apiFetch() uses --
+// required alongside the ct0 CSRF header for X to treat this as an authenticated
+// web-client request rather than an anonymous one.
+const BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
+
+// Resolves the signed-in user's own @handle via the stable legacy REST endpoint
+// (not GraphQL, so this doesn't depend on dashboard-x.js's scraped/rotating query
+// IDs) so the dashboard can pre-fill it instead of making every user recall and
+// type their own username on every visit. Best-effort only: returns null on any
+// failure (endpoint blocked, network error, unexpected shape) rather than
+// throwing -- a user can always type their username manually, so this must never
+// block connecting.
+async function resolveXUsername(ct0) {
+  try {
+    const res = await fetch("https://api.x.com/1.1/account/verify_credentials.json", {
+      credentials: "include",
+      headers: {
+        "Authorization": `Bearer ${BEARER_TOKEN}`,
+        "x-csrf-token": ct0
+      }
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return (data && typeof data.screen_name === "string" && data.screen_name) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function connectX() {
   try {
     const cookies = await chrome.cookies.getAll({ domain: "x.com", name: "ct0" });
@@ -30,6 +59,15 @@ async function connectX() {
     }
 
     await chrome.storage.session.set({ x_csrf: ct0 });
+
+    // Non-sensitive (just a handle, like Reddit's stored username) and best-effort:
+    // only written on success, so a transient failure here never erases a
+    // previously-resolved username or blocks the connect itself.
+    const username = await resolveXUsername(ct0);
+    if (username) {
+      await chrome.storage.local.set({ x_username: username });
+    }
+
     return { ok: true };
   } catch (err) {
     return { ok: false, message: xT("xConnectCookieError", "Error accessing cookies. Make sure you have the correct permissions.") };
@@ -37,5 +75,5 @@ async function connectX() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { connectX };
+  module.exports = { connectX, resolveXUsername };
 }

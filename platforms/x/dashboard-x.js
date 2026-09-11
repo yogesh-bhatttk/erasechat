@@ -42,20 +42,35 @@ function extractTweetsFromEntries(entries, seenTweetIds, filterText) {
 if (typeof module !== 'undefined') module.exports = { resolveXScriptUrl, extractTweetsFromEntries };
 
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
-  const data = await chrome.storage.session.get(['x_csrf']);
-  if (!data.x_csrf) {
+  const [sessionData, localData] = await Promise.all([
+    chrome.storage.session.get(['x_csrf']),
+    chrome.storage.local.get(['x_username'])
+  ]);
+  if (!sessionData.x_csrf) {
     await showAlert("Not linked to X.com. Please open the extension popup first.");
     window.close();
     return;
   }
 
-  const ct0 = data.x_csrf;
+  const ct0 = sessionData.x_csrf;
   const BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"; // Standard public X.com web client token
 
   const scanBtn = document.getElementById('scan-btn');
   const deleteBtn = document.getElementById('delete-btn');
   const cancelBtn = document.getElementById('sc-btn-cancel');
   const usernameInput = document.getElementById('username');
+  // Resolved once during connect (see connect-x.js's resolveXUsername) and
+  // pre-filled here so the user isn't forced to recall and retype their own
+  // handle on every visit -- best-effort: if it wasn't resolved (an older
+  // connection, or the lookup failed at connect time), the field is simply left
+  // blank for manual entry, same as before this existed.
+  if (localData.x_username) {
+    usernameInput.value = localData.x_username;
+    const connectedAsEl = document.getElementById('connected-as');
+    if (connectedAsEl) {
+      connectedAsEl.textContent = t("dashConnectedAs", `(Connected: @${localData.x_username})`, [`@${localData.x_username}`]);
+    }
+  }
   const filterInput = document.getElementById('text-filter');
   const itemList = document.getElementById('item-list');
   const resultsCount = document.getElementById('results-count');
@@ -64,6 +79,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
   const DELETE_PROGRESS_KEY = 'x_delete_progress';
   await reportInterruptedDelete(DELETE_PROGRESS_KEY, statusText);
+  initActivityLog('sc-activity-log');
 
   let currentResults = [];
   let userRestId = null;
@@ -211,6 +227,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     statusText.textContent = "Scanning...";
     renderEmptyState(itemList, "Scanning tweets...");
     currentResults = [];
+    logActivity('sc-activity-log', `Scan started (@${screenName}${filterText ? `, filter: "${filterText}"` : ''}).`);
 
     try {
       if (!queryIdsExtracted || queryIdsStale) {
@@ -295,22 +312,25 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         renderResultRows(currentResults);
         deleteBtn.disabled = false;
         statusText.textContent = "Scan complete. Review results before deleting.";
+        logActivity('sc-activity-log', `Scan complete: ${currentResults.length} tweet(s) found${truncated ? ' (truncated -- more may exist)' : ''}.`);
       } else {
-        renderEmptyState(itemList, "No tweets matched your criteria.");
+        renderEmptyState(itemList, "No tweets matched your criteria. Try widening your text filter.");
         statusText.textContent = t("dashReady", "Ready");
+        logActivity('sc-activity-log', 'Scan complete: 0 tweets found.');
       }
     } catch (err) {
       if (err.staleQueryId) {
         queryIdsStale = true;
         await showAlert(
           "Scan failed: " + err.message +
-          "\n\nThis looks like X.com's API rejected one of this extension's built-in query IDs. " +
-          "X frequently rotates these; the extension may need an update with refreshed query IDs."
+          "\n\nX changed something on their end that this version of the extension doesn't recognize yet. " +
+          "Check your browser's extensions page for an update, or try again later -- this isn't something you did wrong."
         );
       } else {
         await showAlert("Scan failed: " + err.message);
       }
       statusText.textContent = "Error";
+      logActivity('sc-activity-log', `Scan failed: ${err.message}`, 'error');
     } finally {
       scanBtn.disabled = false;
     }
@@ -335,62 +355,41 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
     const totalCount = selected.length;
     let deletedCount = 0;
-    const failures = []; // { id, message }
-    const processedItems = [];
-    let staleQueryIdSuspected = false;
+    let failures = []; // { id, message, error }
 
+    logActivity('sc-activity-log', `Delete started: ${totalCount} tweet(s) selected.`);
     try {
-      // The inner per-item try/catch below isolates one item's failure from the
-      // rest of the batch. This outer try/finally is separate: it guards the
-      // chrome.storage.local calls (progress marker) and everything else in this
-      // handler against an unexpected exception so the loop can never die
-      // silently, leaving scanBtn disabled and the progress marker stuck.
-      await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: totalCount, done: 0 } });
-      let expiredAuth = false;
-      for (const tweet of selected) {
-        if (cancelController.cancelled) break;
-        processedItems.push(tweet);
-        try {
-          // GraphQL DeleteTweet mutation
-          const variables = { tweet_id: tweet.id, dark_request: false };
-          const queryId = queryIds.DeleteTweet;
-          const url = `https://x.com/i/api/graphql/${queryId}/DeleteTweet`;
+      const result = await runDeleteLoop(selected, {
+        cancelController,
+        progressKey: DELETE_PROGRESS_KEY,
+        progressText,
+        // strict 2.5 second delay to avoid rate limits and account suspension flags
+        postItemDelayMs: 2500,
+        deleteItem: async (tweet) => {
+          try {
+            // GraphQL DeleteTweet mutation
+            const variables = { tweet_id: tweet.id, dark_request: false };
+            const queryId = queryIds.DeleteTweet;
+            const url = `https://x.com/i/api/graphql/${queryId}/DeleteTweet`;
 
-          await apiFetch(url, 'POST', {
-            variables,
-            queryId
-          });
-
-          deletedCount++;
-        } catch (err) {
-          // Isolate this item's failure so a single bad tweet (400/403/network
-          // error) doesn't abort the rest of the batch.
-          console.error(`Failed to delete tweet ${tweet.id}:`, err);
-          failures.push({ id: tweet.id, message: err.message });
-          if (err.staleQueryId) {
-            staleQueryIdSuspected = true;
-            queryIdsStale = true;
-          }
-          // An invalid/expired ct0 fails every remaining item identically --
-          // stop immediately with one clear reconnect message instead of
-          // retrying each remaining tweet at the full pacing delay only to
-          // fail the same way (matches Reddit/Mastodon/Teams).
-          if (err.expiredAuth) {
-            expiredAuth = true;
-            break;
+            await apiFetch(url, 'POST', {
+              variables,
+              queryId
+            });
+          } catch (err) {
+            // Isolate this item's failure so a single bad tweet (400/403/network
+            // error) doesn't abort the rest of the batch (runDeleteLoop still
+            // records it and decides whether to stop, via err.expiredAuth).
+            console.error(`Failed to delete tweet ${tweet.id}:`, err);
+            if (err.staleQueryId) queryIdsStale = true;
+            throw err;
           }
         }
-
-        progressText.textContent = failures.length > 0
-          ? `Processed ${deletedCount + failures.length} of ${totalCount} (${deletedCount} deleted, ${failures.length} failed)`
-          : `Deleted ${deletedCount} of ${totalCount}`;
-        await maybeSaveDeleteProgress(DELETE_PROGRESS_KEY, deletedCount + failures.length, totalCount);
-
-        if (expiredAuth || cancelController.cancelled) break;
-        // strict 2.5 second delay to avoid rate limits and account suspension flags
-        await delay(2500);
-      }
-      await chrome.storage.local.remove([DELETE_PROGRESS_KEY]);
+      });
+      deletedCount = result.deletedCount;
+      failures = result.failures;
+      const { processedItems, expiredAuth, cancelled } = result;
+      const staleQueryIdSuspected = failures.some(f => f.error && f.error.staleQueryId);
 
       // Anything scanned but not selected, plus anything selected but never
       // reached because a cancel broke the loop early, stays visible -- only
@@ -407,15 +406,18 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         statusText.textContent = "Session invalid — reconnect required.";
         statusText.style.color = "#ef4444";
         if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+        logActivity('sc-activity-log', `Delete stopped: session invalid (${deletedCount}/${totalCount} deleted).`, 'error');
         await showAlert(`Stopped: your X.com session (ct0) appears to be invalid or expired. ${deletedCount} of ${totalCount} tweets were deleted before this happened. Reconnect from the extension popup to finish.`);
-      } else if (cancelController.cancelled) {
+      } else if (cancelled) {
         statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
         statusText.style.color = "#ef4444";
         if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+        logActivity('sc-activity-log', `Delete cancelled: ${deletedCount}/${totalCount} processed.`, 'warn');
       } else if (failures.length === 0) {
         statusText.textContent = "Deletion Complete!";
         statusText.style.color = "#10b981";
         if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+        logActivity('sc-activity-log', `Delete complete: ${deletedCount}/${totalCount} deleted.`);
       } else {
         statusText.textContent = `Deletion finished: ${deletedCount} deleted, ${failures.length} failed.`;
         statusText.style.color = "#ef4444";
@@ -424,14 +426,17 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         const shown = failures.slice(0, 10).map(f => `#${f.id}: ${f.message}`).join('\n');
         const more = failures.length > 10 ? `\n...and ${failures.length - 10} more (see console for full list)` : '';
         const hint = staleQueryIdSuspected
-          ? "\n\nSome failures look like X.com rejected this extension's DeleteTweet query ID. " +
-            "X frequently rotates these; the extension may need an update with refreshed query IDs."
+          ? "\n\nX changed something on their end that this version of the extension doesn't recognize yet. " +
+            "Check your browser's extensions page for an update, or try again later -- this isn't something you did wrong."
           : '';
+        logActivity('sc-activity-log', `Delete finished: ${deletedCount} deleted, ${failures.length} failed out of ${totalCount}.`, 'warn');
         await showAlert(`Delete failed for ${failures.length} of ${totalCount} tweet(s):\n\n${shown}${more}${hint}`);
       }
     } catch (err) {
+      const progress = err.deleteLoopProgress || { deletedCount };
       console.error("X delete loop stopped unexpectedly:", err);
-      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${deletedCount} of ${totalCount} tweets were deleted before this happened.`);
+      logActivity('sc-activity-log', `Delete stopped unexpectedly: ${err.message}`, 'error');
+      await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${progress.deletedCount} of ${totalCount} tweets were deleted before this happened.`);
       statusText.textContent = "Error";
       statusText.style.color = "#ef4444";
     } finally {

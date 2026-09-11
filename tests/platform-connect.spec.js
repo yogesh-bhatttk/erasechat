@@ -147,6 +147,12 @@ test('a granted permission and a real ct0 cookie opens the X dashboard tab', asy
     const page = await context.newPage();
     await page.goto(`chrome-extension://${extensionId}/popup.html`);
 
+    // Stub fetch so connectX()'s best-effort username lookup (resolveXUsername,
+    // which hits a real X.com endpoint) never escapes to the network in a test.
+    await page.evaluate(() => {
+      window.fetch = async () => new Response(JSON.stringify({ screen_name: 'testhandle' }), { status: 200 });
+    });
+
     const created = await page.evaluate(() => {
       return new Promise((resolve) => {
         chrome.permissions.request = (_req, cb) => cb(true);
@@ -164,6 +170,40 @@ test('a granted permission and a real ct0 cookie opens the X dashboard tab', asy
     // the Slack token -- never chrome.storage.local.
     const stored = await page.evaluate(() => chrome.storage.session.get(['x_csrf']));
     expect(stored.x_csrf).toBe('csrf-token-value');
+
+    // The resolved username is non-sensitive (just a handle, like Reddit's stored
+    // username) and IS expected in storage.local, for the dashboard to pre-fill.
+    const localStored = await page.evaluate(() => chrome.storage.local.get(['x_username']));
+    expect(localStored.x_username).toBe('testhandle');
+  } finally {
+    await context.close();
+  }
+});
+
+test('connectX still succeeds even when the best-effort username lookup fails', async () => {
+  const { context, extensionId } = await launch();
+  try {
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/popup.html`);
+
+    await page.evaluate(() => {
+      window.fetch = async () => { throw new Error('network unavailable'); };
+    });
+
+    const created = await page.evaluate(() => {
+      return new Promise((resolve) => {
+        chrome.permissions.request = (_req, cb) => cb(true);
+        chrome.cookies = { getAll: async (query) => query.domain === 'x.com' ? [{ name: 'ct0', value: 'csrf-token-value' }] : [] };
+        chrome.tabs.create = (opts) => { resolve(opts); return Promise.resolve({}); };
+        window.close = () => {};
+
+        document.querySelector('.platform-row[data-platform="x"]').click();
+      });
+    });
+
+    expect(created.url).toMatch(/dashboard-x\.html$/);
+    const localStored = await page.evaluate(() => chrome.storage.local.get(['x_username']));
+    expect(localStored.x_username).toBeUndefined();
   } finally {
     await context.close();
   }

@@ -65,9 +65,10 @@
           <div class="config-grid">
             <div class="panel-card filter-form">
               <h3 class="panel-title" data-i18n="dashSearchFilters">1. Search Filters</h3>
+              <p class="panel-subtitle" data-i18n="dashFilterDepthNote">Only a keyword filter is available here. Slack's dashboard also has sender, date range, attachments, and /regex/ filters.</p>
 
           <div class="form-group">
-            <label data-i18n="dashTextMatch">Text Filter (Optional)</label>
+            <label for="text-filter" data-i18n="dashTextMatchPlain">Text Filter (Optional — plain text, no /regex/)</label>
             <input type="text" id="text-filter" placeholder="Keyword or Phrase" data-i18n-ph="dashKeywordPlaceholder">
           </div>
 
@@ -101,6 +102,14 @@
                 <span data-i18n="dashStartDeleting">Start Deleting</span>
               </button>
             </div>
+          </div>
+
+          <div class="activity-log" id="sc-activity-log">
+            <button type="button" class="activity-log-toggle">
+              <span data-i18n="dashActivityLog">Activity Log</span>
+              <svg class="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </button>
+            <div class="activity-log-body"></div>
           </div>
         </div>
       </div>

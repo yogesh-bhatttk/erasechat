@@ -332,6 +332,11 @@
 .toggle-title { font-size: 13px; font-weight: 500; color: var(--text-primary); }
 .toggle-subtitle { font-size: 11px; color: var(--text-muted); }
 
+/* Small inline caption under a regular form field (e.g. the /regex/ convention
+   note under Text Match) -- same visual weight as .toggle-subtitle, just not
+   paired with a toggle. */
+.sc-field-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
 /* Switch ---------------------------------------------------------------- */
 .switch {
   position: relative;

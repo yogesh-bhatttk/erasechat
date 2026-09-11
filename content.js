@@ -71,8 +71,101 @@ function checkTextFilterPattern(textFilter) {
   return null;
 }
 
+// Pure: computes the [oldest, latest] Unix-timestamp scan window from the filter
+// panel's raw date-mode inputs. Kept at module scope (unlike readFilterFormState,
+// which stays DOM-coupled) so this arithmetic — the actual "how much history gets
+// swept" decision — is unit-tested directly (tests/content.test.js) instead of only
+// via manual QA, matching the audit finding that runScan's own inline version of
+// this had zero coverage.
+//
+// Returns { ok: true, oldest, latest } or { ok: false, error: "incomplete" | "invalid" }
+// -- runScan is responsible for turning that error into the right log line/alert;
+// this function never touches the DOM or i18n.
+function computeScanTimeRange(filterDate, { days, startVal, endVal } = {}, nowSec) {
+  const now = nowSec !== undefined ? nowSec : Math.floor(Date.now() / 1000);
+  let oldest = 0;
+  let latest = now;
+
+  if (filterDate === "older_than") {
+    const parsedDays = parseInt(days || "30", 10);
+    latest = Math.floor(now - parsedDays * 24 * 60 * 60);
+    return { ok: true, oldest, latest };
+  }
+
+  if (filterDate === "custom") {
+    // Both bounds are REQUIRED for a custom range. A blank field silently falling
+    // back to oldest=0/latest=now would quietly cover ALL history -- and the
+    // confirm dialog only shows a count, never the date range, so the user could
+    // delete far more than intended.
+    if (!startVal || !endVal) {
+      return { ok: false, error: "incomplete" };
+    }
+
+    // Parse both bounds in the SAME (local) frame. A bare "YYYY-MM-DD" is parsed
+    // as UTC midnight, while "YYYY-MM-DDTHH:MM:SS" is parsed as local time --
+    // mixing them skews the window by the UTC offset and can delete messages
+    // outside the range the user picked. Anchor start to local midnight.
+    const oldestTs = Math.floor(new Date(startVal + "T00:00:00").getTime() / 1000);
+    const latestTs = Math.floor(new Date(endVal + "T23:59:59").getTime() / 1000);
+
+    if (oldestTs > latestTs) {
+      return { ok: false, error: "invalid" };
+    }
+    return { ok: true, oldest: oldestTs, latest: latestTs };
+  }
+
+  return { ok: true, oldest, latest };
+}
+
+// Pure: builds the CSV content string for "Export Messages as CSV", including the
+// formula-injection defense (a cell starting with = + - @ is prefixed with a quote
+// so Excel/Sheets renders it as text rather than evaluating it) -- security-relevant
+// and, before this extraction, only ever exercised by manually clicking Export.
+function csvSafe(value) {
+  let s = String(value == null ? "" : value);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return s.replace(/"/g, '""').replace(/[\r\n]+/g, " ");
+}
+
+function buildMessagesCsv(scanResults, userCache) {
+  const csvHeader = "Timestamp,User,Text,ThreadReply,Time,Attachments\n";
+  const csvRows = scanResults.map(msg => {
+    const text = csvSafe(msg.text || "");
+    const user = csvSafe((userCache && userCache[msg.user]) || msg.user || "");
+    const fileCount = (msg.files || []).length;
+    return `"${csvSafe(msg.ts)}","${user}","${text}","${msg.isThreadReply ? "Yes" : "No"}","${csvSafe(msg.time)}","${fileCount}"`;
+  }).join("\n");
+  return csvHeader + csvRows;
+}
+
+// Pure: given the raw (string) data-idx values from every CHECKED result checkbox
+// and the CURRENT scanResults array, returns the messages to actually enqueue for
+// deletion -- silently dropping any index that's out of bounds or no longer
+// resolves to a real entry. This is the SC-BUG-03 stale-index guard: scanResults
+// can be modified/replaced between a scan finishing and the user clicking Delete,
+// so a checkbox's index must be re-validated against the array it's about to index
+// into, not trusted as still valid.
+function buildDeleteQueueFromIndices(rawIndices, scanResults) {
+  const queue = [];
+  for (const raw of rawIndices) {
+    const idx = parseInt(raw, 10);
+    if (idx >= 0 && idx < scanResults.length && scanResults[idx]) {
+      queue.push(scanResults[idx]);
+    }
+  }
+  return queue;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { matchesActiveWorkspaceChannel, isSafeRegexPreview, checkTextFilterPattern };
+  module.exports = {
+    matchesActiveWorkspaceChannel,
+    isSafeRegexPreview,
+    checkTextFilterPattern,
+    computeScanTimeRange,
+    csvSafe,
+    buildMessagesCsv,
+    buildDeleteQueueFromIndices
+  };
 }
 
 if (!window.slackCleanInitialized) {
@@ -799,7 +892,7 @@ if (!window.slackCleanInitialized) {
 
                   <!-- Filters Panel -->
                   <section class="panel-card">
-                    <h3 class="panel-title" data-i18n="dashFilterMatrix">Deletion Filter Matrix</h3>
+                    <h3 class="panel-title" data-i18n="dashFilterMatrix">Filters</h3>
                     <div class="filter-form">
                       <div class="form-group sc-preset-group">
                         <label for="sc-preset-select" data-i18n="dashPresetLabel">Saved Presets</label>
@@ -853,6 +946,7 @@ if (!window.slackCleanInitialized) {
                         <div class="form-group">
                           <label for="sc-filter-text" data-i18n="dashTextMatch">Text Match (Optional)</label>
                           <input type="text" id="sc-filter-text" data-i18n-ph="dashKeywordPlaceholder" placeholder="Keyword or Phrase">
+                          <p class="sc-field-hint" data-i18n="dashTextMatchRegexHint">Wrap in / / to use a regular expression, e.g. /ERR_\\d+/. Plain text otherwise.</p>
                           <label class="sc-inline-checkbox" for="sc-filter-invert-text">
                             <input type="checkbox" id="sc-filter-invert-text" aria-label="Invert text match: delete everything except matches">
                             <span data-i18n="dashInvertText">Invert: delete everything EXCEPT matches</span>
@@ -1010,7 +1104,7 @@ if (!window.slackCleanInitialized) {
         <!-- Safety Verification Modal -->
         <div class="verification-overlay hidden" id="sc-verify-modal" role="dialog" aria-modal="true" aria-labelledby="sc-verify-title">
           <div class="verification-card">
-            <h4 id="sc-verify-title" data-i18n="dashVerifyTitle">Critical Action Verification</h4>
+            <h4 id="sc-verify-title" data-i18n="dashVerifyTitle">Confirm Deletion</h4>
             <p class="sc-verify-desc">
               You are about to delete more than 100 messages (<span id="sc-verify-count-label">0</span> messages). To confirm this operation, type the word <strong class="sc-verify-emphasis">DELETE</strong> below:
             </p>
@@ -1592,8 +1686,24 @@ if (!window.slackCleanInitialized) {
       }
     }
 
-    // Attaches action listeners to injected components
+    // Attaches action listeners to injected components. Split into one function
+    // per concern (mechanical extraction only, no behavior change) so a merge
+    // conflict or review of one area (e.g. presets) doesn't have to wade through
+    // everything else this used to be one 350+ line function.
     function setupUIListeners() {
+      setupHeaderControls();
+      setupFilterControls();
+      setupScanDeleteControls();
+      setupSelectAllControl();
+      setupPresetControls();
+      setupConsoleControls();
+      setupVerifyModalControls();
+      setupThemeControls();
+      setupKeyboardNav();
+    }
+
+    // Minimize / maximize / close the dashboard overlay.
+    function setupHeaderControls() {
       const getEl = (id) => shadowRoot.getElementById(id);
 
       // Minimize Overlay View to bottom floating widget
@@ -1652,11 +1762,20 @@ if (!window.slackCleanInitialized) {
           }
         }, 300);
       }
+    }
 
-      // Date Filter Selector Toggles
+    // Date-range filter mode toggle (older-than / custom / all-time rows).
+    function setupFilterControls() {
+      const getEl = (id) => shadowRoot.getElementById(id);
+
       getEl("sc-filter-date").addEventListener("change", (e) => {
         updateDateFilterRows(e.target.value);
       });
+    }
+
+    // Scan / Delete (Start-Pause-Resume) / Cancel buttons.
+    function setupScanDeleteControls() {
+      const getEl = (id) => shadowRoot.getElementById(id);
 
       // Scan Button Event
       getEl("sc-btn-scan").addEventListener("click", () => {
@@ -1700,16 +1819,24 @@ if (!window.slackCleanInitialized) {
           }
         );
       });
+    }
 
-      // Select all checkboxes toggle
+    // Select-all checkbox above the scan results list.
+    function setupSelectAllControl() {
+      const getEl = (id) => shadowRoot.getElementById(id);
+
       getEl("sc-select-all").addEventListener("change", (e) => {
         const checked = e.target.checked;
         const checkboxes = shadowRoot.querySelectorAll(".msg-checkbox");
         checkboxes.forEach(cb => cb.checked = checked);
         updateScanBadgeCount();
       });
+    }
 
-      // Saved Filter Presets: load selection, save current filters, delete selected
+    // Saved filter presets: load selection, save current filters, delete selected.
+    function setupPresetControls() {
+      const getEl = (id) => shadowRoot.getElementById(id);
+
       getEl("sc-preset-select").addEventListener("change", async (e) => {
         const presetId = e.target.value;
         const delBtn = getEl("sc-btn-preset-delete");
@@ -1791,6 +1918,11 @@ if (!window.slackCleanInitialized) {
           }
         );
       });
+    }
+
+    // Clear/export the live execution log, and export scanned messages as CSV.
+    function setupConsoleControls() {
+      const getEl = (id) => shadowRoot.getElementById(id);
 
       // Clear Logs (using DOM construction instead of innerHTML for security)
       getEl("sc-btn-clear-logs").addEventListener("click", () => {
@@ -1812,7 +1944,7 @@ if (!window.slackCleanInitialized) {
         lines.forEach(l => {
           content += l.innerText + "\n";
         });
-        
+
         const blob = new Blob([content], { type: "text/plain" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -1826,24 +1958,7 @@ if (!window.slackCleanInitialized) {
       getEl("sc-btn-export-messages").addEventListener("click", () => {
         if (scanResults.length === 0) return;
 
-        // Neutralize CSV/formula injection: a cell starting with = + - @ (or a
-        // control char that a spreadsheet may treat as a formula lead-in) is
-        // prefixed with a single quote so Excel/Sheets renders it as text.
-        const csvSafe = (value) => {
-          let s = String(value == null ? "" : value);
-          if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
-          return s.replace(/"/g, '""').replace(/[\r\n]+/g, " ");
-        };
-
-        const csvHeader = "Timestamp,User,Text,ThreadReply,Time,Attachments\n";
-        const csvRows = scanResults.map(msg => {
-          const text = csvSafe(msg.text || "");
-          const user = csvSafe(userCache[msg.user] || msg.user || "");
-          const fileCount = (msg.files || []).length;
-          return `"${csvSafe(msg.ts)}","${user}","${text}","${msg.isThreadReply ? "Yes" : "No"}","${csvSafe(msg.time)}","${fileCount}"`;
-        }).join("\n");
-
-        const blob = new Blob([csvHeader + csvRows], { type: "text/csv;charset=utf-8" });
+        const blob = new Blob([buildMessagesCsv(scanResults, userCache)], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -1853,8 +1968,12 @@ if (!window.slackCleanInitialized) {
 
         logConsole(t("logExportedCsv", `Exported ${scanResults.length} messages to CSV.`, [String(scanResults.length)]), "info");
       });
+    }
 
-      // Safety Verification Modal Event Listeners
+    // The large-delete (type-DELETE-to-confirm) verification modal.
+    function setupVerifyModalControls() {
+      const getEl = (id) => shadowRoot.getElementById(id);
+
       getEl("sc-verify-input").addEventListener("input", (e) => {
         const confirmBtn = getEl("sc-verify-confirm-btn");
         confirmBtn.disabled = e.target.value.trim() !== "DELETE";
@@ -1871,16 +1990,20 @@ if (!window.slackCleanInitialized) {
         getEl("sc-verify-input").value = "";
         startDeletionProcess();
       });
+    }
 
-      // Hook up Theme Switchers
+    // Theme picker bubbles.
+    function setupThemeControls() {
       shadowRoot.querySelectorAll(".theme-bubble").forEach(btn => {
         btn.addEventListener("click", (e) => {
           const themeName = e.target.getAttribute("data-theme");
           setTheme(themeName);
         });
       });
+    }
 
-      // Keyboard focus trap inside Shadow DOM for Accessibility (a11y) compliance (Modal Scoped)
+    // Keyboard focus trap inside Shadow DOM for Accessibility (a11y) compliance (Modal Scoped)
+    function setupKeyboardNav() {
       shadowRoot.addEventListener("keydown", (e) => {
         if (dashboardEl && dashboardEl.classList.contains("minimized")) return;
 
@@ -1930,11 +2053,11 @@ if (!window.slackCleanInitialized) {
           const focusableSelectors = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
           const focusables = Array.from(containerEl.querySelectorAll(focusableSelectors));
           if (focusables.length === 0) return;
-          
+
           const firstEl = focusables[0];
           const lastEl = focusables[focusables.length - 1];
           const activeEl = shadowRoot.activeElement;
-          
+
           if (e.shiftKey) { // Shift + Tab
             if (activeEl === firstEl || !focusables.includes(activeEl)) {
               lastEl.focus();
@@ -1949,6 +2072,7 @@ if (!window.slackCleanInitialized) {
         }
       });
     }
+
 
     // Scans conversation history using filters delegated to background service worker
     async function runScan() {
@@ -1997,48 +2121,25 @@ if (!window.slackCleanInitialized) {
         showCustomAlert("Text Filter Pattern Rejected", warnMsg);
       }
 
-      let oldest = 0;
-      let latest = Math.floor(Date.now() / 1000);
-
-      // Compute timestamp ranges dynamically
-      if (filterDate === "older_than") {
-        const days = parseInt(shadowRoot.getElementById("sc-filter-days").value || "30", 10);
-        latest = Math.floor(Date.now() / 1000 - days * 24 * 60 * 60);
-      } else if (filterDate === "custom") {
-        const startVal = shadowRoot.getElementById("sc-filter-start-date").value;
-        const endVal = shadowRoot.getElementById("sc-filter-end-date").value;
-
-        // Both bounds are REQUIRED for a custom range. Previously a blank field
-        // silently fell back to oldest=0 / latest=now, so the scan quietly
-        // covered ALL history — and the confirm dialog only shows a count, never
-        // the date range, so the user could delete far more than intended.
-        if (!startVal || !endVal) {
+      const rangeResult = computeScanTimeRange(filterDate, {
+        days: shadowRoot.getElementById("sc-filter-days").value,
+        startVal: shadowRoot.getElementById("sc-filter-start-date").value,
+        endVal: shadowRoot.getElementById("sc-filter-end-date").value
+      });
+      if (!rangeResult.ok) {
+        if (rangeResult.error === "incomplete") {
           logConsole(t("logDateRangeIncomplete", "Error: Custom date range requires both a start and an end date."), "error");
           showCustomAlert(t("modalIncompleteDateRangeTitle", "Incomplete Date Range"), t("modalIncompleteDateRangeMsg", "Please choose both a Start Date and an End Date for a custom range."));
-          scanBtn.disabled = false;
-          scanBtn.innerText = t("dashScan", "Scan Messages");
-          toggleInputs(false);
-          return;
-        }
-
-        // Parse both bounds in the SAME (local) frame. A bare "YYYY-MM-DD" is
-        // parsed as UTC midnight, while "YYYY-MM-DDTHH:MM:SS" is parsed as local
-        // time — mixing them skews the window by the UTC offset and can delete
-        // messages outside the range the user picked. Anchor start to local midnight.
-        const oldestTs = Math.floor(new Date(startVal + "T00:00:00").getTime() / 1000);
-        const latestTs = Math.floor(new Date(endVal + "T23:59:59").getTime() / 1000);
-
-        if (oldestTs > latestTs) {
+        } else {
           logConsole(t("logDateRangeInvalid", "Error: Start Date cannot be after End Date."), "error");
           showCustomAlert(t("modalInvalidDateRangeTitle", "Invalid Date Range"), t("modalInvalidDateRangeMsg", "Start Date must be before or equal to End Date."));
-          scanBtn.disabled = false;
-          scanBtn.innerText = t("dashScan", "Scan Messages");
-          toggleInputs(false);
-          return;
         }
-        oldest = oldestTs;
-        latest = latestTs;
+        scanBtn.disabled = false;
+        scanBtn.innerText = t("dashScan", "Scan Messages");
+        toggleInputs(false);
+        return;
       }
+      const { oldest, latest } = rangeResult;
 
       scanResults = [];
       logConsole(t("logQuerying", "Querying Slack APIs in background..."), "info");
@@ -2133,7 +2234,21 @@ if (!window.slackCleanInitialized) {
             ? t("logScanCappedNote", " (5,000-result limit reached — narrow your filters for more)")
             : (moreAvailable ? t("logScanMoreNote", " (scan depth limit reached — older messages were NOT examined)") : "");
           logConsole(t("logScanComplete", `Scan complete. Matches found: ${scanResults.length}`, [String(scanResults.length)]) + note, truncated ? "warn" : "info");
-          
+
+          // Advisory only, same rationale/scope as the pre-scan pattern-safety warning
+          // above (deliberately not routed through t() -- see that comment): a valid
+          // /regex/ filter only ever runs against the first 300 characters of a
+          // message's filterable text (shared-filters.js's MAX_REGEX_INPUT, a hard
+          // ReDoS backstop). That cap can silently under-match ordinary long messages
+          // with no indication anything was skipped, so report it when it actually
+          // happened rather than leaving it undiscoverable.
+          if (response.regexTruncatedCount > 0) {
+            logConsole(
+              `Note: your /regex/ text filter only checks the first 300 characters of a message (a fixed safety limit). ${response.regexTruncatedCount} scanned message(s) were longer than that, so a match past character 300 would have been missed.`,
+              "warn"
+            );
+          }
+
           // Pre-fetch any unknown users so the UI renders real names instead of raw IDs
           const unknownUsers = new Set();
           scanResults.forEach(msg => {
@@ -2353,14 +2468,10 @@ if (!window.slackCleanInitialized) {
     function handleDeleteClick() {
       if (!isRunning) {
         const checkboxes = shadowRoot.querySelectorAll(".msg-checkbox:checked");
-        deleteQueue = [];
-        checkboxes.forEach(cb => {
-          const idx = parseInt(cb.getAttribute("data-idx"), 10);
-          // Guard against stale indices if scanResults was modified between scan and delete (SC-BUG-03)
-          if (idx >= 0 && idx < scanResults.length && scanResults[idx]) {
-            deleteQueue.push(scanResults[idx]);
-          }
-        });
+        const rawIndices = Array.from(checkboxes).map(cb => cb.getAttribute("data-idx"));
+        // Guard against stale indices if scanResults was modified between scan and
+        // delete (SC-BUG-03) -- see buildDeleteQueueFromIndices.
+        deleteQueue = buildDeleteQueueFromIndices(rawIndices, scanResults);
 
         if (deleteQueue.length === 0) return;
 
@@ -2635,6 +2746,10 @@ if (!window.slackCleanInitialized) {
     }
 
     // Convert member strings to HSL matching colors
+    // KEEP THIS IN SYNC WITH shared-filters.js's stringToColor(). Duplicated (rather
+    // than shared) because this is a content script, isolated from the background
+    // worker's own copy -- purely cosmetic (avatar color), so a drift here would only
+    // ever produce a wrong color, never a wrong delete.
     function stringToColor(str) {
       if (!str) return "#8B5CF6";
       let hash = 0;

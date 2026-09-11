@@ -61,6 +61,12 @@ const PLATFORMS = [
       { id: "instance-url", label: "Instance URL", type: "text", placeholder: "mastodon.social" },
       { id: "access-token", label: "Access Token", type: "password", placeholder: "Personal access token" }
     ],
+    // Generating a token means leaving the popup entirely for the instance's own
+    // Settings -> Development -> New Application flow -- unlike Telegram's
+    // equivalent inline hint, this form had none at all, so a first-time user had
+    // no way to discover what to do here without already knowing Mastodon's own UI.
+    formHelpKey: "popupMastodonTokenHint",
+    formHelpFallback: "No token yet? On your instance, go to Settings → Development → New application, check the read and write scopes, then Save and paste the generated token here.",
     resolveOrigin: (values) => {
       let host = (values["instance-url"] || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
       // A raw Unicode/IDN hostname (e.g. "münchen.social", typed or pasted

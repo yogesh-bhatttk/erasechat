@@ -581,6 +581,40 @@ test("queueKeyFor: job-progress and queue keys never collide across channels", (
   assert.ok(!a.startsWith("slack_state_"));
 });
 
+test("parseJobKey: recovers teamId/channelId from a real slack_state_ key", () => {
+  const { context } = loadBackground();
+  const parseJobKey = vm.runInContext("parseJobKey", context);
+
+  // Field-by-field, not deepStrictEqual: the vm-realm object's prototype differs
+  // from this realm's plain-object literal, which deepStrictEqual treats as
+  // unequal even when every own property matches (see the runScanInBg tests
+  // above for the same re-homing gotcha).
+  const result = parseJobKey("slack_state_T123_C456");
+  assert.strictEqual(result.teamId, "T123");
+  assert.strictEqual(result.channelId, "C456");
+});
+
+test("parseJobKey: rejects a key with the wrong number of underscore-delimited parts instead of misattributing an ID", () => {
+  const { context } = loadBackground();
+  const parseJobKey = vm.runInContext("parseJobKey", context);
+
+  // Only Slack IDs are alphanumeric today, so this is a defensive/theoretical guard
+  // rather than a reachable real-world case -- but if a team or channel ID ever DID
+  // contain an underscore, a bare split+fixed-index read would silently drop part
+  // of it (or attribute the wrong segment) instead of failing closed like this does.
+  assert.strictEqual(parseJobKey("slack_state_T123_C456_extra"), null);
+  assert.strictEqual(parseJobKey("slack_state_T123"), null);
+  assert.strictEqual(parseJobKey("slack_state_"), null);
+});
+
+test("parseJobKey: rejects a key whose team/channel segments aren't alphanumeric (not a real Slack ID shape)", () => {
+  const { context } = loadBackground();
+  const parseJobKey = vm.runInContext("parseJobKey", context);
+
+  assert.strictEqual(parseJobKey("slack_state_T-123_C456"), null);
+  assert.strictEqual(parseJobKey("slack_state_T123_C 456"), null);
+});
+
 test("GET_JOB_STATUS: returns otherJob if there is a job in another channel", async () => {
   const { handlers, context } = loadBackground();
   const activeJobs = vm.runInContext("activeJobs", context);
@@ -848,6 +882,92 @@ test("executeQueue: channel_not_found (a structural error not in the original ha
   assert.strictEqual(activeJobs[key].stats.fail, 0);
 });
 
+test("executeQueue: a transient network error retries the SAME item without advancing, then succeeds on the next tick", async () => {
+  let deleteCalls = 0;
+  const stub = makeSlackFetch({
+    "chat.delete": () => {
+      deleteCalls++;
+      if (deleteCalls === 1) throw new Error("simulated network blip");
+      return { ok: true };
+    }
+  });
+
+  const { context } = loadBackground({ fetchImpl: stub.fetch });
+  const activeJobs = vm.runInContext("activeJobs", context);
+  const key = "slack_state_T1_C1";
+  activeJobs[key] = {
+    teamId: "T1",
+    channelId: "C1",
+    token: "xoxc-test",
+    isRunning: true,
+    isPaused: false,
+    deleteQueue: [{ ts: "1", time: "t1", action: "delete" }],
+    deleteIndex: 0,
+    stats: { success: 0, fail: 0, skipped: 0, total: 1 }
+  };
+  // Captured up front: executeQueue deletes activeJobs[key] once the (1-item)
+  // queue is exhausted, but this object reference stays valid for assertions.
+  const job = activeJobs[key];
+
+  const executeQueue = vm.runInContext("executeQueue", context);
+
+  await executeQueue(key); // 1st attempt: network_error -> retry scheduled
+  assert.strictEqual(job.deleteIndex, 0, "must not advance past the item on a transient failure");
+  assert.strictEqual(job._transientRetries, 1);
+  assert.strictEqual(job.isRunning, true, "job stays running -- this is a per-item retry, not a pause");
+  // The scheduled retry (a real setTimeout under SETTIMEOUT_MAX_MS) is simulated
+  // by calling executeQueue again directly below rather than waiting it out; clear
+  // it so it doesn't also fire for real ~3s later and needlessly keep the test
+  // process alive.
+  clearTimeout(job._timer);
+
+  await executeQueue(key); // 2nd attempt (simulating the scheduled retry firing): succeeds
+  assert.strictEqual(deleteCalls, 2);
+  assert.strictEqual(job.stats.success, 1);
+  assert.strictEqual(job.stats.fail, 0);
+  assert.strictEqual(job.isRunning, false, "queue is now exhausted (1 item, now processed)");
+});
+
+test("executeQueue: a transient error exhausting MAX_TRANSIENT_RETRIES is counted as a genuine failure and the queue advances past it", async () => {
+  const stub = makeSlackFetch({
+    "chat.delete": () => { throw new Error("persistent network failure"); }
+  });
+
+  const { context } = loadBackground({ fetchImpl: stub.fetch });
+  const activeJobs = vm.runInContext("activeJobs", context);
+  const key = "slack_state_T1_C1";
+  activeJobs[key] = {
+    teamId: "T1",
+    channelId: "C1",
+    token: "xoxc-test",
+    isRunning: true,
+    isPaused: false,
+    deleteQueue: [{ ts: "1", time: "t1", action: "delete" }],
+    deleteIndex: 0,
+    stats: { success: 0, fail: 0, skipped: 0, total: 1 }
+  };
+  // Captured up front: executeQueue deletes activeJobs[key] once the (1-item)
+  // queue is exhausted, but this object reference stays valid for assertions.
+  const job = activeJobs[key];
+
+  const executeQueue = vm.runInContext("executeQueue", context);
+  const MAX_TRANSIENT_RETRIES = vm.runInContext("MAX_TRANSIENT_RETRIES", context);
+
+  // One tick per retry attempt, plus one more to exceed the cap and give up. Each
+  // call simulates that tick's scheduled retry firing, so clear the real timer
+  // scheduleNextStep armed on the prior tick before simulating the next one --
+  // otherwise it fires for real ~3s later, needlessly keeping the test process
+  // alive (harmless in production: real ticks are separated by the timer
+  // actually firing, so there's never more than one pending at once there).
+  for (let i = 0; i < MAX_TRANSIENT_RETRIES + 1; i++) {
+    clearTimeout(job._timer);
+    await executeQueue(key);
+  }
+
+  assert.strictEqual(job.stats.fail, 1, "must be counted as a failure once retries are exhausted");
+  assert.strictEqual(job.isRunning, false, "queue is exhausted (1 item, now resolved as a failure)");
+});
+
 test("START_DELETION: refuses to overwrite an existing PAUSED job's queue/progress", async () => {
   const { handlers, context } = loadBackground();
   const activeJobs = vm.runInContext("activeJobs", context);
@@ -924,10 +1044,21 @@ test("SET_SESSION: reports success once the session-storage write actually resol
   assert.strictEqual(res.success, true);
 });
 
-test("slackAPICallWithRetry (via runScanInBg): a very long Retry-After fails fast instead of an uncapped wait", async () => {
+test("slackAPICallWithRetry (via runScanInBg): a very long Retry-After fails fast and returns partial results, not an uncapped wait or a thrown error", async () => {
+  let historyCalls = 0;
   const fetchImpl = async (url) => {
     const endpoint = String(url).split("/api/")[1];
     if (endpoint === "conversations.history") {
+      historyCalls++;
+      if (historyCalls === 1) {
+        // First page succeeds and returns a real message -- proves this isn't
+        // discarded once the SECOND page hits an unsafe-to-wait rate limit.
+        return {
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({ ok: true, messages: [{ ts: "100.000", user: "U1", text: "hi" }], response_metadata: { next_cursor: "cursor1" } })
+        };
+      }
       return {
         status: 429,
         // Far beyond SETTIMEOUT_MAX_MS (25s) — the exact case where an uncapped
@@ -943,13 +1074,16 @@ test("slackAPICallWithRetry (via runScanInBg): a very long Retry-After fails fas
   const runScanInBg = vm.runInContext("runScanInBg", context);
 
   const start = Date.now();
-  await assert.rejects(
-    runScanInBg("xoxc-test", {
-      channelId: "C123", oldest: 0, latest: 9999999999, includeThreads: false,
-      filterSender: "all", filterText: "", onlyAttachments: false, userId: "U1"
-    }),
-    /rate_limited_too_long/
-  );
+  const scan = await runScanInBg("xoxc-test", {
+    channelId: "C123", oldest: 0, latest: 9999999999, includeThreads: false,
+    filterSender: "all", filterText: "", onlyAttachments: false, userId: "U1"
+  });
   const elapsedMs = Date.now() - start;
+
   assert.ok(elapsedMs < 2000, `must fail fast, not actually wait ~9999s (took ${elapsedMs}ms)`);
+  // The first page's message must survive -- a late rate limit must not discard
+  // everything already gathered.
+  assert.deepStrictEqual(Array.from(scan.results, r => r.ts), ["100.000"]);
+  assert.strictEqual(scan.moreAvailable, true, "must honestly report the scan stopped early");
+  assert.strictEqual(scan.capped, false);
 });

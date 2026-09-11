@@ -61,7 +61,11 @@ async function connectTeams() {
   // been observed by the background listener. The storage check above then opens the
   // dashboard immediately on that next open.
   chrome.tabs.create({ url: "https://teams.microsoft.com/", active: false });
-  return { ok: false, message: hint };
+  // pending: true tells popup.js this is step 2 of 2, not a failure -- Teams has no
+  // login form/session cookie of its own, so "ok: false" alone would otherwise be
+  // indistinguishable from every other platform's genuine connect failure and get
+  // styled/read as an error (see showPlatformConnectError's isHint option).
+  return { ok: false, pending: true, message: hint };
 }
 
 if (typeof module !== "undefined" && module.exports) {

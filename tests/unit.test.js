@@ -290,6 +290,25 @@ test('qualifies: the heuristic-bypassing pattern above now executes in bounded t
   }
 });
 
+test('qualifies: a valid regex match past MAX_REGEX_INPUT increments the optional truncationStats counter', () => {
+  // The MAX_REGEX_INPUT backstop above is a silent under-match unless something
+  // reports it happened -- background.js's scan loop opts in via
+  // options.truncationStats so content.js can warn the user (see CHANGELOG).
+  const longMsg = { ts: '1', user: CURRENT_USER, text: 'x'.repeat(400) };
+  const shortMsg = { ts: '2', user: CURRENT_USER, text: 'x'.repeat(50) };
+
+  const stats = { count: 0 };
+  qualifies(longMsg, CURRENT_USER, 'all', '/y/', false, { truncationStats: stats });
+  assert.equal(stats.count, 1, 'a message longer than MAX_REGEX_INPUT must be counted');
+
+  qualifies(shortMsg, CURRENT_USER, 'all', '/y/', false, { truncationStats: stats });
+  assert.equal(stats.count, 1, 'a message at/under MAX_REGEX_INPUT must not be counted');
+
+  // No options/truncationStats passed at all (every other caller, and every existing
+  // test above this one) must behave exactly as before -- no throw, no side effect.
+  assert.doesNotThrow(() => qualifies(longMsg, CURRENT_USER, 'all', '/y/', false));
+});
+
 test('qualifies: empty-string-matching regex selects NOTHING (never the whole channel)', () => {
   const unrelated = { ts: '1', user: 'U_OTHER', text: 'totally unrelated message' };
   // These all match "" -> would otherwise qualify every message (mass over-delete).
