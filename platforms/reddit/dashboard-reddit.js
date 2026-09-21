@@ -6,13 +6,22 @@
 // telling a comment from a post, applying the text filter -- is unit-tested
 // directly instead of only reachable through a live scan. See
 // tests/reddit-dashboard.test.js.
-function extractRedditItemsFromChildren(children, filterText) {
+function extractRedditItemsFromChildren(children, filterText, seenIds) {
   const results = [];
   for (const child of children) {
     const item = child.data;
     // Skip items that are already deleted/removed -- nothing left to clean up.
     if (!item || !item.name) continue; // e.g. a "more"-type stub child, not a real post/comment
     if (item.author === '[deleted]' || item.removed_by_category) continue;
+    // Defensive de-dup: without this, a repeated/overlapping `after` page (a
+    // stuck cursor, or new activity shifting the listing mid-scan -- Deep Scan
+    // can run up to 1000 pages) shows the same post/comment twice, inflating
+    // "N items found" and issuing a redundant delete request for it later.
+    // Mirrors dashboard-x.js's seenTweetIds guard.
+    if (seenIds) {
+      if (seenIds.has(item.name)) continue;
+      seenIds.add(item.name);
+    }
     const isComment = item.name.startsWith('t1_');
     const text = isComment ? item.body : item.title;
     if (filterText && !(text || '').toLowerCase().includes(filterText)) continue;
@@ -115,6 +124,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     try {
       let after = '';
       let pageCount = 0;
+      const seenIds = new Set();
       const MAX_PAGES = isDeepScan ? 1000 : 10; // ~25 items per page
 
       while (pageCount < MAX_PAGES) {
@@ -134,7 +144,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         const children = resJson.data?.children || [];
         if (children.length === 0) break;
 
-        currentResults.push(...extractRedditItemsFromChildren(children, filterText));
+        currentResults.push(...extractRedditItemsFromChildren(children, filterText, seenIds));
         
         after = resJson.data.after;
         if (!after) break;
@@ -226,12 +236,17 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       });
       deletedCount = result.deletedCount;
       failures = result.failures;
-      const { processedItems, expiredAuth, cancelled } = result;
+      const { succeededItems, expiredAuth, cancelled } = result;
 
-      // Anything scanned but not selected, plus anything selected but never
-      // reached because a cancel/expired-auth break happened early, stays
-      // visible -- only items actually attempted are removed from view.
-      currentResults = currentResults.filter(item => !processedItems.includes(item));
+      // Anything scanned but not selected, anything selected but never reached
+      // because a cancel/expired-auth break happened early, AND anything that
+      // was attempted but failed to delete all stay visible -- only items
+      // actually deleted are removed from view, so a failed delete never looks
+      // indistinguishable from a successful one. A Set lookup here (rather than
+      // Array#includes) keeps this O(n) instead of O(n^2) -- succeededItems is
+      // typically most/all of currentResults on a normal run.
+      const succeededSet = new Set(succeededItems);
+      currentResults = currentResults.filter(item => !succeededSet.has(item));
       if (currentResults.length > 0) {
         renderResultRows(currentResults);
       } else {
@@ -260,7 +275,19 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       }
       if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
     } catch (err) {
-      const progress = err.deleteLoopProgress || { deletedCount };
+      const progress = err.deleteLoopProgress || { deletedCount, succeededItems: [] };
+      // Prune whatever succeeded before the throw, mirroring the normal-completion
+      // path above -- otherwise an aborted run (e.g. service-worker restart,
+      // storage error) leaves already-deleted items checked and re-submittable
+      // on the next Delete click.
+      const succeededSet = new Set(progress.succeededItems || []);
+      currentResults = currentResults.filter(item => !succeededSet.has(item));
+      if (currentResults.length > 0) {
+        renderResultRows(currentResults);
+      } else {
+        renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+      }
+      resultsCount.textContent = formatScanCount(currentResults.length, { truncated: false });
       console.error("Reddit delete loop stopped unexpectedly:", err);
       logActivity('sc-activity-log', `Delete stopped unexpectedly: ${err.message}`, 'error');
       await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${progress.deletedCount} of ${totalCount} items were deleted before this happened.`);

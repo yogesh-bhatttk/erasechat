@@ -62,7 +62,10 @@ function makeChrome({ flavor = "chrome" } = {}) {
     },
     tabs: {
       query: (_q, cb) => cb([]),
-      sendMessage: (_id, _msg, cb) => { if (cb) cb(); }
+      sendMessage: (_id, _msg, cb) => { if (cb) cb(); },
+      onCreated: event("tabs.onCreated"),
+      onRemoved: event("tabs.onRemoved"),
+      onUpdated: event("tabs.onUpdated")
     }
   };
 

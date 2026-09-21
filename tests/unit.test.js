@@ -436,6 +436,26 @@ test('qualifies: invertText=true STILL selects nothing for a degenerate empty-ma
   }
 });
 
+test('qualifies: invertText=true STILL selects nothing when the pattern is unsafe (ReDoS) or invalid regex', () => {
+  // An unsafe/invalid pattern falls back to a literal substring match against the
+  // raw regex SOURCE text, which almost never matches real messages. In normal
+  // mode that's a safe under-match, but inverting it would otherwise flip into
+  // "delete virtually everything" for a very ordinary mistake (a ReDoS-shaped
+  // pattern, or a simple typo like an unbalanced bracket) — the same whole-channel
+  // wipe the degenerate-empty-pattern guard above exists to prevent.
+  const messages = [
+    { ts: '1', user: CURRENT_USER, text: 'totally unrelated message' },
+    { ts: '2', user: CURRENT_USER, text: 'another ordinary message' },
+    { ts: '3', user: CURRENT_USER, text: 'yet another one' },
+  ];
+  for (const pat of ['/(a+)+/', '/[unclosed/']) {
+    for (const msg of messages) {
+      assert.equal(qualifies(msg, CURRENT_USER, 'all', pat, false, { invertText: true }), false,
+        `inverted unsafe/invalid pattern ${pat} must still select nothing (got a match on "${msg.text}")`);
+    }
+  }
+});
+
 // ============================================================
 // decideItemAction — trim (preserve text) vs full delete
 // (regression coverage for the attachment-mode data-loss fix)

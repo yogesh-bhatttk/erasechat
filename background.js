@@ -681,7 +681,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         broadcastJobUpdate(job);
         maybeClearWatchdog();
       }
-      sendResponse({ success: true });
+      // No job at this key is not success: a caller (e.g. a stale/mismatched
+      // teamId after a workspace switch) needs to know its Pause did nothing,
+      // not be told it worked while the real job keeps running elsewhere.
+      sendResponse({ success: !!job });
     })();
     return true;
   }
@@ -707,7 +710,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         ensureWatchdog();
         scheduleNextStep(key, 0);
       }
-      sendResponse({ success: true });
+      sendResponse({ success: !!job });
     })();
     return true;
   }
@@ -735,7 +738,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         maybeClearWatchdog();
       }
-      sendResponse({ success: true });
+      sendResponse({ success: !!job });
     })();
     return true;
   }
@@ -1267,7 +1270,7 @@ async function executeQueue(key) {
 
     const msg = job.deleteQueue[job.deleteIndex];
     const action = itemAction(msg);
-    const response = await executeQueueItem(job, msg, action);
+    let response = await executeQueueItem(job, msg, action);
 
     // The job may have been CANCELLED (activeJobs entry deleted) OR REPLACED by a
     // fresh START_DELETION for the same key while we were awaiting the API call above.
@@ -1366,11 +1369,39 @@ async function executeQueue(key) {
   }
 }
 
+// Cache of open Slack tab ids, refreshed via chrome.tabs.onCreated/onRemoved/
+// onUpdated instead of a fresh chrome.tabs.query() IPC round-trip on every call --
+// executeQueue calls sendLogMessage + broadcastJobUpdate for EVERY delete-queue
+// item, so an uncached query here doubles the IPC cost of the whole job (a
+// 5,000-item run would otherwise issue ~10,000 tabs.query calls). Invalidated
+// (not incrementally updated) on any tab change so the next call always requeries
+// fresh rather than risk drifting from the real tab set.
+let slackTabIdsCache = null; // number[] | null (null = needs a fresh query)
+function invalidateSlackTabIdsCache() {
+  slackTabIdsCache = null;
+}
+chrome.tabs.onCreated.addListener(invalidateSlackTabIdsCache);
+chrome.tabs.onRemoved.addListener(invalidateSlackTabIdsCache);
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url) invalidateSlackTabIdsCache();
+});
+
+function getSlackTabIds(callback) {
+  if (slackTabIdsCache) {
+    callback(slackTabIdsCache);
+    return;
+  }
+  chrome.tabs.query({ url: "https://*.slack.com/*" }, (tabs) => {
+    slackTabIdsCache = tabs.map(tab => tab.id);
+    callback(slackTabIdsCache);
+  });
+}
+
 // Scoped state sync broadcasts
 function broadcastJobUpdate(job) {
-  chrome.tabs.query({ url: "https://*.slack.com/*" }, (tabs) => {
-    tabs.forEach(tab => {
-      chrome.tabs.sendMessage(tab.id, {
+  getSlackTabIds((tabIds) => {
+    tabIds.forEach(tabId => {
+      chrome.tabs.sendMessage(tabId, {
         type: "JOB_UPDATE",
         job: {
           teamId: job.teamId,
@@ -1390,9 +1421,9 @@ function broadcastJobUpdate(job) {
 }
 
 function broadcastRateLimit(job, pauseTime) {
-  chrome.tabs.query({ url: "https://*.slack.com/*" }, (tabs) => {
-    tabs.forEach(tab => {
-      chrome.tabs.sendMessage(tab.id, {
+  getSlackTabIds((tabIds) => {
+    tabIds.forEach(tabId => {
+      chrome.tabs.sendMessage(tabId, {
         type: "JOB_RATELIMIT",
         teamId: job.teamId,
         channelId: job.channelId,
@@ -1419,9 +1450,9 @@ function sendLogMessage(job, message, type = "info") {
   const prefixMap = { info: "[INFO]", warn: "[WARN]", error: "[ERROR]" };
   const prefix = prefixMap[type] || "[INFO]";
   const prefixedMessage = message.startsWith("[") ? message : `${prefix} ${message}`;
-  chrome.tabs.query({ url: "https://*.slack.com/*" }, (tabs) => {
-    tabs.forEach(tab => {
-      chrome.tabs.sendMessage(tab.id, {
+  getSlackTabIds((tabIds) => {
+    tabIds.forEach(tabId => {
+      chrome.tabs.sendMessage(tabId, {
         type: "JOB_LOG",
         teamId: job.teamId,
         channelId: job.channelId,

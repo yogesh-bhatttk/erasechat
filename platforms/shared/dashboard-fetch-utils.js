@@ -8,14 +8,28 @@
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
 async function fetchWithRetry(url, options = {}, maxRetries = 3) {
+  let lastBadResponse = null;
   for (let i = 0; i < maxRetries; i++) {
     try {
       const res = await fetch(url, options);
       if (res.ok) return res;
-      if (res.status >= 500 || res.status === 429) throw new Error(`Rate limit or Server error (${res.status})`);
+      if (res.status >= 500 || res.status === 429) {
+        lastBadResponse = res;
+        throw new Error(`Rate limit or Server error (${res.status})`);
+      }
       return res;
     } catch (err) {
-      if (i === maxRetries - 1) throw err;
+      if (i === maxRetries - 1) {
+        // Retries exhausted. A persistent bad-status response (429/5xx, not a
+        // network-level failure) must be returned, not thrown as a bare Error --
+        // every apiFetch() caller's status-specific branching (401 re-auth
+        // detection, Teams' token-refresh-and-retry, X's staleQueryId sniffing)
+        // lives inside `if (!response.ok) {...}` and needs the real Response
+        // object to run at all. A true network failure (fetch() itself threw --
+        // offline, DNS, CORS) has no Response to fall back to, so it still throws.
+        if (lastBadResponse) return lastBadResponse;
+        throw err;
+      }
       await delay(Math.pow(2, i) * 1000);
     }
   }
@@ -567,6 +581,13 @@ async function runDeleteLoop(selected, {
   let deletedCount = 0;
   const failures = [];
   const processedItems = [];
+  // Distinct from processedItems: only items that were ACTUALLY deleted. A caller
+  // that removed processedItems from its visible results would make a failed
+  // delete (e.g. a transient 5xx that exhausted fetchWithRetry) disappear from
+  // the list exactly as if it had succeeded, with no way to find and retry it
+  // short of a full rescan -- the `failures` array alone isn't enough to
+  // reconstruct that mapping, since it only stores bare ids/messages.
+  const succeededItems = [];
   let expiredAuth = false;
 
   // Everything in this function besides deleteItem() itself is wrapped in one
@@ -592,12 +613,18 @@ async function runDeleteLoop(selected, {
       try {
         await deleteItem(item);
         deletedCount++;
+        succeededItems.push(item);
       } catch (err) {
         failures.push({ id: item.id, message: err.message, error: err });
         if (err.expiredAuth) {
           expiredAuth = true;
           break;
         }
+        // A caller-flagged systemic failure (e.g. dashboard-x.js's staleQueryId:
+        // the API signature itself is wrong, not this particular item) will
+        // recur identically on every remaining item. Stop instead of burning
+        // through the whole batch one failure at a time at full pacing.
+        if (err.staleQueryId) break;
       }
 
       progressText.textContent = failures.length > 0
@@ -612,11 +639,11 @@ async function runDeleteLoop(selected, {
 
     await chrome.storage.local.remove([progressKey]);
   } catch (err) {
-    err.deleteLoopProgress = { deletedCount, failures, processedItems, expiredAuth, cancelled: cancelController.cancelled, totalCount };
+    err.deleteLoopProgress = { deletedCount, failures, processedItems, succeededItems, expiredAuth, cancelled: cancelController.cancelled, totalCount };
     throw err;
   }
 
-  return { deletedCount, failures, processedItems, expiredAuth, cancelled: cancelController.cancelled, totalCount };
+  return { deletedCount, failures, processedItems, succeededItems, expiredAuth, cancelled: cancelController.cancelled, totalCount };
 }
 
 // Export for Node (tests/lint); in a dashboard page these stay plain globals, shared

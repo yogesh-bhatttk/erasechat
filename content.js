@@ -289,13 +289,24 @@ if (!window.slackCleanInitialized) {
       if (request.type === "GET_WORKSPACE_INFO") {
         const info = getActiveTeamInfo();
         if (info) {
-          activeTeam = info.team;
-          // Send token securely to background for memory caching
-          chrome.runtime.sendMessage({
-            type: "SET_SESSION",
-            teamId: activeTeam.id,
-            token: activeTeam.token
-          });
+          // Mirror handleUrlChange's drift protection: a job that is running or
+          // paused is bound to activeTeam, and every operation (Pause/Resume/
+          // Cancel) keys off that variable. GET_WORKSPACE_INFO is polled by the
+          // popup on every open purely to display a label — it must not silently
+          // rebind activeTeam to whatever workspace the tab's URL currently shows,
+          // or a Pause/Resume/Cancel click right after would target the wrong
+          // workspace's job while the real one keeps running unseen. Only adopt
+          // the freshly-read team when nothing is pinned, or it's the same team.
+          const pinned = (isRunning || isPaused) && activeTeam;
+          if (!pinned || !info.team || info.team.id === activeTeam.id) {
+            activeTeam = info.team;
+            // Send token securely to background for memory caching
+            chrome.runtime.sendMessage({
+              type: "SET_SESSION",
+              teamId: activeTeam.id,
+              token: activeTeam.token
+            });
+          }
           sendResponse({ workspaceName: info.team.name });
         } else {
           sendResponse({ workspaceName: "Slack Web Client" });
@@ -305,7 +316,16 @@ if (!window.slackCleanInitialized) {
         sendResponse({ success: true });
       } else if (request.type === "JOB_UPDATE") {
         if (matchesActiveWorkspaceChannel(request.job.channelId, request.job.teamId, activeChannel, activeTeam)) {
-          isRunning = request.job.isRunning;
+          // background.js's convention sets isRunning=false alongside isPaused=true
+          // on every pause path (manual, drift-guard, rate-limit, auth-error -- see
+          // its PAUSE_DELETION handler). content.js's own convention is different:
+          // isRunning stays true while paused, with isPaused as the sub-state that
+          // syncButtonStates()/toggleInputs()/handleUrlChange's drift guard all key
+          // off to distinguish "actively running" from "paused but still bound".
+          // Translate at the boundary instead of copying background's flag as-is --
+          // otherwise a paused job gets locally mislabeled as "no job" (button shows
+          // "Start Deleting", inputs re-enable, workspace drift guard stands down).
+          isRunning = request.job.isRunning || request.job.isPaused;
           isPaused = request.job.isPaused;
           deleteIndex = request.job.deleteIndex;
           stats = request.job.stats;
@@ -1323,7 +1343,11 @@ if (!window.slackCleanInitialized) {
 
           if (response && response.exists) {
             const state = response.job;
-            isRunning = state.isRunning;
+            // Same background-vs-local convention translation as the JOB_UPDATE
+            // listener above (see its comment) -- state.isRunning is false while
+            // paused, but content.js needs isRunning true-while-paused so the
+            // drift guard below still recognizes a bound-but-paused job.
+            isRunning = state.isRunning || state.isPaused;
             isPaused = state.isPaused;
             deleteIndex = state.deleteIndex;
             stats = state.stats;
@@ -1348,12 +1372,8 @@ if (!window.slackCleanInitialized) {
                 t("modalDiscardProgress", "Discard Progress"),
                 async (confirmed) => {
                   if (confirmed) {
-                    chrome.runtime.sendMessage({
-                      type: "RESUME_DELETION",
-                      teamId: activeTeam.id,
-                      channelId: activeChannel.id
-                    }, (res) => {
-                      if (chrome.runtime.lastError || !res || !res.success) {
+                    sendJobControl("RESUME_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
+                      if (!jobFound) {
                         logConsole(t("logResumeFailed", "Could not resume — background service worker unavailable. Please reload Slack."), "error");
                         stopOperations("Error");
                         return;
@@ -1605,6 +1625,24 @@ if (!window.slackCleanInitialized) {
       }, URL_POLL_INTERVAL_MS); // polling costs virtually 0% CPU next to MutationObserver subtree tracking
     }
 
+    // Sends a job-control message (PAUSE_DELETION/RESUME_DELETION/CANCEL_DELETION)
+    // and normalizes background.js's response into two booleans instead of leaving
+    // every call site to hand-roll (and, several of them did, forget) the same
+    // check: `delivered` (false only if the message never reached background.js at
+    // all -- chrome.runtime.lastError) and `jobFound` (background.js's own
+    // `success: !!job` -- false when no job exists at this teamId/channelId, e.g.
+    // right after a workspace/channel drift). `delivered && !jobFound` means the
+    // control message was received but found nothing to act on: the real job, if
+    // one exists, is still running unaffected under a different/stale key, so a
+    // caller must NOT tell the user it was paused/resumed/cancelled in that case.
+    function sendJobControl(type, teamId, channelId, callback) {
+      chrome.runtime.sendMessage({ type, teamId, channelId }, (res) => {
+        const delivered = !chrome.runtime.lastError;
+        const jobFound = delivered && !!res && !!res.success;
+        callback(delivered, jobFound);
+      });
+    }
+
     // Auto-pauses on channel switching drift detection to prevent accidental data destruction
     function handleUrlChange(oldUrl, newUrl) {
       const info = getActiveTeamInfo();
@@ -1618,12 +1656,14 @@ if (!window.slackCleanInitialized) {
           // A job is bound to the PREVIOUS workspace. Never rebind mid-job: pause it
           // if it's actively deleting (drift protection), otherwise leave it bound.
           if (!isPaused) {
-            chrome.runtime.sendMessage({
-              type: "PAUSE_DELETION",
-              teamId: activeTeam.id,
-              channelId: activeChannel ? activeChannel.id : null
-            }, () => {
-              void chrome.runtime.lastError;
+            sendJobControl("PAUSE_DELETION", activeTeam.id, activeChannel ? activeChannel.id : null, (delivered, jobFound) => {
+              if (!jobFound) {
+                // Undeliverable, or no matching job at this key -- it was NOT
+                // paused. Never claim it was: the real job may still be running
+                // unattended under whatever key it's actually bound to.
+                logConsole(t("logWorkspaceSwitchPauseFailed", "[Warning] Workspace switch detected, but the background worker found no matching job to pause. If a clean is still running, it was NOT paused by this — check the original workspace."), "error");
+                return;
+              }
               isPaused = true;
               syncButtonStates();
               logConsole(t("logWorkspaceSwitchPause", "[Warning] Workspace switch detected! Bulk clean auto-paused to avoid operating on the wrong workspace."), "error");
@@ -1659,11 +1699,11 @@ if (!window.slackCleanInitialized) {
         if (isRunning && !isPaused) {
           // Drift protection: pause if we leave the target while deleting
           // (including navigating to a non-conversation view).
-          chrome.runtime.sendMessage({
-            type: "PAUSE_DELETION",
-            teamId: activeTeam.id,
-            channelId: activeChannel.id
-          }, () => {
+          sendJobControl("PAUSE_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
+            if (!jobFound) {
+              logConsole(t("logNavigationPauseFailed", "[Warning] Slack navigation detected, but the background worker found no matching job to pause. If a clean is still running, it was NOT paused by this."), "error");
+              return;
+            }
             isPaused = true;
             syncButtonStates();
             logConsole(t("logNavigationPause", "[Warning] Slack navigation detected! Bulk clean auto-paused to prevent channel drift."), "error");
@@ -1728,12 +1768,8 @@ if (!window.slackCleanInitialized) {
             t("modalKeepRunning", "Keep Running"),
             (confirmed) => {
               if (confirmed) {
-                chrome.runtime.sendMessage({
-                  type: "CANCEL_DELETION",
-                  teamId: activeTeam.id,
-                  channelId: activeChannel.id
-                }, () => {
-                  if (chrome.runtime.lastError) {
+                sendJobControl("CANCEL_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
+                  if (!delivered) {
                     // The cancel didn't reach the worker — the job may STILL be running.
                     // Don't claim it stopped or hide the dashboard; tell the user to retry.
                     logConsole(t("logStopUnreachable", "Could not reach the background worker to stop the job. It may still be running — reload Slack and try again."), "error");
@@ -1743,7 +1779,17 @@ if (!window.slackCleanInitialized) {
                     );
                     return;
                   }
+                  if (!jobFound) {
+                    // No job existed at this key -- warn, but still reset the local UI:
+                    // from this tab's view there's nothing left to track either way.
+                    logConsole(t("logCancelNoJob", "Cancel reached the background worker, but found no matching job at this workspace/channel."), "warn");
+                  }
                   stopOperations();
+                  // Prune already-deleted messages from the checklist, same as the
+                  // "Finished" path -- otherwise reopening the dashboard and clicking
+                  // Delete without a fresh scan resubmits everything, including
+                  // whatever this job already deleted before the cancel landed.
+                  resetScanResultsUI();
                   hideDashboard();
                 });
               }
@@ -1796,12 +1842,8 @@ if (!window.slackCleanInitialized) {
           t("modalContinueDeleting", "Continue Deleting"),
           (confirmed) => {
             if (confirmed) {
-              chrome.runtime.sendMessage({
-                type: "CANCEL_DELETION",
-                teamId: activeTeam.id,
-                channelId: activeChannel.id
-              }, () => {
-                if (chrome.runtime.lastError) {
+              sendJobControl("CANCEL_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
+                if (!delivered) {
                   // Cancel didn't reach the worker — the job may still be deleting.
                   // Keep the running UI so the user can retry rather than being told
                   // it stopped when it may not have.
@@ -1812,8 +1854,17 @@ if (!window.slackCleanInitialized) {
                   );
                   return;
                 }
-                logConsole(t("logCanceledByUser", "Bulk deletion canceled by user."), "warn");
+                if (!jobFound) {
+                  logConsole(t("logCancelNoJob", "Cancel reached the background worker, but found no matching job at this workspace/channel."), "warn");
+                } else {
+                  logConsole(t("logCanceledByUser", "Bulk deletion canceled by user."), "warn");
+                }
                 stopOperations("Canceled");
+                // Prune already-deleted messages from the checklist, same as the
+                // "Finished" path -- otherwise clicking Delete again without a fresh
+                // scan resubmits everything, including whatever this job already
+                // deleted before the cancel landed.
+                resetScanResultsUI();
               });
             }
           }
@@ -2530,13 +2581,13 @@ if (!window.slackCleanInitialized) {
         }
       } else {
         if (!isPaused) {
-          chrome.runtime.sendMessage({
-            type: "PAUSE_DELETION",
-            teamId: activeTeam.id,
-            channelId: activeChannel.id
-          }, () => {
-            if (chrome.runtime.lastError) {
+          sendJobControl("PAUSE_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
+            if (!delivered) {
               logConsole(t("logPauseFailed", "Pause request failed — background unavailable. Reload Slack if this persists."), "error");
+              return;
+            }
+            if (!jobFound) {
+              logConsole(t("logPauseNoJob", "Pause request reached the background worker, but it found no matching job — nothing was paused. Reload Slack if a clean should still be running."), "error");
               return;
             }
             isPaused = true;
@@ -2544,13 +2595,13 @@ if (!window.slackCleanInitialized) {
             logConsole(t("logRequestingPause", "Requesting pause in background..."), "warn");
           });
         } else {
-          chrome.runtime.sendMessage({
-            type: "RESUME_DELETION",
-            teamId: activeTeam.id,
-            channelId: activeChannel.id
-          }, () => {
-            if (chrome.runtime.lastError) {
+          sendJobControl("RESUME_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
+            if (!delivered) {
               logConsole(t("logResumeReqFailed", "Resume request failed — background unavailable. Reload Slack if this persists."), "error");
+              return;
+            }
+            if (!jobFound) {
+              logConsole(t("logResumeNoJob", "Resume request reached the background worker, but it found no matching job — nothing was resumed."), "error");
               return;
             }
             isPaused = false;

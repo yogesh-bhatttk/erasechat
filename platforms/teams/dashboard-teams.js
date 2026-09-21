@@ -231,12 +231,19 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       let pageCount = 0;
       let truncated = false;
       const MAX_PAGES = 20; // 100 messages per page * 20 = 2000 messages per scan
+      // Defensive de-dup: without this, a repeated/overlapping `nextLink` page (new
+      // activity shifting the listing mid-scan) shows the same message twice,
+      // inflating "N items found" and queuing a redundant delete request for it
+      // later. Mirrors dashboard-reddit.js's/dashboard-x.js's seenIds guard.
+      const seenIds = new Set();
 
       while (endpoint && pageCount < MAX_PAGES) {
         const res = await apiFetch(endpoint);
         const messages = res.messages || [];
 
         for (const msg of messages) {
+          if (seenIds.has(msg.id)) continue;
+          seenIds.add(msg.id);
           if (msg.from && msg.from.includes(ownUserId) && !msg.deleted) {
             // A media-only message (image/file share) has an EMPTY `content` of its
             // own -- but a message that's pure markup (e.g. a bare inline image tag)
@@ -324,12 +331,17 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       });
       deletedCount = result.deletedCount;
       failures = result.failures;
-      const { processedItems, expiredAuth, cancelled } = result;
+      const { succeededItems, expiredAuth, cancelled } = result;
 
-      // Anything scanned but not selected, plus anything selected but never
-      // reached because a cancel/expired-auth break happened early, stays
-      // visible -- only items actually attempted are removed from view.
-      currentResults = currentResults.filter(item => !processedItems.includes(item));
+      // Anything scanned but not selected, anything selected but never reached
+      // because a cancel/expired-auth break happened early, AND anything that
+      // was attempted but failed to delete all stay visible -- only items
+      // actually deleted are removed from view, so a failed delete never looks
+      // indistinguishable from a successful one. A Set lookup here (rather than
+      // Array#includes) keeps this O(n) instead of O(n^2) -- succeededItems is
+      // typically most/all of currentResults on a normal run.
+      const succeededSet = new Set(succeededItems);
+      currentResults = currentResults.filter(item => !succeededSet.has(item));
       if (currentResults.length > 0) {
         renderResultRows(currentResults);
       } else {
@@ -358,7 +370,19 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       }
       if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
     } catch (err) {
-      const progress = err.deleteLoopProgress || { deletedCount };
+      const progress = err.deleteLoopProgress || { deletedCount, succeededItems: [] };
+      // Prune whatever succeeded before the throw, mirroring the normal-completion
+      // path above -- otherwise an aborted run (e.g. service-worker restart,
+      // storage error) leaves already-deleted items checked and re-submittable
+      // on the next Delete click.
+      const succeededSet = new Set(progress.succeededItems || []);
+      currentResults = currentResults.filter(item => !succeededSet.has(item));
+      if (currentResults.length > 0) {
+        renderResultRows(currentResults);
+      } else {
+        renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+      }
+      resultsCount.textContent = formatScanCount(currentResults.length, { truncated: false });
       console.error("Teams delete loop stopped unexpectedly:", err);
       logActivity('sc-activity-log', `Delete stopped unexpectedly: ${err.message}`, 'error');
       await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${progress.deletedCount} of ${totalCount} messages were deleted before this happened.`);

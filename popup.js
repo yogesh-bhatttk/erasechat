@@ -647,7 +647,13 @@ function setupLaunchButton(tabId, launchBtn) {
   freshBtn.addEventListener("click", () => {
     chrome.tabs.sendMessage(tabId, { type: "LAUNCH_DASHBOARD" }, (response) => {
       if (chrome.runtime.lastError) {
+        // Remove any alert from a previous failed click first -- otherwise
+        // repeated clicks (e.g. retrying while the content script is still
+        // unreachable) stack up identical banners indefinitely.
+        const existing = document.getElementById("sc-launch-connection-lost");
+        if (existing) existing.remove();
         const customAlert = document.createElement("div");
+        customAlert.id = "sc-launch-connection-lost";
         customAlert.style.cssText = "position:absolute; bottom:10px; left:10px; right:10px; padding:10px; background:#ef4444; color:#fff; border-radius:8px; font-size:12px; text-align:center; z-index:1000;";
         customAlert.innerText = t("popupConnectionLost", "Connection lost. Please reload the page.");
         document.body.appendChild(customAlert);

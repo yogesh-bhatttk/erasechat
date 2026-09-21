@@ -50,6 +50,7 @@ test('runDeleteLoop: deletes every item, reporting a clean "Deleted N of M" when
   assert.equal(result.deletedCount, 3);
   assert.deepEqual(result.failures, []);
   assert.deepEqual(result.processedItems, items);
+  assert.deepEqual(result.succeededItems, items);
   assert.equal(result.expiredAuth, false);
   assert.equal(result.cancelled, false);
   assert.equal(result.totalCount, 3);
@@ -85,6 +86,8 @@ test('runDeleteLoop: an ordinary per-item failure is recorded but does not stop 
   assert.equal(result.failures[0].id, 'b');
   assert.equal(result.failures[0].message, 'transient failure');
   assert.equal(result.processedItems.length, 3, 'every item is still attempted after an ordinary failure');
+  assert.deepEqual(result.succeededItems.map(i => i.id), ['a', 'c'],
+    'the failed item must be excluded from succeededItems so a caller filtering by it stays visible, not silently vanish like a real delete');
   assert.equal(progressText.textContent, 'Processed 3 of 3 (2 deleted, 1 failed)');
 });
 

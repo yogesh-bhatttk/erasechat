@@ -170,6 +170,12 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       let pageCount = 0;
       let truncated = false;
       const MAX_PAGES = 10; // 40 items per page * 10 = 400 toots per scan
+      // Defensive de-dup: without this, a repeated/overlapping `max_id` page (a
+      // non-standard instance/fork, or new activity shifting the listing mid-scan)
+      // shows the same toot twice, inflating "N items found" and queuing a
+      // redundant delete request for it later. Mirrors dashboard-reddit.js's/
+      // dashboard-x.js's seenIds guard.
+      const seenIds = new Set();
 
       while (pageCount < MAX_PAGES) {
         let endpoint = `/api/v1/accounts/${accountId}/statuses?limit=40`;
@@ -179,6 +185,9 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         if (!statuses || statuses.length === 0) break;
 
         for (const status of statuses) {
+          if (seenIds.has(status.id)) continue;
+          seenIds.add(status.id);
+
           // Exclude reblogs if you only want to delete your own content,
           // but deleting a reblog (unreblogging) uses the same endpoint if it's the reblog ID.
           // The API returns the raw HTML in `content` for regular statuses.
@@ -211,6 +220,11 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         // exactly 385 toots would be reported as "may not be exhaustive" when
         // the scan actually reached the true end.
         truncated = pageCount >= MAX_PAGES && statuses.length === 40;
+
+        // A partial page is already proof the account's history just ended (see
+        // the comment above) -- stop now instead of spending one more request +
+        // delay on a page that's guaranteed to come back empty.
+        if (statuses.length < 40) break;
 
         // Slight delay to avoid hitting rate limits on scan
         await delay(500);
@@ -283,12 +297,17 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       });
       deletedCount = result.deletedCount;
       failures = result.failures;
-      const { processedItems, expiredAuth, cancelled } = result;
+      const { succeededItems, expiredAuth, cancelled } = result;
 
-      // Anything scanned but not selected, plus anything selected but never
-      // reached because a cancel/expired-auth break happened early, stays
-      // visible -- only items actually attempted are removed from view.
-      currentResults = currentResults.filter(item => !processedItems.includes(item));
+      // Anything scanned but not selected, anything selected but never reached
+      // because a cancel/expired-auth break happened early, AND anything that
+      // was attempted but failed to delete all stay visible -- only items
+      // actually deleted are removed from view, so a failed delete never looks
+      // indistinguishable from a successful one. A Set lookup here (rather than
+      // Array#includes) keeps this O(n) instead of O(n^2) -- succeededItems is
+      // typically most/all of currentResults on a normal run.
+      const succeededSet = new Set(succeededItems);
+      currentResults = currentResults.filter(item => !succeededSet.has(item));
       if (currentResults.length > 0) {
         renderResultRows(currentResults);
       } else {
@@ -317,7 +336,19 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       }
       if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
     } catch (err) {
-      const progress = err.deleteLoopProgress || { deletedCount };
+      const progress = err.deleteLoopProgress || { deletedCount, succeededItems: [] };
+      // Prune whatever succeeded before the throw, mirroring the normal-completion
+      // path above -- otherwise an aborted run (e.g. service-worker restart,
+      // storage error) leaves already-deleted items checked and re-submittable
+      // on the next Delete click.
+      const succeededSet = new Set(progress.succeededItems || []);
+      currentResults = currentResults.filter(item => !succeededSet.has(item));
+      if (currentResults.length > 0) {
+        renderResultRows(currentResults);
+      } else {
+        renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+      }
+      resultsCount.textContent = formatScanCount(currentResults.length, { truncated: false });
       console.error("Mastodon delete loop stopped unexpectedly:", err);
       logActivity('sc-activity-log', `Delete stopped unexpectedly: ${err.message}`, 'error');
       await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${progress.deletedCount} of ${totalCount} toots were deleted before this happened.`);

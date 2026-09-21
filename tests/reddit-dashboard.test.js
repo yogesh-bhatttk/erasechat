@@ -79,3 +79,30 @@ test('extractRedditItemsFromChildren: preserves page order across a mixed commen
 test('extractRedditItemsFromChildren: an empty children array returns an empty result, not an error', () => {
   assert.deepEqual(extractRedditItemsFromChildren([], ''), []);
 });
+
+// ============================================================
+// Cross-page de-dup (mirrors dashboard-x.js's seenTweetIds guard)
+// ============================================================
+
+test('extractRedditItemsFromChildren: with no seenIds set, de-dup is opt-in (backward compatible)', () => {
+  const children = [comment({ name: 't1_a' }), comment({ name: 't1_a' })];
+  const results = extractRedditItemsFromChildren(children, '');
+  assert.equal(results.length, 2, 'no seenIds passed -> no de-dup, same as before the fix');
+});
+
+test('extractRedditItemsFromChildren: a fullname already in seenIds is skipped, even within the same page', () => {
+  const seenIds = new Set();
+  const children = [comment({ name: 't1_a' }), comment({ name: 't1_a' }), post({ name: 't3_b' })];
+  const results = extractRedditItemsFromChildren(children, '', seenIds);
+  assert.deepEqual(results.map(r => r.id), ['t1_a', 't3_b']);
+});
+
+test('extractRedditItemsFromChildren: a repeated/overlapping page (stuck `after` cursor) is fully deduped against the running set', () => {
+  const seenIds = new Set();
+  const page1 = [comment({ name: 't1_a' }), post({ name: 't3_b' })];
+  const page2 = [comment({ name: 't1_a' }), post({ name: 't3_b' })]; // Reddit returned the same page again
+  const firstResults = extractRedditItemsFromChildren(page1, '', seenIds);
+  const secondResults = extractRedditItemsFromChildren(page2, '', seenIds);
+  assert.equal(firstResults.length, 2);
+  assert.deepEqual(secondResults, [], 'a fully-repeated page must not inflate results or re-queue a duplicate delete');
+});

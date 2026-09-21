@@ -149,6 +149,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     return response.json();
   }
 
+  // Every operation the dashboard actually calls (see apiFetch/resolveUserId) --
+  // extraction isn't "done" until all three have a live queryId, not just any one.
+  const REQUIRED_QUERY_OPERATIONS = ['UserTweets', 'DeleteTweet', 'UserByScreenName'];
+
   async function extractQueryIds() {
     try {
       statusText.textContent = "Fetching latest API signatures...";
@@ -159,16 +163,30 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
       // Independent bundle fetches -- run them concurrently instead of one at a
       // time, since each is a full (often multi-MB) download+parse.
+      const foundOperations = new Set();
       await Promise.all(scriptMatches.map(async (m) => {
         const jsRes = await fetchWithRetry(resolveXScriptUrl(m[1]), { credentials: 'include' });
         const js = await jsRes.text();
         const matches = [...js.matchAll(/queryId:"([^"]+)",operationName:"(UserTweets|DeleteTweet|UserByScreenName)"/g)];
         for (const match of matches) {
           queryIds[match[2]] = match[1];
+          foundOperations.add(match[2]);
         }
       }));
-      queryIdsExtracted = true;
-      queryIdsStale = false;
+      // Only mark extraction "done" once ALL required signatures were found, not
+      // just any one of them. X restructuring its bundle (or these regexes going
+      // stale) still resolves this fetch without throwing, and a PARTIAL match
+      // (e.g. UserTweets/UserByScreenName found but DeleteTweet's regex stops
+      // matching) would otherwise still flip queryIdsExtracted permanently true,
+      // stranding that one operation on its possibly-wrong hardcoded default
+      // with no automatic retry on any future scan.
+      const missing = REQUIRED_QUERY_OPERATIONS.filter(op => !foundOperations.has(op));
+      if (missing.length === 0) {
+        queryIdsExtracted = true;
+        queryIdsStale = false;
+      } else {
+        console.warn(`extractQueryIds: missing query ID(s) for ${missing.join(", ")} in the fetched bundle(s) -- will retry on next scan.`);
+      }
     } catch(e) {
       console.warn("Failed to extract queryIds dynamically. Falling back to defaults.", e);
     }
@@ -388,13 +406,18 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       });
       deletedCount = result.deletedCount;
       failures = result.failures;
-      const { processedItems, expiredAuth, cancelled } = result;
+      const { succeededItems, expiredAuth, cancelled } = result;
       const staleQueryIdSuspected = failures.some(f => f.error && f.error.staleQueryId);
 
-      // Anything scanned but not selected, plus anything selected but never
-      // reached because a cancel broke the loop early, stays visible -- only
-      // items actually attempted (succeeded or failed) are removed from view.
-      currentResults = currentResults.filter(item => !processedItems.includes(item));
+      // Anything scanned but not selected, anything selected but never reached
+      // because a cancel broke the loop early, AND anything that was attempted
+      // but failed to delete all stay visible -- only items actually deleted are
+      // removed from view, so a failed delete never looks indistinguishable from
+      // a successful one. A Set lookup here (rather than Array#includes) keeps
+      // this O(n) instead of O(n^2) -- succeededItems is typically most/all of
+      // currentResults on a normal run.
+      const succeededSet = new Set(succeededItems);
+      currentResults = currentResults.filter(item => !succeededSet.has(item));
       if (currentResults.length > 0) {
         renderResultRows(currentResults);
       } else {
@@ -433,7 +456,19 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         await showAlert(`Delete failed for ${failures.length} of ${totalCount} tweet(s):\n\n${shown}${more}${hint}`);
       }
     } catch (err) {
-      const progress = err.deleteLoopProgress || { deletedCount };
+      const progress = err.deleteLoopProgress || { deletedCount, succeededItems: [] };
+      // Prune whatever succeeded before the throw, mirroring the normal-completion
+      // path above -- otherwise an aborted run (e.g. service-worker restart,
+      // storage error) leaves already-deleted items checked and re-submittable
+      // on the next Delete click.
+      const succeededSet = new Set(progress.succeededItems || []);
+      currentResults = currentResults.filter(item => !succeededSet.has(item));
+      if (currentResults.length > 0) {
+        renderResultRows(currentResults);
+      } else {
+        renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+      }
+      resultsCount.textContent = formatScanCount(currentResults.length, { truncated: false });
       console.error("X delete loop stopped unexpectedly:", err);
       logActivity('sc-activity-log', `Delete stopped unexpectedly: ${err.message}`, 'error');
       await showAlert(`Deletion stopped unexpectedly: ${err.message}\n\n${progress.deletedCount} of ${totalCount} tweets were deleted before this happened.`);

@@ -190,8 +190,19 @@ function qualifies(msg, userId, senderMode, textFilter, onlyAttachments, options
       const pattern = textFilter.substring(1, textFilter.length - 1);
 
       if (!isSafeRegex(pattern)) {
-        // Dangerous or oversized pattern — fall back to literal substring match
+        // Dangerous or oversized pattern — fall back to literal substring match.
         matched = msgText.includes(pattern.toLowerCase());
+        // That literal fallback almost never matches real message text (it's
+        // comparing against the raw regex SOURCE, e.g. "(a+)+"), which is the
+        // safe/under-matching direction in normal mode. But under Invert Text
+        // ("keep matches, delete everything else"), "almost never matches" flips
+        // into "delete almost everything" — the exact whole-channel-wipe failure
+        // the degenerate-empty-pattern guard below exists to prevent, reached
+        // through this other door. Treat it identically: select nothing.
+        if (invertText) {
+          degenerate = true;
+          matched = false;
+        }
       } else {
         try {
           const regex = new RegExp(pattern, "i");
@@ -221,7 +232,13 @@ function qualifies(msg, userId, senderMode, textFilter, onlyAttachments, options
             matched = regex.test(msgText.slice(0, MAX_REGEX_INPUT));
           }
         } catch (e) {
+          // Syntactically invalid regex — same literal-fallback reasoning as the
+          // unsafe-pattern branch above, and the same invert hazard applies.
           matched = msgText.includes(pattern.toLowerCase());
+          if (invertText) {
+            degenerate = true;
+            matched = false;
+          }
         }
       }
     } else {
