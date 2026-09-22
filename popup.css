@@ -468,7 +468,25 @@ body {
   color: #fff;
 }
 
-.btn-primary:hover { background: var(--gradient-glow-hover); }
+/* filter, not a background swap: several primary buttons (Telegram's auth steps,
+ * Mastodon's connect button) set their own brand-colored background inline so the
+ * button reads as that platform's own CTA. An inline style always wins over this
+ * rule for the `background` property, on hover or not, which would silently kill
+ * hover feedback on exactly those buttons if hover also tried to swap background.
+ * A filter brightens whatever background is actually present -- inline or not --
+ * so every .btn-primary gets the same hover feedback through one mechanism. */
+.btn-primary:hover { filter: brightness(1.08); }
+
+/* Telegram's four auth-step buttons all want Telegram's own brand blue rather than
+ * the app's default purple/pink gradient (mirrors Mastodon's connect button, which
+ * gets its platform accent from platform-registry.js at render time instead --
+ * Telegram's steps are static markup, not built by that same code path, so the
+ * color lives here as a class instead of being computed per-button). */
+.btn-telegram {
+  background: linear-gradient(135deg, #2AABEE, #229ED9);
+  border: none;
+  color: #fff;
+}
 
 .btn-secondary {
   background-color: var(--surface);

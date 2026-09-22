@@ -2,6 +2,95 @@
 
 ## Unreleased
 
+### Sixth pass: UI consistency audit — dashboard theming was silently broken
+
+Found and fixed the root cause behind why the five non-Slack dashboards
+(Reddit, X, Mastodon, Teams, Telegram) never looked quite right: their shared
+`platforms/shared/dashboard-base.css` defined every design token (surface and
+text colors, borders, radii, the brand gradient) under a `:host { ... }`
+selector, copied from Slack's `content.css`, where it correctly scopes tokens
+to a shadow root. These five pages are plain top-level documents with no
+shadow root, so `:host` matched nothing and every `var(--surface)`,
+`var(--text-primary)`, etc. silently resolved to nothing — leaving buttons
+with no fill, no border, and no radius (icon + black text only), and panel
+cards with no visible background at all. Verified via computed-style
+inspection (`getComputedStyle` reported `--surface` as `""` before, `"#ffffff"`
+after) rather than trusting pixel screenshots, since this sandbox's headless
+Chromium renders `backdrop-filter` unreliably. Fixed by changing `:host` to
+`:root` (the two occurrences, base + dark-mode block) — the same token values
+now apply correctly, matching Slack's already-working implementation exactly.
+
+Smaller consistency fixes found alongside it:
+- Primary buttons that set their own brand-colored background inline
+  (Telegram's four auth-step buttons, Mastodon's connect button) silently lost
+  their hover feedback, since an inline `background` always wins over a
+  stylesheet's `:hover` rule for the same property. `.btn-primary:hover` now
+  brightens via `filter` instead of swapping `background`, which works
+  regardless of how the base color was set.
+- Telegram's four auth buttons hardcoded the same gradient via a duplicated
+  inline `style=""` attribute; extracted into a `.btn-telegram` class.
+- Telegram's dashboard "connected as" indicator used a different tag,
+  font-size, color, and layout position than the same element on the other
+  four platforms; aligned to match.
+- X's username-mismatch warning hardcoded `#ef4444`, duplicating the
+  `--color-red` token by coincidence; now references the token directly.
+
+Reverified throughout: lint clean, 244/244 unit tests pass, 21/21 Playwright
+e2e pass (three of which needed a `chrome.permissions.contains` stub added
+alongside their existing `chrome.permissions.request` stub, since production
+code now re-checks the former immediately before opening a dashboard tab).
+
+### Fifth audit pass: cross-platform correctness and safety fixes
+
+A fresh audit split across all six platforms plus the permission/manifest layer
+found no Critical issues (no path to deleting another user's content or
+leaking a credential), but turned up several real correctness bugs, most
+notably on the newer non-Slack platforms. Reverified throughout: lint clean,
+244/244 unit tests pass (34 new, covering every fix below).
+
+- **Reddit & X: delete "success" was judged by HTTP status alone**, never the
+  response body — a 200 with a body-level error (common for GraphQL
+  mutations) was counted as a successful delete while the content stayed
+  live. Both platforms now parse and validate the response body before
+  counting an item as deleted.
+- **Slack: "Discard Progress" could leave the dashboard stuck believing a job
+  was still running.** It fired `CANCEL_DELETION` with no callback, unlike
+  every other job-control call; a lost message or no-matching-job response
+  left `isRunning`/`isPaused` stuck true until a page reload. Now routed
+  through the same `sendJobControl()` path as every other control action, and
+  always resets local state regardless of the outcome.
+- **Telegram: a transient `getEntity()` failure on a channel/supergroup could
+  make delete silently no-op while still reporting success.** Now retries
+  with backoff before giving up, and treats persistent failure as a hard
+  per-item failure instead of guessing the wrong delete method. The
+  post-delete summary wording was also softened to not overstate verification
+  Telegram's API genuinely can't provide. Separately, a wrong SMS
+  code/2FA-password error was being cleared before the browser ever painted
+  it, making a rejected login look like a silent hang; the error now survives
+  until a real step transition.
+- **Teams: the "is this my message" identity was computed once at page load**
+  and never rechecked, so a mid-session token refresh from a different signed-
+  in Teams identity could leave the filter running against stale identity
+  data. The run now aborts with a clear message if the identity changes
+  mid-session.
+- **X: the username field was free text**, editable after connect with no
+  check against the authenticated account, allowing another account's tweets
+  to be scanned/displayed. Delete is now blocked with a warning when the
+  field doesn't match the authenticated account.
+- **Reddit & X: no circuit breaker for sustained rate-limiting** — a
+  persistent 429 just kept retrying per item across an entire batch. Both now
+  abort early with a clear message after repeated consecutive rate-limit
+  failures, matching the existing expired-auth abort pattern.
+- Smaller hardening: Mastodon's instance-URL validation is now duplicated
+  inside `connect-mastodon.js` itself (defense-in-depth, not just relying on
+  the popup layer); popup.js now revokes a just-granted permission when
+  `connect()` fails and re-checks it immediately before opening a dashboard
+  tab; background.js now server-side clamps `throttleDelay` and defaults a
+  corrupted queue entry's action to the safer `trim` instead of `delete`;
+  `shared-filters.js`'s regex-safety counter no longer over-counts literal
+  quantifier characters inside `[...]` character classes, and `stringToColor()`
+  no longer throws on non-string input.
+
 ### Fourth follow-up pass: the two remaining maintainability-only refactors
 
 The audit's last two open findings were pure maintainability refactors (no bug,

@@ -10,9 +10,7 @@
   font-display: swap;
 }
 
-:host {
-  all: initial;
-
+:root {
   /* Surfaces & text — LIGHT (default) */
   --bg-overlay: rgba(15, 23, 42, 0.38);
   --surface: #ffffff;
@@ -55,7 +53,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :host {
+  :root {
     --bg-overlay: rgba(2, 6, 23, 0.6);
     --surface: #0f172a;
     --surface-subtle: #0c1424;

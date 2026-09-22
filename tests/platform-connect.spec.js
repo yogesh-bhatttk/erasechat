@@ -74,6 +74,12 @@ test('a granted permission and a real session opens the Reddit dashboard tab', a
     const created = await page.evaluate(() => {
       return new Promise((resolve) => {
         chrome.permissions.request = (_req, cb) => cb(true);
+        // The real flow re-checks chrome.permissions.contains() immediately before
+        // opening the dashboard tab (defense-in-depth against a mid-flow revoke);
+        // since request() here is faked rather than routed through the real browser
+        // grant, contains() must be stubbed to match or that recheck sees "not
+        // granted" and the tab never opens.
+        chrome.permissions.contains = (_req, cb) => cb(true);
         chrome.cookies = { getAll: async () => [{ name: 'reddit_session', value: 'x' }] };
         window.fetch = async () => ({
           ok: true,
@@ -156,6 +162,7 @@ test('a granted permission and a real ct0 cookie opens the X dashboard tab', asy
     const created = await page.evaluate(() => {
       return new Promise((resolve) => {
         chrome.permissions.request = (_req, cb) => cb(true);
+        chrome.permissions.contains = (_req, cb) => cb(true);
         chrome.cookies = { getAll: async (query) => query.domain === 'x.com' ? [{ name: 'ct0', value: 'csrf-token-value' }] : [] };
         chrome.tabs.create = (opts) => { resolve(opts); return Promise.resolve({}); };
         window.close = () => {};
@@ -193,6 +200,7 @@ test('connectX still succeeds even when the best-effort username lookup fails', 
     const created = await page.evaluate(() => {
       return new Promise((resolve) => {
         chrome.permissions.request = (_req, cb) => cb(true);
+        chrome.permissions.contains = (_req, cb) => cb(true);
         chrome.cookies = { getAll: async (query) => query.domain === 'x.com' ? [{ name: 'ct0', value: 'csrf-token-value' }] : [] };
         chrome.tabs.create = (opts) => { resolve(opts); return Promise.resolve({}); };
         window.close = () => {};
@@ -269,6 +277,7 @@ test('a granted permission and valid credentials opens the Mastodon dashboard ta
     const created = await page.evaluate(() => {
       return new Promise((resolve) => {
         chrome.permissions.request = (_req, cb) => cb(true);
+        chrome.permissions.contains = (_req, cb) => cb(true);
         // verify_credentials response shape from a real Mastodon instance.
         window.fetch = async () => ({ ok: true, json: async () => ({ id: '999', username: 'mstdnuser' }) });
         chrome.tabs.create = (opts) => { resolve(opts); return Promise.resolve({}); };
@@ -306,6 +315,7 @@ test('Teams opens straight to its dashboard when a token is already stored from 
     const created = await page.evaluate(() => {
       return new Promise((resolve) => {
         chrome.permissions.request = (_req, cb) => cb(true);
+        chrome.permissions.contains = (_req, cb) => cb(true);
         chrome.tabs.create = (opts) => { resolve(opts); return Promise.resolve({}); };
         window.close = () => {};
 
