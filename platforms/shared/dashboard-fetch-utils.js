@@ -553,7 +553,13 @@ function resetCancelButton(cancelBtn) {
 // `.expiredAuth` set stops the whole run immediately (every remaining item would
 // fail the identical way); any other custom field a caller sets on its own thrown
 // error (e.g. X's `.staleQueryId`) survives untouched on that failure's `error`
-// property for the caller to inspect after the loop.
+// property for the caller to inspect after the loop. A thrown error whose
+// `.status === 429` is counted toward the rate-limit circuit breaker below --
+// fetchWithRetry already surfaces the real HTTP status on the Response it
+// returns once retries are exhausted (see its own comment), so a deleteItem
+// throwing on a persistent 429 just needs to copy `response.status` onto the
+// error it throws for this to work, the same way X's apiFetch already does for
+// every non-ok status.
 //
 // preItemWait(cancelController): optional async hook run BEFORE each item is
 // attempted, and BEFORE it's added to processedItems -- this is Mastodon's real
@@ -564,11 +570,23 @@ function resetCancelButton(cancelBtn) {
 // or failure) and BEFORE the next one is attempted -- Reddit/Teams/X/Mastodon's
 // flat per-item throttle. Defaults to 0 (no delay).
 //
-// Returns { deletedCount, failures, processedItems, expiredAuth, cancelled,
-// totalCount }. `failures` entries are { id, message, error } -- `error` is the
-// original thrown error object, not just its message, so a caller can read any
-// platform-specific field it set.
+// Returns { deletedCount, failures, processedItems, expiredAuth, rateLimited,
+// cancelled, totalCount }. `failures` entries are { id, message, error } --
+// `error` is the original thrown error object, not just its message, so a caller
+// can read any platform-specific field it set. `rateLimited: true` means the run
+// stopped early after RATE_LIMIT_CIRCUIT_BREAKER_THRESHOLD consecutive
+// `.status === 429` failures -- a caller should report this the same way it
+// already reports `expiredAuth`, not just as one more ordinary failure.
 // ---------------------------------------------------------------------------
+
+// A single 429 is an ordinary per-item failure (recorded, loop moves on). But
+// several IN A ROW means the whole run is being throttled, not just one item --
+// without this, a large batch would burn through every remaining item at full
+// pacing, each failing the identical way, instead of stopping once the pattern
+// is clear. Reset to 0 on any success or any non-429 failure, so a single
+// transient 429 sandwiched between real successes never trips it.
+const RATE_LIMIT_CIRCUIT_BREAKER_THRESHOLD = 4;
+
 async function runDeleteLoop(selected, {
   cancelController,
   progressKey,
@@ -589,6 +607,8 @@ async function runDeleteLoop(selected, {
   // reconstruct that mapping, since it only stores bare ids/messages.
   const succeededItems = [];
   let expiredAuth = false;
+  let rateLimited = false;
+  let consecutiveRateLimitFailures = 0;
 
   // Everything in this function besides deleteItem() itself is wrapped in one
   // try/catch: a storage call here throwing (e.g. the extension context is
@@ -614,6 +634,7 @@ async function runDeleteLoop(selected, {
         await deleteItem(item);
         deletedCount++;
         succeededItems.push(item);
+        consecutiveRateLimitFailures = 0;
       } catch (err) {
         failures.push({ id: item.id, message: err.message, error: err });
         if (err.expiredAuth) {
@@ -625,6 +646,16 @@ async function runDeleteLoop(selected, {
         // recur identically on every remaining item. Stop instead of burning
         // through the whole batch one failure at a time at full pacing.
         if (err.staleQueryId) break;
+
+        if (err.status === 429) {
+          consecutiveRateLimitFailures++;
+          if (consecutiveRateLimitFailures >= RATE_LIMIT_CIRCUIT_BREAKER_THRESHOLD) {
+            rateLimited = true;
+            break;
+          }
+        } else {
+          consecutiveRateLimitFailures = 0;
+        }
       }
 
       progressText.textContent = failures.length > 0
@@ -632,18 +663,18 @@ async function runDeleteLoop(selected, {
         : `Deleted ${deletedCount} of ${totalCount}`;
       await maybeSaveDeleteProgress(progressKey, deletedCount + failures.length, totalCount);
 
-      if (expiredAuth || cancelController.cancelled) break;
+      if (expiredAuth || rateLimited || cancelController.cancelled) break;
 
       if (postItemDelayMs > 0) await delay(postItemDelayMs);
     }
 
     await chrome.storage.local.remove([progressKey]);
   } catch (err) {
-    err.deleteLoopProgress = { deletedCount, failures, processedItems, succeededItems, expiredAuth, cancelled: cancelController.cancelled, totalCount };
+    err.deleteLoopProgress = { deletedCount, failures, processedItems, succeededItems, expiredAuth, rateLimited, cancelled: cancelController.cancelled, totalCount };
     throw err;
   }
 
-  return { deletedCount, failures, processedItems, succeededItems, expiredAuth, cancelled: cancelController.cancelled, totalCount };
+  return { deletedCount, failures, processedItems, succeededItems, expiredAuth, rateLimited, cancelled: cancelController.cancelled, totalCount };
 }
 
 // Export for Node (tests/lint); in a dashboard page these stay plain globals, shared

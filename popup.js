@@ -391,9 +391,23 @@ function connectAndLaunchPlatform(platform, formValues) {
         return;
       }
 
+      // Best-effort revocation of the permission just granted for this connect
+      // attempt -- used when connect() reports failure, or when a last-instant
+      // recheck finds the permission already gone. Never lets a failure in
+      // chrome.permissions.remove() itself interfere with the caller's own
+      // error handling; it only logs and moves on.
+      const revokeGrantedPermission = () => {
+        try {
+          chrome.permissions.remove(request, () => {
+            void chrome.runtime.lastError;
+          });
+        } catch (e) { /* best-effort only -- never block the error path over this */ }
+      };
+
       const afterConnect = (result) => {
         finishPending();
         if (result && result.ok === false) {
+          revokeGrantedPermission();
           setPlatformRowStatus(platform.id, "");
           showPlatformConnectError(
             result.message || t("popupConnectFailed", "Could not connect. Please try again."),
@@ -410,12 +424,34 @@ function connectAndLaunchPlatform(platform, formValues) {
           setPlatformRowStatus(platform.id, "");
           return;
         }
-        chrome.tabs.create({ url: chrome.runtime.getURL(platform.dashboard) });
-        // Only close the popup once every in-flight connect has actually settled --
-        // closing earlier would tear down another platform's still-running
-        // connect (e.g. Teams' token poll) with no warning. See pendingConnectCount.
-        if (pendingConnectCount === 0) {
-          window.close();
+        const openDashboard = () => {
+          chrome.tabs.create({ url: chrome.runtime.getURL(platform.dashboard) });
+          // Only close the popup once every in-flight connect has actually settled --
+          // closing earlier would tear down another platform's still-running
+          // connect (e.g. Teams' token poll) with no warning. See pendingConnectCount.
+          if (pendingConnectCount === 0) {
+            window.close();
+          }
+        };
+        // Re-check the permission immediately before opening the dashboard tab --
+        // it was granted moments ago above, but a narrow async gap (connect()'s
+        // own await, another extension surface, the user revoking it from
+        // chrome://extensions mid-flow) could have taken it away again since. A
+        // dashboard tab opened without it would just fail internally with no
+        // clear explanation, so treat "no longer granted" the same as a connect
+        // failure and reuse the same error UI instead.
+        if (chrome.permissions && typeof chrome.permissions.contains === "function") {
+          chrome.permissions.contains(request, (stillGranted) => {
+            void chrome.runtime.lastError;
+            if (!stillGranted) {
+              setPlatformRowStatus(platform.id, "");
+              showPlatformConnectError(t("popupConnectFailed", "Could not connect. Please try again."));
+              return;
+            }
+            openDashboard();
+          });
+        } else {
+          openDashboard();
         }
       };
 

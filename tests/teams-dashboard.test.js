@@ -9,7 +9,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { getOwnUserId, getOwnDisplayIdentity } = require('../platforms/teams/dashboard-teams.js');
+const { getOwnUserId, getOwnDisplayIdentity, identityChangedMidRun } = require('../platforms/teams/dashboard-teams.js');
 
 function fakeJwt(claims) {
   const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64')
@@ -68,4 +68,44 @@ test('getOwnDisplayIdentity: returns null when no identity-shaped claim exists (
 
 test('getOwnDisplayIdentity: returns null (never throws) for a malformed token', () => {
   assert.equal(getOwnDisplayIdentity('garbage'), null);
+});
+
+// ============================================================
+// identityChangedMidRun -- guards against a mid-run token refresh (apiFetch's 401
+// retry path) silently swapping in a DIFFERENT signed-in Teams identity than the
+// one the current scan/delete run started with. See dashboard-teams.js's own
+// comment on this function and on the 401 retry branch that calls it.
+// ============================================================
+
+test('identityChangedMidRun: false when the refreshed token decodes to the same identity', () => {
+  assert.equal(identityChangedMidRun('user-oid-123', 'user-oid-123'), false);
+});
+
+test('identityChangedMidRun: true when the refreshed token decodes to a DIFFERENT identity', () => {
+  assert.equal(identityChangedMidRun('user-oid-123', 'someone-else-oid-456'), true);
+});
+
+test('identityChangedMidRun: false (fails closed to "not a mismatch") when either id is missing -- a decode failure is not evidence of a changed identity', () => {
+  assert.equal(identityChangedMidRun(null, 'user-oid-123'), false);
+  assert.equal(identityChangedMidRun('user-oid-123', null), false);
+  assert.equal(identityChangedMidRun(null, null), false);
+});
+
+test('identityChangedMidRun: end-to-end through real (fake) JWTs -- the actual apiFetch 401-refresh scenario this guards against', () => {
+  // Simulates: dashboard opened while signed in as Alice (ownUserId captured at
+  // page load), then teams-webrequest.js's always-on listener passively captures a
+  // token from a DIFFERENT teams.microsoft.com tab signed in as Bob, and apiFetch's
+  // 401 retry path picks it up mid-run.
+  const aliceToken = fakeJwt({ oid: 'alice-oid-111' });
+  const bobToken = fakeJwt({ oid: 'bob-oid-222' });
+
+  const runStartOwnUserId = getOwnUserId(aliceToken);
+  const refreshedOwnUserId = getOwnUserId(bobToken);
+
+  assert.equal(identityChangedMidRun(runStartOwnUserId, refreshedOwnUserId), true,
+    'a token refresh that swaps in a different signed-in identity must be flagged so the run aborts instead of silently mixing credentials');
+
+  // A same-identity refresh (token rotated, but still Alice) must NOT abort.
+  const aliceTokenRotated = fakeJwt({ oid: 'alice-oid-111', iat: Date.now() });
+  assert.equal(identityChangedMidRun(runStartOwnUserId, getOwnUserId(aliceTokenRotated)), false);
 });

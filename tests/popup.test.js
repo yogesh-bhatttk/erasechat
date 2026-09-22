@@ -10,6 +10,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { isSlackClientTab } = require("../popup.js");
 const { isSlackHostname } = require("../shared-filters.js");
+const { PLATFORMS } = require("../popup/platform-registry.js");
 
 test("isSlackClientTab: accepts any genuine slack.com subdomain over HTTPS", () => {
   assert.equal(isSlackClientTab("https://app.slack.com/client/T1234/C5678"), true);
@@ -55,4 +56,64 @@ test("isSlackClientTab stays in sync with shared-filters.js's isSlackHostname", 
       `isSlackClientTab and isSlackHostname disagree on ${JSON.stringify(url)}`
     );
   }
+});
+
+// Mastodon's resolveOrigin() is the sole gate standing between the user's typed
+// instance URL and the "https://*/*" optional-host-permission ceiling declared
+// in the manifest -- it decides which single origin actually gets requested.
+// Any way it can be tricked into resolving something other than the exact
+// hostname the user meant (a wider match pattern, a different attacker-chosen
+// host) would turn that broad manifest ceiling into an actual over-broad grant.
+const mastodon = PLATFORMS.find((p) => p.id === "mastodon");
+const { resolveOrigin } = mastodon;
+
+test("resolveOrigin: accepts a plain hostname", () => {
+  assert.equal(resolveOrigin({ "instance-url": "mastodon.social" }), "https://mastodon.social/*");
+});
+
+test("resolveOrigin: strips a leading https:// and a trailing slash", () => {
+  assert.equal(resolveOrigin({ "instance-url": "https://mastodon.social/" }), "https://mastodon.social/*");
+});
+
+test("resolveOrigin: strips a leading http:// too", () => {
+  assert.equal(resolveOrigin({ "instance-url": "http://mastodon.social" }), "https://mastodon.social/*");
+});
+
+test("resolveOrigin: rejects a literal '*' instead of widening the match pattern", () => {
+  assert.equal(resolveOrigin({ "instance-url": "*" }), null);
+});
+
+test("resolveOrigin: rejects userinfo/@ tricks rather than silently targeting the host after '@'", () => {
+  // If this were fed straight into `new URL()` unguarded, "real.social@attacker.com"
+  // resolves to host attacker.com with userinfo "real.social" -- exactly the kind
+  // of silent retargeting this function must not allow for a plain-ASCII input.
+  assert.equal(resolveOrigin({ "instance-url": "real.social@attacker.com" }), null);
+  assert.equal(resolveOrigin({ "instance-url": "https://real.social@attacker.com/" }), null);
+});
+
+test("resolveOrigin: rejects input carrying a path beyond a bare hostname", () => {
+  assert.equal(resolveOrigin({ "instance-url": "mastodon.social/path" }), null);
+  assert.equal(resolveOrigin({ "instance-url": "mastodon.social/@user" }), null);
+});
+
+test("resolveOrigin: rejects input carrying a port", () => {
+  assert.equal(resolveOrigin({ "instance-url": "mastodon.social:8080" }), null);
+});
+
+test("resolveOrigin: rejects empty, missing, and blank input", () => {
+  assert.equal(resolveOrigin({}), null);
+  assert.equal(resolveOrigin({ "instance-url": "" }), null);
+  assert.equal(resolveOrigin({ "instance-url": "   " }), null);
+});
+
+test("resolveOrigin: punycode-normalizes a non-ASCII/IDN hostname and accepts it", () => {
+  // "münchen.social" is a legitimate hostname a real user might type; it fails
+  // the ASCII-only regex verbatim, so this only passes if the IDN branch
+  // normalizes it via URL (the same way a real browser would) before validating.
+  assert.equal(resolveOrigin({ "instance-url": "münchen.social" }), "https://xn--mnchen-3ya.social/*");
+});
+
+test("resolveOrigin: rejects an IDN hostname carrying a path or port after normalization", () => {
+  assert.equal(resolveOrigin({ "instance-url": "münchen.social/@user" }), null);
+  assert.equal(resolveOrigin({ "instance-url": "münchen.social:8080" }), null);
 });

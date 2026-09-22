@@ -273,14 +273,38 @@ document.addEventListener('DOMContentLoaded', async () => {
       // doesn't throw -- it just silently affects nothing, since the ID space
       // it's checking is the wrong one. Resolve the actual entity so the right
       // API gets called.
+      // A transient failure here (network blip, swallowed flood-wait) must NOT be
+      // treated the same as "genuinely isn't a channel" -- doing so would silently
+      // call messages.DeleteMessages against a channel-space ID, which Telegram
+      // accepts without error but deletes nothing, reporting false success. Retry
+      // a few times with a short backoff (mirroring invokeWithFloodWait's
+      // retry-delay pattern above) before giving up.
       let channelEntity = null;
-      try {
-        const entity = await client.getEntity(lastPeer || 'me');
-        if (entity && entity.className === 'Channel') {
-          channelEntity = entity;
+      let entityResolutionFailed = false;
+      {
+        const ENTITY_RESOLVE_ATTEMPTS = 3;
+        let lastErr = null;
+        let resolved = false;
+        for (let attempt = 0; attempt < ENTITY_RESOLVE_ATTEMPTS; attempt++) {
+          try {
+            const entity = await client.getEntity(lastPeer || 'me');
+            if (entity && entity.className === 'Channel') {
+              channelEntity = entity;
+            }
+            resolved = true;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < ENTITY_RESOLVE_ATTEMPTS - 1) {
+              const cancelled = await cancelableDelay(500 * (attempt + 1), cancelController);
+              if (cancelled) break;
+            }
+          }
         }
-      } catch (err) {
-        console.warn("Could not resolve Telegram peer entity before deleting; assuming a user/basic-group chat.", err);
+        if (!resolved) {
+          console.warn("Could not resolve Telegram peer entity after retries; skipping delete to avoid a false success.", lastErr);
+          entityResolutionFailed = true;
+        }
       }
 
       // The inner per-chunk try/catch below isolates one chunk's failure from
@@ -289,7 +313,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       // this handler against an unexpected exception so the loop can never die
       // silently, leaving scanBtn disabled and the progress marker stuck.
       await chrome.storage.local.set({ [DELETE_PROGRESS_KEY]: { total: selected.length, done: 0 } });
-      for (let i = 0; i < selected.length; i += BATCH_SIZE) {
+      if (cancelController.cancelled) {
+        // A Cancel click during the entity-resolution backoff above is a cancel,
+        // not an unverifiable chat type -- don't mislabel it.
+        cancelledEarly = true;
+      } else if (entityResolutionFailed) {
+        // Could not confirm whether this peer is a channel/supergroup (needing
+        // channels.DeleteMessages) or not (needing messages.DeleteMessages) --
+        // guessing wrong silently no-ops against a real channel while reporting
+        // success. Fail the whole selection closed instead of guessing.
+        failedChunks.push({
+          count: selected.length,
+          message: "Could not verify this chat type — skipped to avoid a false success.",
+        });
+        progressText.textContent = "Could not verify this chat type — skipped to avoid a false success.";
+        logActivity('sc-activity-log', `Delete skipped: could not verify chat type for "${lastPeer}" after retries — skipped to avoid a false success (0/${selected.length} processed).`, 'error');
+      }
+      for (let i = 0; !entityResolutionFailed && i < selected.length; i += BATCH_SIZE) {
         if (cancelController.cancelled) { cancelledEarly = true; break; }
         const chunk = selected.slice(i, i + BATCH_SIZE).map(m => m.id);
 
@@ -310,6 +350,12 @@ document.addEventListener('DOMContentLoaded', async () => {
               },
             }
           );
+          // messages.AffectedMessages/channels.AffectedMessages (both call's response
+          // type) only carry `pts`/`ptsCount` -- PTS event-log bookkeeping, not a
+          // per-ID or even a reliable per-count confirmation of which/how many
+          // messages were actually deleted. Not throwing is the only signal MTProto
+          // gives here, so this count is "accepted by Telegram", not independently
+          // verified -- see the softened wording below where this is reported.
           deletedCount += chunk.length;
         } catch (err) {
           if (err instanceof FloodWaitCancelledError) {
@@ -356,10 +402,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
         logActivity('sc-activity-log', `Delete cancelled: ${deletedCount}/${selected.length} processed.`, 'warn');
       } else if (failedChunks.length === 0) {
-        statusText.textContent = "Deletion Complete!";
+        // Telegram's delete calls confirm nothing more specific than "didn't throw"
+        // (see the comment above `deletedCount += chunk.length`) -- worded as
+        // "requests completed" rather than an unqualified "N deleted" so this
+        // doesn't overstate a per-message-verified count.
+        statusText.textContent = "Deletion requests completed!";
         statusText.style.color = "#10b981";
         renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
-        logActivity('sc-activity-log', `Delete complete: ${deletedCount}/${selected.length} deleted.`);
+        logActivity('sc-activity-log', `Delete requests completed: ${deletedCount}/${selected.length} accepted by Telegram.`);
       } else {
         const failedCount = failedChunks.reduce((sum, c) => sum + c.count, 0);
         statusText.textContent = `Deletion finished: ${deletedCount} deleted, ${failedCount} failed.`;

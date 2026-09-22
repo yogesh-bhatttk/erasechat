@@ -36,8 +36,29 @@ function extractRedditItemsFromChildren(children, filterText, seenIds) {
   return results;
 }
 
+// Pure: given the parsed JSON body of a POST to /api/del, returns an error
+// message string if the body signals the delete did NOT actually happen (an
+// explicit errors/json.errors array, or any other unexpected non-empty body --
+// Reddit's own real success response is an empty `{}`), or null if the body
+// looks like a genuine success. HTTP status alone was never enough to know a
+// delete actually happened -- the most important finding of the audit that
+// added this check. Extracted to module scope (mirroring
+// extractRedditItemsFromChildren above) so it's unit tested directly instead
+// of only reachable through a live delete. See tests/reddit-dashboard.test.js.
+function redditDeleteFailureFromBody(body) {
+  const errors = (body && body.json && body.json.errors) || (body && body.errors);
+  if (Array.isArray(errors) && errors.length > 0) {
+    const detail = errors.map(e => Array.isArray(e) ? e.join(': ') : String(e)).join('; ');
+    return `Reddit rejected the delete: ${detail}`;
+  }
+  if (body && typeof body === 'object' && Object.keys(body).length > 0) {
+    return `Reddit did not confirm the delete (unexpected response: ${JSON.stringify(body)}).`;
+  }
+  return null;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { extractRedditItemsFromChildren };
+  module.exports = { extractRedditItemsFromChildren, redditDeleteFailureFromBody };
 }
 
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
@@ -230,13 +251,29 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
               authErr.expiredAuth = true;
               throw authErr;
             }
-            throw new Error(`status ${response.status}`);
+            // .status is read by runDeleteLoop's rate-limit circuit breaker
+            // (see dashboard-fetch-utils.js) to detect several 429s in a row.
+            const statusErr = new Error(`status ${response.status}`);
+            statusErr.status = response.status;
+            throw statusErr;
           }
+
+          // HTTP 200 alone doesn't mean Reddit actually deleted anything -- the
+          // most important finding of the audit that prompted this fix. See
+          // redditDeleteFailureFromBody above for what counts as a real success.
+          let body;
+          try {
+            body = await response.json();
+          } catch (e) {
+            throw new Error("Reddit returned an unreadable response for the delete request -- item may not have been deleted.");
+          }
+          const failureMessage = redditDeleteFailureFromBody(body);
+          if (failureMessage) throw new Error(failureMessage);
         }
       });
       deletedCount = result.deletedCount;
       failures = result.failures;
-      const { succeededItems, expiredAuth, cancelled } = result;
+      const { succeededItems, expiredAuth, rateLimited, cancelled } = result;
 
       // Anything scanned but not selected, anything selected but never reached
       // because a cancel/expired-auth break happened early, AND anything that
@@ -259,6 +296,11 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         statusText.style.color = "#ef4444";
         logActivity('sc-activity-log', `Delete stopped: session invalid (${deletedCount}/${totalCount} deleted).`, 'error');
         await showAlert(`Stopped: your Reddit session appears to be invalid. ${deletedCount} of ${totalCount} items were deleted before this happened. Reconnect from the extension popup to finish.`);
+      } else if (rateLimited) {
+        statusText.textContent = "Rate limited by Reddit — stopped early.";
+        statusText.style.color = "#ef4444";
+        logActivity('sc-activity-log', `Delete stopped: repeated rate limiting (429) from Reddit (${deletedCount}/${totalCount} deleted).`, 'error');
+        await showAlert(`Stopped: Reddit rate-limited several delete requests in a row. ${deletedCount} of ${totalCount} items were deleted before this happened. Wait a while, then try again.`);
       } else if (cancelled) {
         statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
         statusText.style.color = "#ef4444";

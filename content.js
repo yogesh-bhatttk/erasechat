@@ -1387,10 +1387,27 @@ if (!window.slackCleanInitialized) {
                       updateProgressUI();
                     });
                   } else {
-                    chrome.runtime.sendMessage({
-                      type: "CANCEL_DELETION",
-                      teamId: activeTeam.id,
-                      channelId: activeChannel.id
+                    // Route through sendJobControl like every other job-control call
+                    // site (see its comment) instead of firing CANCEL_DELETION with no
+                    // callback. isRunning/isPaused were already set true above just to
+                    // drive this resume/discard prompt -- if this fire-and-forget send
+                    // were lost, or background.js found no matching job, those flags
+                    // would never get corrected and the dashboard would believe a job
+                    // is running forever. So unlike the normal Cancel button (which
+                    // keeps the running UI on failure so the user can retry a
+                    // still-active job), "Discard Progress" always resets local state
+                    // to not-running -- that's what the user asked for, and there's
+                    // nothing here to protect against re-canceling.
+                    sendJobControl("CANCEL_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
+                      if (!delivered) {
+                        logConsole(t("logCancelUnreachable", "Could not reach the background worker to cancel. The job may still be running — reload Slack and try again."), "error");
+                      } else if (!jobFound) {
+                        logConsole(t("logCancelNoJob", "Cancel reached the background worker, but found no matching job at this workspace/channel."), "warn");
+                      } else {
+                        logConsole(t("logCanceledByUser", "Bulk deletion canceled by user."), "warn");
+                      }
+                      stopOperations();
+                      resetScanResultsUI();
                     });
                   }
                 }
@@ -1616,6 +1633,14 @@ if (!window.slackCleanInitialized) {
       // Guard against duplicate intervals if dashboard is re-opened
       if (urlObserverInterval) return;
 
+      // This interval is intentionally never cleared -- not even when the
+      // dashboard is closed (see hideDashboard, which only hides the host
+      // element rather than destroying it). Its intended lifetime is the
+      // content script's lifetime: URL changes must keep being tracked while
+      // hidden so a reopened dashboard is instantly rebound to the current
+      // channel instead of needing a fresh poll cycle to catch up. The poll
+      // itself is cheap (1/sec, a string compare), so leaving it running is a
+      // deliberate tradeoff, not an oversight.
       urlObserverInterval = setInterval(() => {
         if (window.location.href !== lastUrl) {
           const oldUrl = lastUrl;
@@ -1801,6 +1826,10 @@ if (!window.slackCleanInitialized) {
       });
 
       function hideDashboard() {
+        // Only hides the host element -- urlObserverInterval (see
+        // startUrlObserver) is deliberately left running so URL changes are
+        // still tracked while hidden and the dashboard can rebind instantly
+        // if reopened.
         dashboardEl.classList.remove("visible");
         setTimeout(() => {
           if (shadowHost) {

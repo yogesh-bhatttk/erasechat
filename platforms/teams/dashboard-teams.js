@@ -44,8 +44,19 @@ function getOwnDisplayIdentity(bearerToken) {
   }
 }
 
+// True when a freshly-refreshed token (see apiFetch's 401 retry path below) decodes
+// to a DIFFERENT own-identity than the one the current scan/delete run started with.
+// Only compares two actual, decoded ids -- a refreshed token that fails to decode at
+// all (null) is a decode failure, not evidence of a different identity, and is left
+// for the normal expired-auth handling to deal with instead of being misreported as
+// an identity change. Module-scope and pure so it's unit-testable without a DOM --
+// see tests/teams-dashboard.test.js.
+function identityChangedMidRun(originalOwnUserId, refreshedOwnUserId) {
+  return !!(originalOwnUserId && refreshedOwnUserId && originalOwnUserId !== refreshedOwnUserId);
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { getOwnUserId, getOwnDisplayIdentity };
+  module.exports = { getOwnUserId, getOwnDisplayIdentity, identityChangedMidRun };
 }
 
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
@@ -62,8 +73,14 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   const { teams_base_url: baseUrl } = localData;
   const data = sessionData;
 
-  const ownUserId = getOwnUserId(data.teams_token);
-  const ownDisplayIdentity = getOwnDisplayIdentity(data.teams_token);
+  // let, not const: the 401-retry-refresh path in apiFetch below can replace
+  // cachedToken with a token captured from a DIFFERENT Teams identity (see
+  // teams-webrequest.js -- its listener is always-on and passively captures a
+  // Bearer token from ANY teams.microsoft.com tab, not just the one this dashboard
+  // was opened for), so both of these are recomputed from the new token whenever
+  // that happens, and compared against the identity the current run started with.
+  let ownUserId = getOwnUserId(data.teams_token);
+  let ownDisplayIdentity = getOwnDisplayIdentity(data.teams_token);
   const connectedAsEl = document.getElementById('connected-as');
   if (connectedAsEl && ownDisplayIdentity) {
     connectedAsEl.textContent = t("dashConnectedAs", `(Connected: ${ownDisplayIdentity})`, [ownDisplayIdentity]);
@@ -118,7 +135,36 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       const refreshedData = await chrome.storage.session.get(['teams_token']);
       const refreshedToken = refreshedData.teams_token;
       if (refreshedToken && refreshedToken !== token) {
+        const refreshedOwnUserId = getOwnUserId(refreshedToken);
+        // The newly captured token may belong to a completely different signed-in
+        // Teams identity than the one this scan/delete run started with (see
+        // teams-webrequest.js's listener). Continuing would mean filtering "my
+        // messages" against the OLD identity while issuing API calls with the NEW
+        // token's credentials -- silently acting on whichever account happens to
+        // own the just-captured token. Hard-abort instead, the same way an
+        // actually-expired session hard-aborts below.
+        if (identityChangedMidRun(ownUserId, refreshedOwnUserId)) {
+          const err = new Error("Your signed-in Teams identity changed during this session — stopping to avoid acting on the wrong account. Please reconnect and try again.");
+          // Not literally an expired-auth failure, but reused so a running delete
+          // loop stops immediately instead of retrying every remaining item the
+          // same doomed way -- runDeleteLoop (dashboard-fetch-utils.js) only
+          // fast-stops on `err.expiredAuth`/`err.staleQueryId`, and this condition
+          // is just as systemic and just as unrecoverable mid-run. `identityMismatch`
+          // is what the delete handler below checks to show this message instead of
+          // the generic session-expired one.
+          err.expiredAuth = true;
+          err.identityMismatch = true;
+          throw err;
+        }
+
         cachedToken = refreshedToken;
+        ownUserId = refreshedOwnUserId;
+        ownDisplayIdentity = getOwnDisplayIdentity(refreshedToken);
+        if (connectedAsEl) {
+          connectedAsEl.textContent = ownDisplayIdentity
+            ? t("dashConnectedAs", `(Connected: ${ownDisplayIdentity})`, [ownDisplayIdentity])
+            : '';
+        }
         const retryOptions = {
           method,
           headers: {
@@ -132,7 +178,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
     if (!response.ok) {
       if (response.status === 403) {
-        throw new Error("API Error 403: Teams message deletion was blocked. This usually means the signed-in account is a personal Microsoft account, or your organization's messaging policy does not allow deleting sent messages. A work/school account with a policy that permits message deletion is required.");
+        throw new Error("API Error 403: Couldn't delete this message. This can happen for a few different reasons -- a personal Microsoft account, an organization messaging policy that doesn't allow deleting sent messages, or the message being past Teams' own edit/delete window. A work/school account with a policy that permits message deletion is required for the first two.");
       }
       if (response.status === 401) {
         const err = new Error("Your Teams session appears to have expired. Reopen teams.microsoft.com, make sure you're signed in, then click the Erasechat toolbar icon again to reconnect.");
@@ -350,10 +396,23 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       resultsCount.textContent = formatScanCount(currentResults.length, { truncated: false });
 
       if (expiredAuth) {
-        statusText.textContent = "Session expired — reconnect required.";
-        statusText.style.color = "#ef4444";
-        logActivity('sc-activity-log', `Delete stopped: session expired (${deletedCount}/${totalCount} deleted).`, 'error');
-        await showAlert(`Stopped: your Teams session appears to have expired. ${deletedCount} of ${totalCount} messages were deleted before this happened. Reopen teams.microsoft.com, sign in, then click the Erasechat toolbar icon again to reconnect and finish.`);
+        // The failure that triggered the expiredAuth fast-stop is always the last
+        // one pushed (runDeleteLoop breaks right after pushing it) -- inspect its
+        // original error to tell an actually-expired session apart from an
+        // identity-changed-mid-run abort (see apiFetch's 401 retry path above),
+        // since both use the same expiredAuth fast-stop but need different wording.
+        const lastFailureErr = failures.length > 0 ? failures[failures.length - 1].error : null;
+        if (lastFailureErr && lastFailureErr.identityMismatch) {
+          statusText.textContent = "Teams identity changed — reconnect required.";
+          statusText.style.color = "#ef4444";
+          logActivity('sc-activity-log', `Delete stopped: signed-in Teams identity changed mid-session (${deletedCount}/${totalCount} deleted).`, 'error');
+          await showAlert(`Stopped: your signed-in Teams identity changed during this session — stopping to avoid acting on the wrong account. ${deletedCount} of ${totalCount} messages were deleted before this happened. Please reconnect and try again.`);
+        } else {
+          statusText.textContent = "Session expired — reconnect required.";
+          statusText.style.color = "#ef4444";
+          logActivity('sc-activity-log', `Delete stopped: session expired (${deletedCount}/${totalCount} deleted).`, 'error');
+          await showAlert(`Stopped: your Teams session appears to have expired. ${deletedCount} of ${totalCount} messages were deleted before this happened. Reopen teams.microsoft.com, sign in, then click the Erasechat toolbar icon again to reconnect and finish.`);
+        }
       } else if (cancelled) {
         statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
         statusText.style.color = "#ef4444";

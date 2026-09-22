@@ -262,6 +262,108 @@ test('runDeleteLoop: a fatal (non-per-item) exception mid-run still surfaces how
   }
 });
 
+// ============================================================
+// Rate-limit circuit breaker (audit Fix 3) -- several consecutive `.status ===
+// 429` failures must stop the whole run early, the same way expiredAuth does,
+// instead of burning through the rest of a large batch at full pacing.
+// ============================================================
+
+function rateLimitError() {
+  const err = new Error('status 429');
+  err.status = 429;
+  return err;
+}
+
+test('runDeleteLoop: N consecutive 429 failures trip the circuit breaker and stop the run early', async () => {
+  const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }, { id: 'f' }];
+  const attempted = [];
+  const result = await runDeleteLoop(items, {
+    cancelController: createCancelController(),
+    progressKey: 'test_progress_ratelimit_1',
+    progressText: fakeProgressText(),
+    deleteItem: async (item) => {
+      attempted.push(item.id);
+      throw rateLimitError();
+    }
+  });
+
+  assert.equal(result.rateLimited, true);
+  assert.equal(result.expiredAuth, false);
+  assert.equal(result.cancelled, false);
+  assert.ok(attempted.length < items.length, 'must stop before attempting every item');
+  assert.equal(attempted.length, 4, 'stops right after the 4th consecutive 429 (the threshold)');
+  assert.equal(result.failures.length, 4);
+});
+
+test('runDeleteLoop: fewer than the threshold worth of 429s in a row does not trip the breaker', async () => {
+  const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  const attempted = [];
+  const result = await runDeleteLoop(items, {
+    cancelController: createCancelController(),
+    progressKey: 'test_progress_ratelimit_2',
+    progressText: fakeProgressText(),
+    deleteItem: async (item) => {
+      attempted.push(item.id);
+      throw rateLimitError();
+    }
+  });
+
+  assert.deepEqual(attempted, ['a', 'b', 'c'], 'every item attempted -- only 3 consecutive 429s, below the threshold');
+  assert.equal(result.rateLimited, false);
+  assert.equal(result.failures.length, 3);
+});
+
+test('runDeleteLoop: a successful delete in between resets the consecutive-429 streak', async () => {
+  const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }, { id: 'f' }, { id: 'g' }];
+  const attempted = [];
+  const result = await runDeleteLoop(items, {
+    cancelController: createCancelController(),
+    progressKey: 'test_progress_ratelimit_3',
+    progressText: fakeProgressText(),
+    deleteItem: async (item) => {
+      attempted.push(item.id);
+      // 3 consecutive 429s (a, b, c), then a real success (d) resets the streak,
+      // then 3 more 429s (e, f, g) -- never 4 in a row, so the breaker must not trip.
+      if (item.id === 'd') return;
+      throw rateLimitError();
+    }
+  });
+
+  assert.deepEqual(attempted, ['a', 'b', 'c', 'd', 'e', 'f', 'g'], 'every item attempted -- the success at d resets the streak');
+  assert.equal(result.rateLimited, false);
+  assert.equal(result.deletedCount, 1);
+});
+
+test('runDeleteLoop: a non-429 failure in between resets the consecutive-429 streak', async () => {
+  const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }, { id: 'f' }, { id: 'g' }];
+  const attempted = [];
+  const result = await runDeleteLoop(items, {
+    cancelController: createCancelController(),
+    progressKey: 'test_progress_ratelimit_4',
+    progressText: fakeProgressText(),
+    deleteItem: async (item) => {
+      attempted.push(item.id);
+      if (item.id === 'd') throw new Error('ordinary per-item failure, no .status');
+      throw rateLimitError();
+    }
+  });
+
+  assert.deepEqual(attempted, ['a', 'b', 'c', 'd', 'e', 'f', 'g'], 'every item attempted -- the ordinary failure at d resets the streak');
+  assert.equal(result.rateLimited, false);
+});
+
+test('runDeleteLoop: rateLimited stops before an expiredAuth-style break would even matter -- both are early-abort, mutually exclusive outcomes', async () => {
+  const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }];
+  const result = await runDeleteLoop(items, {
+    cancelController: createCancelController(),
+    progressKey: 'test_progress_ratelimit_5',
+    progressText: fakeProgressText(),
+    deleteItem: async () => { throw rateLimitError(); }
+  });
+  assert.equal(result.rateLimited, true);
+  assert.equal(result.expiredAuth, false);
+});
+
 test('runDeleteLoop: with no preItemWait/postItemDelayMs supplied, runs with no artificial delay at all', async () => {
   await withInstantTimers(async (calls) => {
     await runDeleteLoop([{ id: 'a' }, { id: 'b' }], {

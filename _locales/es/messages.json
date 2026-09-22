@@ -127,6 +127,7 @@
   "xConnectNoSession": { "message": "No se encontró ninguna sesión activa de X.com. Inicia sesión primero en X.com en este navegador." },
   "xConnectCookieError": { "message": "Error al acceder a las cookies. Asegúrate de haber concedido los permisos correctos." },
   "mastodonConnectMissingFields": { "message": "La URL de la instancia y el token de acceso son obligatorios." },
+  "mastodonConnectInvalidHost": { "message": "URL de instancia no válida." },
   "mastodonConnectAuthFailed": { "message": "Error de autenticación ($1)" },
   "mastodonConnectFailed": { "message": "No se pudo conectar. Comprueba la URL y el token." },
 
@@ -147,6 +148,8 @@
 
   "xDashUsernameLabel": { "message": "Tu nombre de usuario de X.com" },
   "xDashUsernamePlaceholder": { "message": "p. ej. elonmusk" },
+  "xDashUsernameMismatch": { "message": "Esta no es la cuenta conectada ($1). Puedes seguir escaneando, pero la eliminación está deshabilitada hasta que coincida." },
+  "xDashUsernameMismatchBlocked": { "message": "No se puede eliminar: \"@$1\" no coincide con la cuenta conectada (@$2). Corrige el campo de nombre de usuario, o vuelve a conectar desde el popup de la extensión si cambiaste de cuenta." },
 
   "teamsDashLoadChats": { "message": "Cargar chats" },
   "teamsDashFetchChats": { "message": "Obtener mis chats" },

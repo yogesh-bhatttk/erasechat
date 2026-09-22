@@ -659,3 +659,26 @@ test("dashboard-base.css keeps the [hidden] attribute override that makes el.hid
   assert.match(src, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/,
     "dashboard-base.css must force [hidden] elements to display:none, overriding .dashboard-btn's own display:flex");
 });
+
+test("Telegram popup's showStep only clears the error message on a genuine step transition", () => {
+  // Regression guard: teleproto's auth retry loop re-enters the SAME step (code or
+  // 2FA password) right after showError() just displayed a "wrong code"/"wrong
+  // password" message, with no paint in between. showStep() unconditionally hiding
+  // the error on every call silently erased it before the user ever saw it. Fixed
+  // by tracking the currently-displayed step and only clearing the error when `id`
+  // differs from it -- this is a static-source regression guard (this file is
+  // DOM-driven with no Node-testable exports), so it checks for that structure
+  // rather than executing showStep().
+  const src = fs.readFileSync(path.join(ROOT, "platforms/telegram/telegram-popup.src.js"), "utf8");
+  const showStepMatch = src.match(/function showStep\(id\)\s*\{[\s\S]*?\n  \}/);
+  assert.ok(showStepMatch, "showStep(id) must still be defined");
+  const showStepBody = showStepMatch[0];
+  assert.match(showStepBody, /if\s*\(\s*id\s*!==\s*currentStepId\s*\)\s*\{[\s\S]*errorMsg\.style\.display\s*=\s*['"]none['"]/,
+    "showStep must only clear errorMsg when id differs from the currently-tracked step");
+  assert.doesNotMatch(
+    showStepBody.replace(/if\s*\(\s*id\s*!==\s*currentStepId\s*\)\s*\{[\s\S]*?\}/, ""),
+    /errorMsg\.style\.display\s*=\s*['"]none['"]/,
+    "errorMsg must not be cleared unconditionally outside the step-transition guard"
+  );
+  assert.match(src, /currentStepId\s*=\s*id/, "showStep must update the tracked current step id");
+});

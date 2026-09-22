@@ -39,7 +39,26 @@ function extractTweetsFromEntries(entries, seenTweetIds, filterText) {
   return { tweets, nextCursor };
 }
 
-if (typeof module !== 'undefined') module.exports = { resolveXScriptUrl, extractTweetsFromEntries };
+// Pure: given the parsed JSON body of a DeleteTweet GraphQL mutation response,
+// returns an error message string if the body signals the delete did NOT
+// actually happen (a GraphQL-level `errors` array, or a missing/null
+// `data.delete_tweet` result -- X's own real success shape), or null if the
+// body looks like a genuine success. apiFetch() only throws on a non-2xx HTTP
+// status, so this is what actually catches a body-level failure riding along
+// on an HTTP 200 -- the most important finding of the audit that added this
+// check. Extracted to module scope (mirroring extractTweetsFromEntries above)
+// so it's unit tested directly. See tests/x-dashboard.test.js.
+function deleteTweetFailureFromResult(result) {
+  if (result && Array.isArray(result.errors) && result.errors.length > 0) {
+    return result.errors.map(e => (e && e.message) || JSON.stringify(e)).join('; ');
+  }
+  if (!result || !result.data || !result.data.delete_tweet) {
+    return "X did not confirm the tweet was deleted (unexpected response).";
+  }
+  return null;
+}
+
+if (typeof module !== 'undefined') module.exports = { resolveXScriptUrl, extractTweetsFromEntries, deleteTweetFailureFromResult };
 
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
   const [sessionData, localData] = await Promise.all([
@@ -71,6 +90,46 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       connectedAsEl.textContent = t("dashConnectedAs", `(Connected: @${localData.x_username})`, [`@${localData.x_username}`]);
     }
   }
+
+  // The username field above is free text, not locked to the authenticated
+  // account -- a user can type a different handle and scan (harmless, read-only)
+  // or, without this guard, attempt to DELETE a stranger's tweets. `x_username`
+  // is the handle actually resolved from the authenticated session at connect
+  // time (connect-x.js's resolveXUsername), independent of whatever currently
+  // sits in the input; compare the two and keep Delete disabled whenever they
+  // don't match. If x_username was never resolved (older connection, or the
+  // lookup failed at connect time -- see resolveXUsername) there's nothing to
+  // compare against, so this can't block anything: same as before this existed.
+  const authenticatedUsername = localData.x_username || null;
+  const usernameWarningEl = document.getElementById('username-mismatch-warning');
+
+  function isUsernameMismatched() {
+    if (!authenticatedUsername) return false;
+    const typed = usernameInput.value.trim().replace('@', '').toLowerCase();
+    return !!typed && typed !== authenticatedUsername.toLowerCase();
+  }
+
+  // Called on every username edit, and again right before Delete is armed, so
+  // the warning/disabled state can never go stale relative to the input.
+  function updateUsernameMismatchState() {
+    const mismatched = isUsernameMismatched();
+    if (usernameWarningEl) {
+      usernameWarningEl.textContent = mismatched
+        ? t("xDashUsernameMismatch",
+            `This isn't the connected account (@${authenticatedUsername}). You can still scan, but deletion is disabled until it matches.`,
+            [`@${authenticatedUsername}`])
+        : '';
+      usernameWarningEl.classList.toggle('hidden', !mismatched);
+    }
+    if (mismatched) {
+      deleteBtn.disabled = true;
+    } else if (currentResults.length > 0) {
+      deleteBtn.disabled = false;
+    }
+    return mismatched;
+  }
+  usernameInput.addEventListener('input', updateUsernameMismatchState);
+
   const filterInput = document.getElementById('text-filter');
   const itemList = document.getElementById('item-list');
   const resultsCount = document.getElementById('results-count');
@@ -82,6 +141,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   initActivityLog('sc-activity-log');
 
   let currentResults = [];
+  updateUsernameMismatchState(); // reflect the pre-filled value now that currentResults exists (always matches at this point, but keeps this the single source of truth)
   let userRestId = null;
   // Tracks which screenName userRestId was actually resolved for -- without this,
   // scanning once then editing the username field and scanning again would reuse
@@ -129,6 +189,18 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       // shape Reddit/Mastodon/Teams already fail-fast on. Every remaining
       // selected tweet would fail identically, so flag it the same way their
       // `expiredAuth` does instead of retrying each one at the full pacing delay.
+      //
+      // Known imprecision (audit Fix 4): a 403 here could in principle also be
+      // X rejecting an attempt to delete a tweet that isn't the authenticated
+      // account's (relevant to the username-mismatch guard below), which isn't
+      // really an expired session. X's own response body gives no reliable,
+      // documented way to tell the two apart at this status-code layer, so this
+      // is left as-is rather than guessing at a distinction the API doesn't
+      // actually expose. In practice this matters less than it looks: a GraphQL
+      // permission rejection from DeleteTweet more commonly comes back as HTTP
+      // 200 with a body-level `errors` array, which is now caught as an ordinary
+      // per-item failure by the check in deleteItem below, not misrouted through
+      // this expiredAuth branch at all.
       if (response.status === 401 || response.status === 403) {
         const authErr = new Error("Your X.com session (ct0) appears to be invalid or expired. Reconnect from the extension popup.");
         authErr.status = response.status;
@@ -328,7 +400,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
       if (currentResults.length > 0) {
         renderResultRows(currentResults);
-        deleteBtn.disabled = false;
+        // Scanning a mismatched username is allowed (read-only), but Delete must
+        // stay disabled until the username field matches the authenticated
+        // account again -- see updateUsernameMismatchState.
+        deleteBtn.disabled = isUsernameMismatched();
         statusText.textContent = "Scan complete. Review results before deleting.";
         logActivity('sc-activity-log', `Scan complete: ${currentResults.length} tweet(s) found${truncated ? ' (truncated -- more may exist)' : ''}.`);
       } else {
@@ -355,6 +430,15 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   });
 
   deleteBtn.addEventListener('click', async () => {
+    // Defense in depth: the button is already kept disabled while mismatched
+    // (see updateUsernameMismatchState), but re-check here too rather than
+    // trust only a disabled attribute to have prevented this click from firing.
+    if (updateUsernameMismatchState()) {
+      await showAlert(t("xDashUsernameMismatchBlocked",
+        `Can't delete: "@${usernameInput.value.trim().replace('@', '')}" doesn't match the connected account (@${authenticatedUsername}). Fix the username field, or reconnect from the extension popup if you've switched accounts.`,
+        [usernameInput.value.trim().replace('@', ''), authenticatedUsername]));
+      return;
+    }
     const selected = getSelectedItems(currentResults);
     if (selected.length === 0) {
       await showAlert(t("dashNoItemsSelected", "No items are selected. Check at least one item, or use Select All, before deleting."));
@@ -390,10 +474,17 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
             const queryId = queryIds.DeleteTweet;
             const url = `https://x.com/i/api/graphql/${queryId}/DeleteTweet`;
 
-            await apiFetch(url, 'POST', {
+            const result = await apiFetch(url, 'POST', {
               variables,
               queryId
             });
+
+            // apiFetch only throws on a non-2xx HTTP status; a GraphQL mutation
+            // can still come back HTTP 200 with a body-level failure -- the most
+            // important finding of the audit that prompted this fix. See
+            // deleteTweetFailureFromResult above for what counts as a real success.
+            const failureMessage = deleteTweetFailureFromResult(result);
+            if (failureMessage) throw new Error(failureMessage);
           } catch (err) {
             // Isolate this item's failure so a single bad tweet (400/403/network
             // error) doesn't abort the rest of the batch (runDeleteLoop still
@@ -406,7 +497,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       });
       deletedCount = result.deletedCount;
       failures = result.failures;
-      const { succeededItems, expiredAuth, cancelled } = result;
+      const { succeededItems, expiredAuth, rateLimited, cancelled } = result;
       const staleQueryIdSuspected = failures.some(f => f.error && f.error.staleQueryId);
 
       // Anything scanned but not selected, anything selected but never reached
@@ -431,6 +522,12 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
         logActivity('sc-activity-log', `Delete stopped: session invalid (${deletedCount}/${totalCount} deleted).`, 'error');
         await showAlert(`Stopped: your X.com session (ct0) appears to be invalid or expired. ${deletedCount} of ${totalCount} tweets were deleted before this happened. Reconnect from the extension popup to finish.`);
+      } else if (rateLimited) {
+        statusText.textContent = "Rate limited by X — stopped early.";
+        statusText.style.color = "#ef4444";
+        if (currentResults.length === 0) renderEmptyState(itemList, t("dashDeletionFinished", "Deletion finished."));
+        logActivity('sc-activity-log', `Delete stopped: repeated rate limiting (429) from X (${deletedCount}/${totalCount} deleted).`, 'error');
+        await showAlert(`Stopped: X rate-limited several delete requests in a row. ${deletedCount} of ${totalCount} tweets were deleted before this happened. Wait a while, then try again.`);
       } else if (cancelled) {
         statusText.textContent = t("dashCancelledPartial", `Cancelled: ${deletedCount} of ${totalCount} processed.`, [String(deletedCount), String(totalCount)]);
         statusText.style.color = "#ef4444";
@@ -476,7 +573,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       statusText.style.color = "#ef4444";
     } finally {
       scanBtn.disabled = false;
-      deleteBtn.disabled = currentResults.length === 0;
+      deleteBtn.disabled = currentResults.length === 0 || isUsernameMismatched();
       resetCancelButton(cancelBtn);
     }
   });

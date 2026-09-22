@@ -61,6 +61,38 @@ const SYSTEM_MESSAGE_SUBTYPES = new Set([
   "pinned_item", "unpinned_item", "bot_add", "bot_remove", "app_conversation_join"
 ]);
 
+// Replaces the contents of unescaped [...] character classes with "_" so the
+// quantifier-counting checks below don't mistake a literal quantifier
+// character inside a class (e.g. [*], [{], [+]) for an actual quantifier.
+// Escape sequences (anywhere, in or out of a class) are copied through
+// verbatim so `(?<!\\)` lookbehinds elsewhere still see them correctly.
+// Only used for the two count-based checks; the structural pattern checks
+// above/below still scan the original, unmasked pattern.
+function maskCharClasses(pattern) {
+  let out = "";
+  let inClass = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "\\" && i + 1 < pattern.length) {
+      out += ch + pattern[i + 1];
+      i++;
+      continue;
+    }
+    if (!inClass && ch === "[") {
+      inClass = true;
+      out += ch;
+      continue;
+    }
+    if (inClass && ch === "]") {
+      inClass = false;
+      out += ch;
+      continue;
+    }
+    out += inClass ? "_" : ch;
+  }
+  return out;
+}
+
 // Comprehensive ReDoS safety checker.
 function isSafeRegex(pattern) {
   // Reject excessively long patterns
@@ -94,15 +126,19 @@ function isSafeRegex(pattern) {
   // `a*a*a*…b` (polynomial). A legitimate keyword/regex filter never needs many
   // quantifiers, so cap the count. Escaped metacharacters (\*, \+, \?, \{) are
   // literals and must not be counted.
-  const quantifiers = (pattern.match(/(?<!\\)[*+?{]/g) || []).length;
+  // Characters like {, *, + inside a [...] character class are literals, not
+  // quantifiers (e.g. [{], [*]) — mask class contents first so they aren't
+  // counted below.
+  const maskedPattern = maskCharClasses(pattern);
+  const quantifiers = (maskedPattern.match(/(?<!\\)[*+?{]/g) || []).length;
   if (quantifiers > MAX_QUANTIFIERS) return false;
 
   // Unbounded-quantifier chain guard (see MAX_UNBOUNDED_QUANTIFIERS). Count *, +, and
   // open-ended {n,} braces; escaped metacharacters (\*, \+) are literals and don't
   // count. This catches the polynomial `a*a*a*…b` / `\d+\d+\d+…` family that the count
   // cap above lets through (10 stars is degree-10 catastrophic, not safe).
-  const unbounded = (pattern.match(/(?<!\\)[*+]/g) || []).length
-                  + (pattern.match(/(?<!\\)\{\d*,\}/g) || []).length;
+  const unbounded = (maskedPattern.match(/(?<!\\)[*+]/g) || []).length
+                  + (maskedPattern.match(/(?<!\\)\{\d*,\}/g) || []).length;
   if (unbounded > MAX_UNBOUNDED_QUANTIFIERS) return false;
 
   // Stricter check for adjacent or narrowly separated unbounded quantifiers (e.g. .*.*)
@@ -309,7 +345,7 @@ function isSlackHostname(urlStr) {
 
 // Deterministic avatar color from an arbitrary string (UI helper, pure).
 function stringToColor(str) {
-  if (!str) return "#8B5CF6";
+  if (!str || typeof str !== "string") return "#8B5CF6";
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     hash = str.charCodeAt(i) + ((hash << 5) - hash);

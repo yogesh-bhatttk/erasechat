@@ -127,6 +127,7 @@
   "xConnectNoSession": { "message": "Aucune session X.com active n'a été trouvée. Veuillez d'abord vous connecter à X.com dans ce navigateur." },
   "xConnectCookieError": { "message": "Erreur d'accès aux cookies. Vérifiez que les autorisations nécessaires ont été accordées." },
   "mastodonConnectMissingFields": { "message": "L'URL de l'instance et le jeton d'accès sont obligatoires." },
+  "mastodonConnectInvalidHost": { "message": "URL d'instance invalide." },
   "mastodonConnectAuthFailed": { "message": "Échec de l'authentification ($1)" },
   "mastodonConnectFailed": { "message": "Échec de la connexion. Vérifiez l'URL et le jeton." },
 
@@ -147,6 +148,8 @@
 
   "xDashUsernameLabel": { "message": "Votre nom d'utilisateur X.com" },
   "xDashUsernamePlaceholder": { "message": "ex. elonmusk" },
+  "xDashUsernameMismatch": { "message": "Ce n'est pas le compte connecté ($1). Vous pouvez toujours scanner, mais la suppression est désactivée jusqu'à ce que cela corresponde." },
+  "xDashUsernameMismatchBlocked": { "message": "Impossible de supprimer : \"@$1\" ne correspond pas au compte connecté (@$2). Corrigez le champ du nom d'utilisateur, ou reconnectez-vous depuis la popup de l'extension si vous avez changé de compte." },
 
   "teamsDashLoadChats": { "message": "Charger les discussions" },
   "teamsDashFetchChats": { "message": "Récupérer mes discussions" },

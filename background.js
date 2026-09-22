@@ -25,6 +25,11 @@ const MAX_SCAN_RESULTS = 5000;
 const MAX_THREAD_PAGES = 10;
 const THREAD_PAGE_LIMIT = 200;
 const DEFAULT_THROTTLE_DELAY = 1000;
+// Server-side floor matching content.js's MIN_THROTTLE_DELAY_MS. Duplicated here
+// (not shared) because background.js and content.js are loaded as separate,
+// unbundled scripts with no shared-constants mechanism for this value — keep the
+// two literals in sync by hand if either changes.
+const MIN_THROTTLE_DELAY_MS = 1000;
 const STORAGE_BATCH_INTERVAL = 10;
 // Transient (network/exception) errors on a single item are retried this many
 // times with a short backoff before the item is counted as failed — so a brief
@@ -636,7 +641,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         stats: request.stats || { success: 0, fail: 0, skipped: 0, total: request.deleteQueue.length },
         isRunning: true,
         isPaused: false,
-        throttleDelay: request.throttleDelay || DEFAULT_THROTTLE_DELAY,
+        // Clamp to the server-side minimum too, not just falsy-guard: a caller
+        // sending a small positive value (e.g. 1) would otherwise hammer Slack's
+        // delete/update API far faster than intended.
+        throttleDelay: Math.max(MIN_THROTTLE_DELAY_MS, request.throttleDelay || DEFAULT_THROTTLE_DELAY),
         filterAttachments,
         nextRunAt: 0,
         _timer: null
@@ -1059,11 +1067,13 @@ async function runScanInBg(token, req) {
 
 // Read a queued item's resolved action. The decision is made once at enqueue time
 // via the shared decideItemAction() and persisted, so it is deterministic even
-// after a service-worker restart. Defaults to a safe full delete if ever missing.
+// after a service-worker restart. saveJobQueue always writes a definite action,
+// so this fallback is only reachable via genuine storage corruption; when it is
+// hit, default to the less-destructive trim rather than a full delete.
 function itemAction(item) {
-  if (item.action === "trim") return "trim";
+  if (item.action === "delete") return "delete";
   if (item.action === "skip") return "skip";
-  return "delete";
+  return "trim";
 }
 
 // Shared 429 handler: back off honoring Retry-After, but stop retrying a single

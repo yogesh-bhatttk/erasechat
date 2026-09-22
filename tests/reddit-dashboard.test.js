@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { extractRedditItemsFromChildren } = require('../platforms/reddit/dashboard-reddit.js');
+const { extractRedditItemsFromChildren, redditDeleteFailureFromBody } = require('../platforms/reddit/dashboard-reddit.js');
 
 function comment(overrides) {
   return { kind: 't1', data: { name: 't1_c1', author: 'me', body: 'a comment', subreddit_name_prefixed: 'r/test', created_utc: 1700000000, ...overrides } };
@@ -105,4 +105,38 @@ test('extractRedditItemsFromChildren: a repeated/overlapping page (stuck `after`
   const secondResults = extractRedditItemsFromChildren(page2, '', seenIds);
   assert.equal(firstResults.length, 2);
   assert.deepEqual(secondResults, [], 'a fully-repeated page must not inflate results or re-queue a duplicate delete');
+});
+
+// ============================================================
+// redditDeleteFailureFromBody -- audit Fix 1: HTTP 200 alone doesn't mean
+// Reddit actually deleted anything; the JSON body must be inspected too.
+// ============================================================
+
+test('redditDeleteFailureFromBody: an empty {} body (Reddit\'s real success shape) is not a failure', () => {
+  assert.equal(redditDeleteFailureFromBody({}), null);
+});
+
+test('redditDeleteFailureFromBody: a 200 response with a top-level errors array is treated as a failure', () => {
+  const message = redditDeleteFailureFromBody({ errors: [['RATELIMIT', 'you are doing that too much']] });
+  assert.ok(message, 'a non-null message means the caller must throw');
+  assert.match(message, /RATELIMIT/);
+});
+
+test('redditDeleteFailureFromBody: a 200 response with a json.errors array (legacy API shape) is treated as a failure', () => {
+  const message = redditDeleteFailureFromBody({ json: { errors: [['USER_REQUIRED', 'please log in']] } });
+  assert.ok(message);
+  assert.match(message, /USER_REQUIRED/);
+});
+
+test('redditDeleteFailureFromBody: an unexpected non-empty body with no errors array is still treated as a failure', () => {
+  // Reddit's own success response for /api/del is an empty {} -- anything else,
+  // even something that isn't an explicit error shape, means the delete wasn't
+  // confirmed and must not be silently counted as succeeded.
+  const message = redditDeleteFailureFromBody({ kind: 'Listing', data: {} });
+  assert.ok(message);
+});
+
+test('redditDeleteFailureFromBody: null/undefined body is not treated as a failure (mirrors an empty {})', () => {
+  assert.equal(redditDeleteFailureFromBody(null), null);
+  assert.equal(redditDeleteFailureFromBody(undefined), null);
 });

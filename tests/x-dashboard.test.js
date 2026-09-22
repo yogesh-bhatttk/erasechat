@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { resolveXScriptUrl, extractTweetsFromEntries } = require('../platforms/x/dashboard-x.js');
+const { resolveXScriptUrl, extractTweetsFromEntries, deleteTweetFailureFromResult } = require('../platforms/x/dashboard-x.js');
 
 test('resolveXScriptUrl resolves root-relative X bundles against x.com', () => {
   assert.strictEqual(
@@ -79,4 +79,31 @@ test('extractTweetsFromEntries: skips a tweet-* entry with no resolvable result 
   const entries = [malformed, tweetEntry('1'), cursorEntry('C')];
   const { tweets } = extractTweetsFromEntries(entries, new Set(), '');
   assert.deepStrictEqual(tweets.map(t => t.id), ['1']);
+});
+
+// ============================================================
+// deleteTweetFailureFromResult -- audit Fix 1: HTTP 200 alone doesn't mean X
+// actually deleted the tweet; the GraphQL response body must be inspected too.
+// ============================================================
+
+test('deleteTweetFailureFromResult: a real DeleteTweet success shape is not a failure', () => {
+  const result = { data: { delete_tweet: { tweet_results: {} } } };
+  assert.equal(deleteTweetFailureFromResult(result), null);
+});
+
+test('deleteTweetFailureFromResult: an HTTP-200 response with a GraphQL errors array is treated as a failure', () => {
+  const result = { errors: [{ message: 'You are not authorized to delete this Tweet.' }] };
+  const message = deleteTweetFailureFromResult(result);
+  assert.ok(message, 'a non-null message means the caller must throw');
+  assert.match(message, /not authorized/);
+});
+
+test('deleteTweetFailureFromResult: a missing data.delete_tweet with no errors array is still treated as a failure', () => {
+  const message = deleteTweetFailureFromResult({ data: {} });
+  assert.ok(message);
+});
+
+test('deleteTweetFailureFromResult: a null/undefined result is treated as a failure (nothing to confirm the delete)', () => {
+  assert.ok(deleteTweetFailureFromResult(null));
+  assert.ok(deleteTweetFailureFromResult(undefined));
 });

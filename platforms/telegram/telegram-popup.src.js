@@ -18,10 +18,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnDashboard = document.getElementById('btn-dashboard');
   const btnLogout = document.getElementById('btn-logout');
 
+  let currentStepId = null;
+
   function showStep(id) {
     document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
     document.getElementById(id).classList.add('active');
-    errorMsg.style.display = 'none';
+    // Only clear the error when genuinely transitioning to a DIFFERENT step. teleproto's
+    // auth retry loop re-enters the SAME step (e.g. code or password) right after
+    // showError() displayed a "wrong code"/"wrong password" message, with no paint in
+    // between -- unconditionally hiding the error here would erase it before the user
+    // ever sees it.
+    if (id !== currentStepId) {
+      errorMsg.style.display = 'none';
+    }
+    currentStepId = id;
   }
 
   function showError(msg) {

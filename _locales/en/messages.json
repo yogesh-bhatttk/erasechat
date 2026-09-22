@@ -30,6 +30,7 @@
   "xConnectNoSession": { "message": "Could not find an active X.com session. Please log in to X.com in this browser first.", "description": "X connect: no ct0 cookie found" },
   "xConnectCookieError": { "message": "Error accessing cookies. Make sure you have the correct permissions.", "description": "X connect: cookies API call failed" },
   "mastodonConnectMissingFields": { "message": "Instance URL and Access Token are required.", "description": "Mastodon connect: form validation error" },
+  "mastodonConnectInvalidHost": { "message": "Invalid instance URL.", "description": "Mastodon connect: instance URL is not a plain hostname (defense-in-depth check, mirrors popup/platform-registry.js's resolveOrigin)" },
   "mastodonConnectAuthFailed": { "message": "Authentication failed ($1)", "description": "Mastodon connect: verify_credentials call returned a non-OK status. $1 = HTTP status code" },
   "mastodonConnectFailed": { "message": "Failed to connect. Check your URL and token.", "description": "Mastodon connect: generic fallback when the underlying error has no message" },
 
@@ -156,6 +157,8 @@
 
   "xDashUsernameLabel": { "message": "Your X.com Username", "description": "X dashboard: username field label" },
   "xDashUsernamePlaceholder": { "message": "e.g. elonmusk", "description": "X dashboard: username field placeholder" },
+  "xDashUsernameMismatch": { "message": "This isn't the connected account ($1). You can still scan, but deletion is disabled until it matches.", "description": "X dashboard: warning shown under the username field when it doesn't match the authenticated account. $1 = connected @handle" },
+  "xDashUsernameMismatchBlocked": { "message": "Can't delete: \"@$1\" doesn't match the connected account (@$2). Fix the username field, or reconnect from the extension popup if you've switched accounts.", "description": "X dashboard: alert shown if Delete is triggered while the username field doesn't match the authenticated account. $1 = typed username, $2 = connected username" },
 
   "teamsDashLoadChats": { "message": "Load Chats", "description": "Teams dashboard: load-chats field label" },
   "teamsDashFetchChats": { "message": "Fetch My Chats", "description": "Teams dashboard: fetch chats button" },
