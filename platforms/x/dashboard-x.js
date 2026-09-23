@@ -71,7 +71,15 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     return;
   }
 
-  const ct0 = sessionData.x_csrf;
+  // let, not const: if the user reconnects to a different X account from the
+  // popup while this dashboard tab is already open, connect-x.js overwrites
+  // x_csrf/x_username in storage, but nothing reloads this tab. Without picking
+  // that change up live (see the storage.onChanged listener below), this tab
+  // would keep sending the OLD account's ct0 alongside the NEW account's cookie
+  // jar -- X's CSRF check fails that mismatched pair, so it's not a wrong-account
+  // deletion risk, but it does surface a confusing "session expired" error right
+  // after the user just successfully reconnected.
+  let ct0 = sessionData.x_csrf;
   const BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"; // Standard public X.com web client token
 
   const scanBtn = document.getElementById('scan-btn');
@@ -85,10 +93,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   // blank for manual entry, same as before this existed.
   if (localData.x_username) {
     usernameInput.value = localData.x_username;
-    const connectedAsEl = document.getElementById('connected-as');
-    if (connectedAsEl) {
-      connectedAsEl.textContent = t("dashConnectedAs", `(Connected: @${localData.x_username})`, [`@${localData.x_username}`]);
-    }
   }
 
   // The username field above is free text, not locked to the authenticated
@@ -100,8 +104,31 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   // don't match. If x_username was never resolved (older connection, or the
   // lookup failed at connect time -- see resolveXUsername) there's nothing to
   // compare against, so this can't block anything: same as before this existed.
-  const authenticatedUsername = localData.x_username || null;
+  let authenticatedUsername = localData.x_username || null;
   const usernameWarningEl = document.getElementById('username-mismatch-warning');
+  const connectedAsEl = document.getElementById('connected-as');
+
+  function renderConnectedAs() {
+    if (!connectedAsEl) return;
+    connectedAsEl.textContent = authenticatedUsername
+      ? t("dashConnectedAs", `(Connected: @${authenticatedUsername})`, [`@${authenticatedUsername}`])
+      : '';
+  }
+  renderConnectedAs();
+
+  // Keep ct0/authenticatedUsername in sync with a reconnect that happens while
+  // this tab stays open, instead of only reading them once at load (see the
+  // `let ct0` comment above).
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'session' && changes.x_csrf) {
+      ct0 = changes.x_csrf.newValue;
+    }
+    if (areaName === 'local' && changes.x_username) {
+      authenticatedUsername = changes.x_username.newValue || null;
+      renderConnectedAs();
+      updateUsernameMismatchState();
+    }
+  });
 
   function isUsernameMismatched() {
     if (!authenticatedUsername) return false;

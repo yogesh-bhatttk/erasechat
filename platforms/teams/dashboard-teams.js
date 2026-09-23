@@ -185,7 +185,9 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         err.expiredAuth = true;
         throw err;
       }
-      throw new Error(`API Error ${response.status}`);
+      const err = new Error(`API Error ${response.status}`);
+      err.status = response.status;
+      throw err;
     }
 
     // DELETE requests may return empty body

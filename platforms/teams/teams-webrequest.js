@@ -57,8 +57,8 @@ function registerTeamsWebRequestListener() {
       // close) -- matching the Slack token's own discipline. teams_base_url is not
       // sensitive and stays in local storage so the dashboard doesn't need Teams
       // traffic to have fired again yet just to know which origin to call.
-      chrome.storage.session.set({ teams_token: authHeader.value });
-      chrome.storage.local.set({ teams_base_url: new URL(details.url).origin });
+      chrome.storage.session.set({ teams_token: authHeader.value }).catch(() => {});
+      chrome.storage.local.set({ teams_base_url: new URL(details.url).origin }).catch(() => {});
     },
     { urls: ["*://*.msg.teams.microsoft.com/v1/users/ME/*", "*://*.teams.microsoft.com/api/*"] },
     ["requestHeaders", "extraHeaders"]
@@ -70,6 +70,17 @@ if (chrome.permissions && chrome.permissions.onAdded) {
   chrome.permissions.onAdded.addListener((added) => {
     if (added.permissions && added.permissions.includes("webRequest")) {
       registerTeamsWebRequestListener();
+    }
+  });
+}
+// Chrome tears down webRequest listeners when the optional permission is revoked, but
+// registerTeamsWebRequestListener.done stays true for the life of the service worker --
+// without resetting it here, a later re-grant (permissions.onAdded) would return early
+// and never actually re-attach the listener until the worker itself restarts.
+if (chrome.permissions && chrome.permissions.onRemoved) {
+  chrome.permissions.onRemoved.addListener((removed) => {
+    if (removed.permissions && removed.permissions.includes("webRequest")) {
+      registerTeamsWebRequestListener.done = false;
     }
   });
 }

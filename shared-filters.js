@@ -111,8 +111,11 @@ function isSafeRegex(pattern) {
   // from rejecting benign nested groups without an inner quantifier (e.g. ((a))+).
   if (/\([^()]*[+*][^()]*\)[^(]*\)[+*?{]/.test(pattern)) return false;
 
-  // Alternation with potential overlap inside quantified groups: (a|a)+, (\d|\w)+
-  if (/\([^)]*\|[^)]*\)[+*]/.test(pattern)) return false;
+  // Alternation with potential overlap inside quantified groups: (a|a)+, (\d|\w)+,
+  // (a|a){1,30} — a bounded {n,m} repeat is just as catastrophic here as + or *
+  // (backtracking cost scales with the repeat count), so it must be rejected too,
+  // not just the unbounded quantifiers.
+  if (/\([^)]*\|[^)]*\)[+*{]/.test(pattern)) return false;
 
   // Quantified groups containing other quantifiers: (a{1,100}){1,100}
   if (/\([^)]*\{[^}]+\}[^)]*\)[+*{]/.test(pattern)) return false;

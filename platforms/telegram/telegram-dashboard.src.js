@@ -153,6 +153,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     currentResults = [];
     logActivity('sc-activity-log', `Scan started (target: ${peer}${filterText ? `, filter: "${filterText}"` : ''}).`);
 
+    // Scanning has no Cancel button on any of these platform dashboards -- their
+    // own scan loops are quick bounded pagination with no indefinite wait. Telegram
+    // is the exception: a server-issued flood-wait mid-scan can run for minutes
+    // (see invokeWithFloodWait), and without this the only way out was closing the
+    // tab. Wire the same cancel machinery the delete loop below already uses, just
+    // with scan-appropriate confirm copy (nothing has been deleted yet to lose).
+    const cancelController = createCancelController();
+    armCancelButton(cancelBtn, cancelController, "Stop scanning? Nothing has been deleted yet -- this only discards the in-progress scan.");
+    let cancelledEarly = false;
+
     try {
       let offsetId = 0;
       let hasMore = true;
@@ -162,6 +172,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // history or long-lived chat can't be scanned in full on every click.
       const MAX_PAGES = 20; // 100 messages per page * 20 = 2000 messages per scan
       while (hasMore && pageCount < MAX_PAGES) {
+        if (cancelController.cancelled) { cancelledEarly = true; break; }
         const result = await invokeWithFloodWait(
           () => client.invoke(
             new Api.messages.Search({
@@ -183,11 +194,16 @@ document.addEventListener('DOMContentLoaded', async () => {
               limit: 100,
               maxId: 0,
               minId: 0,
-              fromId: new Api.InputPeerSelf(),
+              // No fromId restriction: deletion here is "for everyone" (revoke: true,
+              // see the delete handler below), so scan must surface every message in
+              // the chat, not just ones the logged-in user authored -- restricting to
+              // InputPeerSelf() would silently hide the other party's/other members'
+              // messages from results with no error or indication why.
               hash: 0n,
             })
           ),
           {
+            cancelController,
             onWait: (seconds, attempt) => {
               statusText.textContent = `Rate limited by Telegram while scanning — waiting ${seconds}s (retry ${attempt})...`;
             },
@@ -213,26 +229,47 @@ document.addEventListener('DOMContentLoaded', async () => {
         truncated = pageCount >= MAX_PAGES && hasMore;
       }
 
-      resultsCount.textContent = formatScanCount(currentResults.length, {
-        truncated, maxPages: MAX_PAGES, note: "older messages may exist"
-      });
-
-      if (currentResults.length > 0) {
-        renderResultRows(currentResults);
-        deleteBtn.disabled = false;
-        statusText.textContent = "Scan complete. Review results before deleting.";
-        logActivity('sc-activity-log', `Scan complete: ${currentResults.length} message(s) found${truncated ? ' (truncated -- more may exist)' : ''}.`);
+      if (cancelledEarly) {
+        // Matches the confirm dialog's own promise ("nothing has been deleted, this
+        // only discards the in-progress scan") -- keeping a partial, unreviewed
+        // result set around with Delete enabled would be surprising given the user
+        // just explicitly asked to stop.
+        currentResults = [];
+        renderEmptyState(itemList, "Scan cancelled.");
+        resultsCount.textContent = "0 items found";
+        statusText.textContent = "Scan cancelled.";
+        logActivity('sc-activity-log', `Scan cancelled (${pageCount} page(s) read before stopping).`, 'warn');
       } else {
-        renderEmptyState(itemList, "No messages matched your criteria. Try widening your text filter, or check the target chat.");
-        statusText.textContent = t("dashReady", "Ready");
-        logActivity('sc-activity-log', 'Scan complete: 0 messages found.');
+        resultsCount.textContent = formatScanCount(currentResults.length, {
+          truncated, maxPages: MAX_PAGES, note: "older messages may exist"
+        });
+
+        if (currentResults.length > 0) {
+          renderResultRows(currentResults);
+          deleteBtn.disabled = false;
+          statusText.textContent = "Scan complete. Review results before deleting.";
+          logActivity('sc-activity-log', `Scan complete: ${currentResults.length} message(s) found${truncated ? ' (truncated -- more may exist)' : ''}.`);
+        } else {
+          renderEmptyState(itemList, "No messages matched your criteria. Try widening your text filter, or check the target chat.");
+          statusText.textContent = t("dashReady", "Ready");
+          logActivity('sc-activity-log', 'Scan complete: 0 messages found.');
+        }
       }
     } catch (err) {
-      await showAlert("Scan failed: " + err.message);
-      statusText.textContent = "Error";
-      logActivity('sc-activity-log', `Scan failed: ${err.message}`, 'error');
+      if (err instanceof FloodWaitCancelledError) {
+        currentResults = [];
+        renderEmptyState(itemList, "Scan cancelled.");
+        resultsCount.textContent = "0 items found";
+        statusText.textContent = "Scan cancelled.";
+        logActivity('sc-activity-log', 'Scan cancelled during a flood-wait.', 'warn');
+      } else {
+        await showAlert("Scan failed: " + err.message);
+        statusText.textContent = "Error";
+        logActivity('sc-activity-log', `Scan failed: ${err.message}`, 'error');
+      }
     } finally {
       scanBtn.disabled = false;
+      resetCancelButton(cancelBtn);
     }
   });
 

@@ -147,30 +147,49 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       let pageCount = 0;
       const seenIds = new Set();
       const MAX_PAGES = isDeepScan ? 1000 : 10; // ~25 items per page
+      // Stuck-cursor guard: if Reddit keeps returning a page whose items are all
+      // already in seenIds (an overlapping/non-advancing `after` cursor), the
+      // de-dup guard already prevents duplicate results, but without this the
+      // loop would still burn through all MAX_PAGES (up to 1000 for Deep Scan,
+      // ~16 minutes at 1s/page) with zero new items and no visible progress.
+      // Checked against seenIds growth, not this page's filtered result count --
+      // a page can legitimately contribute 0 *matching* items (filterText excluded
+      // them all) while still advancing the cursor normally, and that must not
+      // be mistaken for a stuck cursor.
+      let consecutiveEmptyPages = 0;
+      const MAX_CONSECUTIVE_EMPTY_PAGES = 3;
+      let stuckCursor = false;
 
       while (pageCount < MAX_PAGES) {
         let url = `https://www.reddit.com/user/${username}/`;
         if (targetType === 'comments') url += 'comments.json?limit=25';
         else if (targetType === 'submitted') url += 'submitted.json?limit=25';
         else url += 'overview.json?limit=25'; // all
-        
+
         if (after) url += `&after=${after}`;
-        
+
         const response = await fetchWithRetry(url, { credentials: "include" });
         if (!response.ok) {
           throw new Error(`API Error ${response.status}`);
         }
-        
+
         const resJson = await response.json();
         const children = resJson.data?.children || [];
         if (children.length === 0) break;
 
+        const seenBefore = seenIds.size;
         currentResults.push(...extractRedditItemsFromChildren(children, filterText, seenIds));
-        
+        consecutiveEmptyPages = (seenIds.size === seenBefore) ? consecutiveEmptyPages + 1 : 0;
+        if (consecutiveEmptyPages >= MAX_CONSECUTIVE_EMPTY_PAGES) {
+          stuckCursor = true;
+          break;
+        }
+
         after = resJson.data.after;
         if (!after) break;
-        
+
         pageCount++;
+        statusText.textContent = `Scanning... (page ${pageCount}, ${currentResults.length} found)`;
         await delay(1000); // 1s delay between pagination requests
       }
 
@@ -178,7 +197,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       // Reddit still had more pages (`after` truthy) -- as opposed to a natural
       // end (no more children, or no `after` cursor). Surface that distinction
       // so "N items found" doesn't imply an exhaustive scan when it wasn't one.
-      const truncated = pageCount >= MAX_PAGES && !!after;
+      const truncated = (pageCount >= MAX_PAGES && !!after) || stuckCursor;
       resultsCount.textContent = formatScanCount(currentResults.length, {
         truncated, maxPages: MAX_PAGES, note: `more may exist${isDeepScan ? '' : ', try Deep Scan'}`
       });

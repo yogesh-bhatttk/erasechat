@@ -488,7 +488,7 @@ function onBeforeUnload(e) {
   e.returnValue = "";
 }
 
-function armCancelButton(cancelBtn, controller) {
+function armCancelButton(cancelBtn, controller, confirmMessage) {
   cancelBtn.hidden = false;
   cancelBtn.disabled = false;
   cancelBtn.textContent = t("dashCancel", "Cancel");
@@ -496,7 +496,7 @@ function armCancelButton(cancelBtn, controller) {
   // platforms can pause and resume a running delete -- Cancel is a full stop.
   // A discoverable tooltip rather than another modal/banner, since this is
   // secondary information most users won't need.
-  cancelBtn.title = t("dashCancelNoResumeHint", "Stops the delete entirely -- there's no pause/resume on this platform.");
+  cancelBtn.title = t("dashCancelNoResumeHint", "Stops the current run entirely -- there's no pause/resume on this platform.");
   if (typeof window !== "undefined") {
     unloadWarningHandler = onBeforeUnload;
     window.addEventListener("beforeunload", unloadWarningHandler);
@@ -509,6 +509,7 @@ function armCancelButton(cancelBtn, controller) {
     // confirm dialog while this one is still open.
     cancelBtn.disabled = true;
     const confirmed = await showConfirm(
+      confirmMessage ||
       "Stop this deletion? Items already processed will stay deleted; anything not yet reached will remain, and can be reviewed again after a rescan."
     );
     if (!confirmed) {

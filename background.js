@@ -1067,13 +1067,19 @@ async function runScanInBg(token, req) {
 
 // Read a queued item's resolved action. The decision is made once at enqueue time
 // via the shared decideItemAction() and persisted, so it is deterministic even
-// after a service-worker restart. saveJobQueue always writes a definite action,
-// so this fallback is only reachable via genuine storage corruption; when it is
-// hit, default to the less-destructive trim rather than a full delete.
+// after a service-worker restart. saveJobQueue only ever persists text/blocks for
+// genuine "trim" entries (everything else is normalized to "delete" before being
+// written), so an item whose action isn't literally "delete"/"skip" AND doesn't
+// carry that persisted text is not a safe trim candidate -- treating it as one
+// would send chat.update with an empty body, blanking the message instead of
+// deleting or trimming it. That case (storage corruption, or a legacy inline
+// queue entry from before the action-field format existed) falls back to delete,
+// which only ever needs fields that are always present.
 function itemAction(item) {
   if (item.action === "delete") return "delete";
   if (item.action === "skip") return "skip";
-  return "trim";
+  if (item.action === "trim" && item.text !== undefined) return "trim";
+  return "delete";
 }
 
 // Shared 429 handler: back off honoring Retry-After, but stop retrying a single

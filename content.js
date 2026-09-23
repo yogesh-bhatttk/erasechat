@@ -1306,10 +1306,18 @@ if (!window.slackCleanInitialized) {
     // Checks background job status and resumes/syncs UI state
     async function checkAndResumeState() {
       if (!activeTeam || !activeChannel) return;
+      // Captured now, not read from activeTeam.id inside the callback below: this
+      // request is async, and switchWorkspace() can reassign activeTeam to a
+      // DIFFERENT team before the response arrives (e.g. a fast workspace switch
+      // while this round-trip is still in flight). Reading activeTeam.id inside the
+      // callback would then tag/read this team-A response's data under team B's
+      // id -- reintroducing the exact cross-workspace mislabeling the teamId-scoped
+      // alertedOtherJobChannels keying below exists to prevent.
+      const teamId = activeTeam.id;
       try {
         chrome.runtime.sendMessage({
           type: "GET_JOB_STATUS",
-          teamId: activeTeam.id,
+          teamId,
           channelId: activeChannel.id
         }, (response) => {
           if (chrome.runtime.lastError) return;
@@ -1324,9 +1332,17 @@ if (!window.slackCleanInitialized) {
           // re-triggers the same modal on every single switch, forcing a fresh dismiss
           // click each time. Alert again if a channel not already alerted-on appears
           // (e.g. a second job gets paused later).
-          const newlyPaused = pausedElsewhere.filter(j => !alertedOtherJobChannels.has(j.channelId));
+          // Keyed by teamId_channelId, not bare channelId: channel IDs are workspace-
+          // scoped and two independently-created workspaces could plausibly reuse one
+          // (see matchesActiveWorkspaceChannel's own docstring above). otherJobs is
+          // already team-scoped by background.js, but this Set persists for the whole
+          // content-script lifetime across workspace switches, so it must carry the
+          // team scope forward too or a collision would silently suppress a real,
+          // unrelated alert in a different workspace.
+          const otherJobKey = j => `${teamId}_${j.channelId}`;
+          const newlyPaused = pausedElsewhere.filter(j => !alertedOtherJobChannels.has(otherJobKey(j)));
           if (newlyPaused.length > 0) {
-            newlyPaused.forEach(j => alertedOtherJobChannels.add(j.channelId));
+            newlyPaused.forEach(j => alertedOtherJobChannels.add(otherJobKey(j)));
             const names = newlyPaused.map(j => j.channelId).join(", ");
             showCustomAlert(
               t("modalPausedOtherTitle", "Paused Job in Another Channel"),
@@ -1335,9 +1351,12 @@ if (!window.slackCleanInitialized) {
           }
           // Drop tracking for channels that are no longer paused, so a job that's
           // resumed/cancelled and later paused again in the same channel re-alerts.
-          for (const channelId of Array.from(alertedOtherJobChannels)) {
-            if (!pausedElsewhere.some(j => j.channelId === channelId)) {
-              alertedOtherJobChannels.delete(channelId);
+          for (const trackedKey of Array.from(alertedOtherJobChannels)) {
+            if (trackedKey.startsWith(`${teamId}_`)) {
+              const channelId = trackedKey.slice(`${teamId}_`.length);
+              if (!pausedElsewhere.some(j => j.channelId === channelId)) {
+                alertedOtherJobChannels.delete(trackedKey);
+              }
             }
           }
 

@@ -104,14 +104,20 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     };
     const response = await fetchWithRetry(url, options);
     if (!response.ok) {
-      if (response.status === 429) throw new Error('Rate limit exceeded');
+      if (response.status === 429) {
+        const rateErr = new Error('Rate limit exceeded');
+        rateErr.status = 429;
+        throw rateErr;
+      }
       if (response.status === 401) {
         const authErr = new Error("Your Mastodon access token appears to be invalid or revoked. Reconnect from the extension popup with a fresh token.");
         authErr.expiredAuth = true;
         throw authErr;
       }
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.error || `API Error ${response.status} on ${endpoint}`);
+      const errBody = await response.json().catch(() => ({}));
+      const apiErr = new Error(errBody.error || `API Error ${response.status} on ${endpoint}`);
+      apiErr.status = response.status;
+      throw apiErr;
     }
     // DELETE requests usually return empty JSON or 200 OK
     const text = await response.text();
