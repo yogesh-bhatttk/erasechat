@@ -43,9 +43,22 @@
       max-height: 800px;
       transform: none !important;
       margin: 0 auto;
-      top: 50%;
-      transform: translateY(-50%) !important;
     }
+    .post-item .badge-removed { background-color: rgba(239, 68, 68, 0.15); color: var(--color-red); }
+    .post-item .badge-repost { background-color: rgba(16, 185, 129, 0.15); color: var(--color-green); }
+    .post-open-link { color: var(--accent); text-decoration: underline; font-size: 11px; }
+    .post-open-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .post-item .badge-export { background-color: rgba(59, 130, 246, 0.15); color: var(--accent); }
+    .import-export-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+    .import-export-bar .import-btn { cursor: pointer; font-size: 12px; padding: 6px 10px; }
+    .import-export-bar .import-btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+    .import-export-bar .import-btn:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .import-hint { flex: 1 1 220px; margin: 0; font-size: 11px; color: var(--text-muted); }
+    .visually-hidden-file { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    .overwrite-options { margin-top: 8px; }
+    .overwrite-options .toggle-group { padding: 6px 0; }
+    .overwrite-text-group { margin: 4px 0 0; }
+    .overwrite-text-group[hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -54,7 +67,7 @@
       <div class="dashboard-header">
         <div class="header-left">
           <div class="brand-title">
-            <img src="/icons/icon48.png" width="24" height="24" alt="logo" style="border-radius: 6px;">
+            <img src="/icons/icon48.png" width="24" height="24" alt="" style="border-radius: 6px;">
             <h2>Erasechat — Reddit</h2>
             <span id="connected-as" style="font-size: 12px; color: #8e8e93; margin-left: 8px;"></span>
           </div>
@@ -65,7 +78,7 @@
           <div class="config-grid">
             <div class="panel-card filter-form">
               <h3 class="panel-title" data-i18n="dashSearchFilters">1. Search Filters</h3>
-              <p class="panel-subtitle" data-i18n="dashFilterDepthNote">Only a keyword filter is available here. Slack's dashboard also has sender, date range, attachments, and /regex/ filters.</p>
+              <p class="panel-subtitle" data-i18n="redditDashFilterNote">Filter by keyword or /regex/; open More filters for a date range, inverted matching, and keeping well-upvoted items.</p>
 
           <div class="form-group">
             <label for="target-type" data-i18n="redditDashTarget">Target</label>
@@ -77,16 +90,16 @@
           </div>
           <div class="form-group toggle-group" style="margin-top: 10px;">
             <div class="toggle-label">
-              <span class="toggle-title" data-i18n="redditDashDeepScan">Deep Scan</span>
-              <span class="toggle-subtitle" data-i18n="redditDashDeepScanDesc">Unlimited pages (slower)</span>
+              <span class="toggle-title" id="deep-scan-title" data-i18n="redditDashDeepScan">Deep Scan</span>
+              <span class="toggle-subtitle" data-i18n="redditDashDeepScanSweepDesc">Also sweeps your top, controversial and hot listings to reach items past Reddit's ~1000-item limit (slower)</span>
             </div>
             <label class="switch">
-              <input type="checkbox" id="deep-scan">
+              <input type="checkbox" id="deep-scan" aria-labelledby="deep-scan-title">
               <span class="slider"></span>
             </label>
           </div>
           <div class="form-group">
-            <label for="text-filter" data-i18n="dashTextMatchPlain">Text Filter (Optional — plain text, no /regex/)</label>
+            <label for="text-filter" data-i18n="dashTextMatch">Text Match (Optional)</label>
             <input type="text" id="text-filter" placeholder="Keyword or Phrase" data-i18n-ph="dashKeywordPlaceholder">
           </div>
 
@@ -99,7 +112,15 @@
             <div class="results-panel">
               <div class="results-header">
                 <h4 data-i18n="dashPreviewResults">Preview Results</h4>
-                <div class="results-selector" id="results-count">0 items found</div>
+                <div class="results-selector" id="results-count" aria-live="polite" data-i18n="socialDashZeroItems">0 items found</div>
+              </div>
+              <div class="import-export-bar" id="import-export-bar">
+                <label for="import-files" class="dashboard-btn import-btn" id="import-label">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                  <span data-i18n="redditDashImportButton">Import from Reddit data export</span>
+                  <input type="file" id="import-files" class="visually-hidden-file" accept=".csv,text/csv" multiple aria-describedby="import-hint">
+                </label>
+                <p class="import-hint" id="import-hint" data-i18n="redditDashImportHint">Reach items past Reddit's ~1000-item listing limit: request your data in Reddit's Settings (Privacy → Request data), then pick comments.csv and/or posts.csv from the archive.</p>
               </div>
               <div class="results-list" id="item-list">
                 <div class="no-messages" data-i18n="dashScanPromptEmpty">Enter parameters and click Scan to begin.</div>
@@ -110,8 +131,24 @@
           <div class="action-panel">
             <div class="selected-channel-summary">
               <h4 data-i18n="dashReadyToDelete">Ready to delete?</h4>
-              <p id="status-text" data-i18n="dashUnrecoverableWarning">Items deleted will be unrecoverable.</p>
-              <p id="progress-text" style="color: #FF4500; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
+              <p id="status-text" role="status" aria-live="polite" data-i18n="dashUnrecoverableWarning">Items deleted will be unrecoverable.</p>
+              <p id="progress-text" aria-live="polite" style="color: #FF4500; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
+              <div class="overwrite-options">
+                <div class="toggle-group overwrite-toggle">
+                  <div class="toggle-label">
+                    <span class="toggle-title" id="overwrite-title" data-i18n="redditDashOverwriteToggle">Overwrite text before deleting</span>
+                    <span class="toggle-subtitle" id="overwrite-desc" data-i18n="redditDashOverwriteDesc">Edits each comment and text post first, so archive sites that copied the original keep the replacement instead. Link posts can only be deleted. Roughly doubles the time per item.</span>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" id="overwrite-toggle" aria-labelledby="overwrite-title" aria-describedby="overwrite-desc">
+                    <span class="slider"></span>
+                  </label>
+                </div>
+                <div class="form-group overwrite-text-group" id="overwrite-text-group" hidden>
+                  <label for="overwrite-text" data-i18n="redditDashOverwriteTextLabel">Replacement text</label>
+                  <input type="text" id="overwrite-text" value="." maxlength="10000">
+                </div>
+              </div>
             </div>
             <div class="action-buttons">
               <button id="sc-btn-cancel" class="dashboard-btn" hidden data-i18n="dashCancel">Cancel</button>
@@ -133,7 +170,9 @@
       </div>
     </div>
   </div>
+  <script src="../../shared-filters.js"></script>
   <script src="../shared/dashboard-fetch-utils.js"></script>
+  <script src="../shared/platform-filters.js"></script>
   <script src="dashboard-reddit.js"></script>
 </body>
 </html>

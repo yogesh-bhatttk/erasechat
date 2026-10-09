@@ -53,6 +53,14 @@ async function connectReddit() {
     }
 
     const { modhash, name } = json.data;
+    // dashboard-reddit.js sends the modhash as `uh` on every /api/del call, and
+    // Reddit requires a non-empty one to authorize a cookie-authenticated write.
+    // /api/me.json can legitimately return modhash "" for some session types --
+    // storing that "succeeded" here only for the dashboard to then refuse it as
+    // "Not linked" (and every delete to fail) was inconsistent. Fail clearly now.
+    if (typeof modhash !== "string" || !modhash) {
+      return { ok: false, message: redditT("redditConnectNoModhash", "Reddit didn't provide a write token (modhash) for this session, so deletions wouldn't work. Log out of Reddit.com, log back in, then connect again.") };
+    }
     // modhash is a CSRF-style write token (not the session cookie itself, which is
     // never read or stored here at all -- it rides via credentials: "include") but
     // it's still stored session-only, matching the Slack token's discipline: nothing
