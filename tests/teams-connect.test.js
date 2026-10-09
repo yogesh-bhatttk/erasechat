@@ -24,7 +24,7 @@ test("connectTeams opens Teams and returns immediately when no token exists", as
   const startedAt = Date.now();
   const result = await connectTeams();
 
-  assert.strictEqual(openedUrl, "https://teams.microsoft.com/");
+  assert.strictEqual(openedUrl, "https://teams.cloud.microsoft/");
   assert.strictEqual(result.ok, false);
   assert.match(result.message, /reopen|click.*toolbar/i);
   assert.ok(Date.now() - startedAt < 100, "must not poll from a popup that will be closed");

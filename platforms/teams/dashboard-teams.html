@@ -43,8 +43,12 @@
       max-height: 800px;
       transform: none !important;
       margin: 0 auto;
-      top: 50%;
-      transform: translateY(-50%) !important;
+    }
+    /* Same look as .form-group label (dashboard-base.css), for a non-label heading. */
+    .form-group .group-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
     }
   </style>
 </head>
@@ -65,11 +69,13 @@
           <div class="config-grid">
             <div class="panel-card filter-form">
               <h3 class="panel-title" data-i18n="dashSearchFilters">1. Search Filters</h3>
-              <p class="panel-subtitle" data-i18n="dashFilterDepthNote">Only a keyword filter is available here. Slack's dashboard also has sender, date range, attachments, and /regex/ filters.</p>
+              <p class="panel-subtitle" data-i18n="teamsDashFilterNote">Filter by keyword or /regex/ and date range. Only your own messages in the selected chat are listed.</p>
 
-          <div class="form-group">
-            <label data-i18n="teamsDashLoadChats">Load Chats</label>
-            <button class="dashboard-btn btn-scan" id="load-chats-btn" style="width: 100%; justify-content: center;" data-i18n="teamsDashFetchChats">Fetch My Chats</button>
+          <!-- A <label> with no labelable control is an orphan; the button names
+               itself, so this heading just groups it for assistive tech. -->
+          <div class="form-group" role="group" aria-labelledby="load-chats-heading">
+            <span class="group-label" id="load-chats-heading" data-i18n="teamsDashLoadChats">Load Chats</span>
+            <button type="button" class="dashboard-btn btn-scan" id="load-chats-btn" style="width: 100%; justify-content: center;" data-i18n="teamsDashFetchChats">Fetch My Chats</button>
           </div>
           <div class="form-group">
             <label for="chat-select" data-i18n="teamsDashSelectChat">Select Chat</label>
@@ -78,7 +84,7 @@
             </select>
           </div>
           <div class="form-group">
-            <label for="text-filter" data-i18n="dashTextMatchPlain">Text Filter (Optional — plain text, no /regex/)</label>
+            <label for="text-filter" data-i18n="dashTextMatch">Text Match (Optional)</label>
             <input type="text" id="text-filter" placeholder="Keyword or Phrase" data-i18n-ph="dashKeywordPlaceholder">
           </div>
 
@@ -91,7 +97,7 @@
             <div class="results-panel">
               <div class="results-header">
                 <h4 data-i18n="dashPreviewResults">Preview Results</h4>
-                <div class="results-selector" id="results-count">0 items found</div>
+                <div class="results-selector" id="results-count" aria-live="polite">0 items found</div>
               </div>
               <div class="results-list" id="item-list">
                 <div class="no-messages" data-i18n="dashScanPromptEmpty">Enter parameters and click Scan to begin.</div>
@@ -102,8 +108,8 @@
           <div class="action-panel">
             <div class="selected-channel-summary">
               <h4 data-i18n="dashReadyToDelete">Ready to delete?</h4>
-              <p id="status-text" data-i18n="dashUnrecoverableWarning">Items deleted will be unrecoverable.</p>
-              <p id="progress-text" style="color: #6264A7; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
+              <p id="status-text" role="status" aria-live="polite" data-i18n="dashUnrecoverableWarning">Items deleted will be unrecoverable.</p>
+              <p id="progress-text" aria-live="polite" style="color: #6264A7; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
             </div>
             <div class="action-buttons">
               <button id="sc-btn-cancel" class="dashboard-btn" hidden data-i18n="dashCancel">Cancel</button>
@@ -125,7 +131,9 @@
       </div>
     </div>
   </div>
+  <script src="../../shared-filters.js"></script>
   <script src="../shared/dashboard-fetch-utils.js"></script>
+  <script src="../shared/platform-filters.js"></script>
   <script src="dashboard-teams.js"></script>
 </body>
 </html>

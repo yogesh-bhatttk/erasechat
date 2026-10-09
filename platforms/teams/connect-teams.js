@@ -38,7 +38,7 @@ async function connectTeams() {
 
   const hint = teamsT(
     "teamsConnectSignInHint",
-    "Sign in on the teams.microsoft.com tab we opened, then click the Erasechat toolbar icon again to finish connecting."
+    "Sign in on the teams.cloud.microsoft tab we opened, then click the Erasechat toolbar icon again to finish connecting."
   );
 
   // Persist the instruction so a popup reopened later (see popup.js's
@@ -60,7 +60,7 @@ async function connectTeams() {
   // open Teams and have the user reopen the action once its authenticated traffic has
   // been observed by the background listener. The storage check above then opens the
   // dashboard immediately on that next open.
-  chrome.tabs.create({ url: "https://teams.microsoft.com/", active: false });
+  chrome.tabs.create({ url: "https://teams.cloud.microsoft/", active: false });
   // pending: true tells popup.js this is step 2 of 2, not a failure -- Teams has no
   // login form/session cookie of its own, so "ok: false" alone would otherwise be
   // indistinguishable from every other platform's genuine connect failure and get

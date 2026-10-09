@@ -25,8 +25,7 @@ function registerTeamsWebRequestListener() {
 
   // extraHeaders is required in extraInfoSpec: without it Chrome withholds the
   // Authorization header from ever reaching this listener at all.
-  chrome.webRequest.onSendHeaders.addListener(
-    (details) => {
+  const onTeamsHeaders = (details) => {
       const authHeader = details.requestHeaders.find(h => h.name.toLowerCase() === "authorization");
       if (!authHeader || !authHeader.value.startsWith("Bearer ")) return;
 
@@ -43,13 +42,20 @@ function registerTeamsWebRequestListener() {
       // no permission-related explanation. Gating on the real path instead of just
       // the host means only a request that could plausibly BE the chat API (either
       // host variant) is ever stored.
-      let path;
+      let parsed;
       try {
-        path = new URL(details.url).pathname;
+        parsed = new URL(details.url);
       } catch {
         return;
       }
-      if (!path.includes("/v1/users/ME/")) return;
+      if (parsed.protocol !== "https:") return;
+      const path = parsed.pathname;
+      const apiIdx = path.indexOf("/v1/users/ME/");
+      if (apiIdx === -1) return;
+      // Keep any prefix before /v1/users/ME (the bare-host variant serves the chat
+      // API under e.g. /api/chatsvc/<region>) -- the dashboard appends
+      // /v1/users/ME/... to this, so storing only the origin 404'd on that variant.
+      const baseUrl = parsed.origin + path.slice(0, apiIdx);
 
       // The captured Bearer token is a live credential (decodable to the user's own
       // AAD identity) refreshed continuously as long as a Teams tab is open, so it's
@@ -58,11 +64,24 @@ function registerTeamsWebRequestListener() {
       // sensitive and stays in local storage so the dashboard doesn't need Teams
       // traffic to have fired again yet just to know which origin to call.
       chrome.storage.session.set({ teams_token: authHeader.value }).catch(() => {});
-      chrome.storage.local.set({ teams_base_url: new URL(details.url).origin }).catch(() => {});
-    },
-    { urls: ["*://*.msg.teams.microsoft.com/v1/users/ME/*", "*://*.teams.microsoft.com/api/*"] },
-    ["requestHeaders", "extraHeaders"]
-  );
+      chrome.storage.local.set({ teams_base_url: baseUrl }).catch(() => {});
+  };
+  // teams.cloud.microsoft is Teams on the web's new home (Microsoft redirects every
+  // work tenant there from 30 Sep 2026); its chat API calls are captured the same way.
+  const filter = { urls: [
+    "https://*.msg.teams.microsoft.com/v1/users/ME/*",
+    "https://*.teams.microsoft.com/api/*",
+    "https://*.teams.cloud.microsoft/api/*",
+    "https://*.teams.cloud.microsoft/v1/users/ME/*"
+  ] };
+  try {
+    chrome.webRequest.onSendHeaders.addListener(onTeamsHeaders, filter, ["requestHeaders", "extraHeaders"]);
+  } catch (e) {
+    // Firefox rejects the Chrome-only "extraHeaders" value (and doesn't need it to
+    // expose Authorization), which previously threw here with .done already set,
+    // so Teams capture silently never registered there.
+    chrome.webRequest.onSendHeaders.addListener(onTeamsHeaders, filter, ["requestHeaders"]);
+  }
 }
 
 registerTeamsWebRequestListener();
