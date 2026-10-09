@@ -37,6 +37,8 @@ Bulk-delete your own content on Slack, Reddit, X, Mastodon, Microsoft Teams & Te
 > add-on on its product page. Use the full text below (AMO supports light Markdown).
 
 ```
+Free · No limits · No account · Nothing leaves your browser
+
 Tired of scrolling back years to clean up your own posts and messages? Erasechat bulk-deletes your own content — with the filters and safety controls to do it right — across six platforms: Slack (built in) plus five optional platforms you connect one at a time: Reddit, X, Mastodon, Microsoft Teams, and Telegram.
 
 Open a conversation (or your own account, for Reddit/X/Mastodon), pick your filters, preview exactly what will be removed, and delete in bulk — all from your browser.
@@ -66,13 +68,15 @@ Every platform follows the same scan → preview → confirm safety model: revie
 * Works through your existing login on each platform — every credential stays in memory-only browser storage, never written to disk
 
 **Convenient**
-* Open the Slack dashboard from the toolbar or with Ctrl+Shift+K (Cmd+Shift+K on macOS)
+* Open the popup from the toolbar or with Alt+Shift+E (Cmd+Shift+K on macOS)
 * Clean, modern interface with three colour themes
 * Localized UI (English, Spanish, French, German) across all six platforms
 
 ---
 
 **Please note:** Erasechat is an independent tool and is not affiliated with, endorsed by, or sponsored by Slack, Reddit, X Corp., Mastodon gGmbH, Microsoft, or Telegram FZ-LLC. It acts on your behalf using your existing session (or, for Mastodon/Telegram, a credential you provide) on whichever platform(s) you connect. Deletions are permanent and cannot be undone — always preview before you delete. Deleting content you do not have permission to remove may be restricted by your workspace, instance, or tenant administrator.
+
+**Other people's messages:** two opt-in modes can remove other people's messages where the platform itself permits it — Slack's "All Messages" sender option (workspace admins/owners) and Telegram with "Only my messages" turned off. Both are off by default and every match is previewed first. Platforms with retention or compliance policies (common on Microsoft Teams and enterprise Slack) may keep server-side copies this tool cannot remove.
 ```
 
 ## "This add-on is experimental"
@@ -106,13 +110,9 @@ yogeshb@prosperix.com
 ```
 
 ## Support website
-```
-https://github.com/yogesh-bhatttk/erasechat/issues
-```
-
-> Updated 2026-08-02. This field previously said to leave it blank because the repo was
-> private and the link would 404. **The repo is public now**, so the issues page is a real
-> support destination — if the AMO listing is already submitted, go back and add it.
+Provide the repository issues URL **only if the repository is public**; otherwise leave
+this blank (the support email above is enough). `.githooks/pre-push` describes the repo as
+private, and a private-repo link 404s for users and reviewers.
 
 ## License
 
@@ -129,8 +129,8 @@ AMO accepts **pasted text** here, not only a hosted URL.
 
 Paste the full contents of [`PRIVACY_POLICY.md`](../PRIVACY_POLICY.md).
 
-(Chrome does require a hosted HTTPS URL. Now that the repo is public, the file's GitHub
-URL satisfies that — see [`CWS_SUBMISSION_FIELDS.md`](./CWS_SUBMISSION_FIELDS.md).)
+(Chrome does require a hosted HTTPS URL; the file's GitHub URL satisfies that only while
+the repository is public — see [`CWS_SUBMISSION_FIELDS.md`](./CWS_SUBMISSION_FIELDS.md).)
 
 ## Notes for Reviewer
 
@@ -150,7 +150,7 @@ preview step, and a resumable background delete queue.
 HOW TO TEST
 1. Sign in to any Slack workspace at https://app.slack.com (a free workspace is enough).
 2. Open a channel or DM and post a few throwaway messages.
-3. Click the toolbar icon, then "Open Clean Dashboard" (or Ctrl+Shift+K).
+3. Click the toolbar icon, then "Open Clean Dashboard" (Alt+Shift+E opens the popup).
 4. Choose filters and press "Scan Messages" — this is read-only and deletes nothing.
 5. Review the previewed list, then press "Start Deleting".
    Jobs over 100 messages require typing DELETE to confirm.
@@ -192,9 +192,13 @@ All code is bundled in the package. Nothing is fetched or eval'd at runtime. The
 extension-pages CSP is "script-src 'self'; object-src 'none'".
 
 SOURCE
-The source is unminified and readable exactly as shipped; there is no build step that
-transforms it. shared-filters.js holds the single delete/keep decision function used by
-the background context.
+The Slack, Reddit, X, Mastodon and Teams code is unminified and readable exactly as
+shipped. The one exception is Telegram: platforms/telegram/telegram-popup.bundle.js and
+telegram-dashboard.bundle.js are webpack builds of telegram-popup.src.js /
+telegram-dashboard.src.js plus the teleproto MTProto library (third-party license
+notices ship alongside in *.bundle.js.LICENSE.txt). Source upload + reproduction:
+npm ci && node scripts/build-telegram.js (Node >= 20.19). shared-filters.js holds the
+single delete/keep decision function used by the background context.
 
 DATA COLLECTION
 None. Declared in the manifest as

@@ -52,10 +52,11 @@ resolved before submitting; **(you)** require your action outside this repo.
 
 ## 2. Privacy policy hosting — **resolved**
 
-- [x] Hosted at a public HTTPS URL. The repo went public, so the file's own GitHub URL
+- [ ] Hosted at a public HTTPS URL. If the repository is public, the file's own GitHub URL
       satisfies Chrome's requirement with no new infrastructure:
-      `https://github.com/yogesh-bhatttk/erasechat/blob/main/PRIVACY_POLICY.md`
-      (verified HTTP 200).
+      `https://github.com/yogesh-bhatttk/erasechat/blob/main/PRIVACY_POLICY.md`.
+      `.githooks/pre-push` describes the repo as private — if it still is, that URL 404s
+      and the policy must be hosted elsewhere. Re-check (logged out) before submitting.
 - [x] AMO accepts pasted policy text and does not need a URL at all.
 - [ ] (Optional upgrade) Serve it as a real page instead of a file view by enabling GitHub
       Pages on `main` → `https://yogesh-bhatttk.github.io/erasechat/privacy.html`.
@@ -94,10 +95,12 @@ zips as build artifacts, so a green CI run is equivalent to this section.
 - [ ] Store listing: name, summary, plain-text description, category (Workflow & Planning),
       5 screenshots, 440×280 promo tile, homepage + support URLs
 - [ ] Privacy practices: single purpose, four permission justifications, remote-code = No,
-      all data-type boxes unchecked, three certifications checked
-- [ ] Privacy policy URL — the repo is public, so
-      `https://github.com/yogesh-bhatttk/erasechat/blob/main/PRIVACY_POLICY.md`
-      works today (Chrome will not accept pasted text the way AMO does)
+      data-usage boxes per `CWS_SUBMISSION_FIELDS.md` §2 (Authentication information +
+      Personal communications checked, with justification), three certifications checked
+- [ ] Privacy policy URL — the GitHub file URL
+      `https://github.com/yogesh-bhatttk/erasechat/blob/main/PRIVACY_POLICY.md` works only
+      if the repository is public; otherwise host it elsewhere (Chrome will not accept
+      pasted text the way AMO does)
 - [ ] Submit for review
 
 ## 5. Firefox Add-ons (AMO) **(you)**

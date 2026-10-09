@@ -19,9 +19,9 @@ else — please keep that lens on any change.
 ## Development setup
 
 ```bash
-npm install            # dev-only (Playwright for e2e)
+npm install            # dev tooling + teleproto (bundled into the Telegram pages)
 npm run hooks:install  # enable the pre-push guard on main (see below)
-npm test               # unit tests (node --test, zero-dependency) — must stay green
+npm test               # Telegram build + unit tests (node --test) — must stay green
 npm run test:e2e       # Playwright end-to-end (requires browsers)
 npm run build          # produce dist/ store zips for Chrome and Firefox
 ```
@@ -41,6 +41,24 @@ addons-linter) instead of the fast half.
 Load unpacked for manual testing — see the [README](README.md#install). Chrome uses
 `manifest.json`; Firefox uses `manifest.firefox.json` (copy it to `manifest.json`).
 
+### Pinned dependencies
+
+`teleproto` (the MTProto client bundled into the Telegram pages) is the actively
+maintained successor of GramJS — the original `telegram` npm package is archived and
+marked deprecated in favour of it (and is stuck on API layer 198), so don't "switch back"
+to GramJS. It holds the user's Telegram auth key at runtime, so it is pinned to an **exact** version in `package.json`
+— no `^`. To bump it:
+
+1. Change the version in `package.json`, run `npm install`, and commit the lockfile.
+2. Rebuild (`node scripts/build-telegram.js`) and **review the bundle diff** — skim the
+   upstream changelog/commits between the two versions and diff the generated
+   `platforms/telegram/*.bundle.js` for new network endpoints, `eval`/`Function`, or
+   storage access. Note the review in the PR.
+
+`addons-linter` (run by `npm run validate:firefox` via `npx`) and the GitHub Actions in
+[`ci.yml`](.github/workflows/ci.yml) are pinned the same way (exact version / commit
+SHA); bump them deliberately, not implicitly.
+
 ## Making a change
 
 1. Branch off `main`.
@@ -48,7 +66,7 @@ Load unpacked for manual testing — see the [README](README.md#install). Chrome
 3. Run `npm test` (must be green) and syntax-check any changed JS
    (`node --check <file>`).
 4. If you touched a manifest, re-validate: `google-chrome --pack-extension` (Chrome) and
-   `npx addons-linter dist/erasechat-firefox-*.zip` (Firefox) must report no
+   `npm run validate:firefox` (Firefox, after `npm run build`) must report no
    errors.
 5. Update [CHANGELOG.md](CHANGELOG.md) with a short entry.
 6. Open a PR describing the change and, for anything touching deletion, the concrete

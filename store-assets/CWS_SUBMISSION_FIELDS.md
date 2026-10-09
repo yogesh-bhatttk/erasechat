@@ -17,6 +17,8 @@ and omits regex filtering).
       email blocks publishing.
 - [ ] **Upload `dist/erasechat-chrome-1.0.0.zip`** — the **chrome** zip.
       Not the firefox one; it carries `browser_specific_settings`, which Chrome flags.
+      `scripts/build.sh` strips the repo manifest's `"key"` field from this zip (the key
+      only pins the extension id for unpacked dev builds; the store assigns its own).
       Rebuild with `npm run build` if the source changed since 2026-08-02.
 
 Chrome's equivalent of AMO's "Notes for Reviewer" is **Access → Test instructions** in the
@@ -38,6 +40,13 @@ Both are read **from the package** and shown greyed out. They come from
 | Title | `extensionName` | `Erasechat` (9 / 75) |
 | Summary | `extensionDescription` | `Bulk-delete your own content on Slack, Reddit, X, Mastodon, Microsoft Teams & Telegram, with advanced filters and safety controls.` (130 / 132) |
 
+**Title (adopted 2026-10-09):** `Erasechat – Bulk Delete Messages, Posts & Comments` (50 / 75; de/es/fr translated, all ≤ 50 so the same names also fit AMO).
+The bare brand name says nothing about what the item does in search results; this form
+leads with the brand, names the action, and covers all six platforms without listing any
+trademark. Because the title is read from the package, adopting it means changing
+`extensionName` in all four `_locales/*/messages.json` (translated per locale), then
+rebuilding and re-uploading — and it renames the Firefox add-on too.
+
 The summary is the one-liner in search results. It now names all six platforms so a
 reviewer or user isn't surprised by permissions/functionality the old Slack-only summary
 didn't disclose (`tests/packaging.test.js` pins it to 132 chars across every locale).
@@ -52,6 +61,8 @@ _max 16,000 chars_
 > Do not paste the Markdown version from `STORE_LISTING.md` here.
 
 ```
+Free · No limits · No account · Nothing leaves your browser
+
 Tired of scrolling back years to clean up your own posts and messages? Erasechat bulk-deletes your own content — with the filters and safety controls to do it right — across six platforms: Slack (built in) plus five optional platforms you connect one at a time: Reddit, X, Mastodon, Microsoft Teams, and Telegram.
 
 Open a conversation (or your own account, for Reddit/X/Mastodon), pick your filters, preview exactly what will be removed, and delete in bulk — all from your browser.
@@ -92,12 +103,14 @@ Every one of these follows the same scan → preview → confirm safety model as
 • Works through your existing login on each platform — no passwords or tokens sent to us, and every platform's credential stays in memory-only browser storage, never written to disk
 
 ⌨️ CONVENIENT
-• Open the Slack dashboard from the toolbar or with Ctrl+Shift+K (Cmd+Shift+K on macOS)
+• Open the popup from the toolbar or with Ctrl+Shift+K (Cmd+Shift+K on macOS)
 • Clean, modern interface with three color themes
 • Localized UI (English, Spanish, French, German) across all six platforms
 
 PLEASE NOTE
 Erasechat is an independent tool and is not affiliated with, endorsed by, or sponsored by Slack, Reddit, X Corp., Mastodon gGmbH, Microsoft, or Telegram FZ-LLC. It acts on your behalf using your existing session (or, for Mastodon/Telegram, a credential you provide) on whichever platform(s) you connect. Deletions are permanent and cannot be undone — always preview before you delete. Deleting content you do not have permission to remove may be restricted by your workspace, instance, or tenant administrator.
+Two opt-in modes can remove OTHER people's messages where the platform itself permits it: Slack's "All Messages" sender option (for workspace admins/owners) and Telegram with "Only my messages" turned off (e.g. both sides of a private chat, or messages in a group you administer). Both are off by default and every match is previewed first.
+Deleting removes content through the platform's normal delete action. Platforms with retention, eDiscovery, or compliance-export policies (common on Microsoft Teams and enterprise Slack plans) may keep server-side copies that this tool cannot remove.
 ```
 
 ### Category
@@ -115,8 +128,12 @@ to talk to people. `Privacy & Security` is the AMO second choice and has no home
 ```
 English (United States)
 ```
-The package ships only `_locales/en`, so any other choice would promise localizations that
-do not exist.
+This is the listing's **primary** language. The package ships four locales —
+`_locales/en`, `de`, `es`, `fr` — and the UI follows the browser's language, so the
+description's "Localized UI (English, Spanish, French, German)" line is accurate. The
+dashboard lets you add translated listing text per language later (Store listing →
+*Add language*); until then German/Spanish/French users see the English listing but a
+localized extension.
 
 ### Store icon
 _128×128 · a **separate upload**, not read from the package_
@@ -132,7 +149,7 @@ icon does and what the dashboard accepts.
 _1280×800 (verified) · 24-bit PNG, no alpha (verified) · Chrome accepts up to 5 · order matters_
 
 The form offers **two** slots — *Localized screenshots* (under English – en) and *Global
-screenshots*. With only one locale they are interchangeable. Upload the five to **Global**,
+screenshots*. With only one listing language they are interchangeable. Upload the five to **Global**,
 which covers every language including any added later; if the submit check still asks for
 localized ones, upload the identical five there as well.
 
@@ -187,14 +204,17 @@ no 512 slot; do not try to force it into one.
 | Field | Value |
 |---|---|
 | Official URL | **None** — see below |
-| Homepage URL | `https://github.com/yogesh-bhatttk/erasechat` |
-| Support URL | `https://github.com/yogesh-bhatttk/erasechat/issues` |
+| Homepage URL | Repository URL — **only if the repository is public** (see below) |
+| Support URL | Repository issues URL — **only if the repository is public**; otherwise leave blank and rely on the verified contact email |
 | Mature content | **Off** |
 | Item support | **On** (visible) |
 
-Both URLs are live — the repo is **public**. (Note: `AMO_SUBMISSION_FIELDS.md` used to say
-to leave AMO's support website blank because the repo was private. That is now corrected —
-if the AMO listing is already up, go back and add the issues URL there too.)
+**Repository visibility decides these two fields.** `.githooks/pre-push` and the README
+describe the repo as private (no server-side branch protection on the free plan), and a
+reviewer or user following a link to a private repo gets a 404. Provide the GitHub
+homepage/support links only if the repository is public at submission time; otherwise
+leave them blank. The same rule applies to the source link in §2.5 and the GitHub-hosted
+privacy-policy URL in §2.
 
 **Official URL** is a dropdown, not a text field: it only offers domains already verified
 as yours in Google Search Console, and `github.com` can never be one of them. Leave it
@@ -269,10 +289,10 @@ Used only for the optional Reddit and X integrations, and only after the user ex
 
 **`webRequest` (optional permission)**
 ```
-Used only for the optional Microsoft Teams integration, and only after the user explicitly clicks Teams in the popup and grants this permission for teams.microsoft.com specifically. It passively observes the Authorization header on the user's own already-authenticated Teams web-client requests to capture a Bearer token, since Teams has no ambient session cookie the way Slack does. No request body or unrelated header is read or stored; only the Authorization value from requests whose path matches the chat API is kept, and only in chrome.storage.session (memory-only, cleared on browser close) — never written to disk.
+Used only for the optional Microsoft Teams integration, and only after the user explicitly clicks Teams in the popup and grants this permission for the Teams hosts (teams.cloud.microsoft, where Microsoft now serves Teams on the web, and teams.microsoft.com) specifically. It passively observes the Authorization header on the user's own already-authenticated Teams web-client requests to capture a Bearer token, since Teams has no ambient session cookie the way Slack does. No request body or unrelated header is read or stored; only the Authorization value from requests whose path matches the chat API is kept, and only in chrome.storage.session (memory-only, cleared on browser close) — never written to disk.
 ```
 
-**Optional host permissions — `*.reddit.com`, `*.x.com`, `*.twitter.com`, `*.teams.microsoft.com`, `*.msg.teams.microsoft.com`, `https://*/*`**
+**Optional host permissions — `*.reddit.com`, `*.x.com`, `*.twitter.com`, `*.teams.microsoft.com`, `*.msg.teams.microsoft.com`, `*.teams.cloud.microsoft`, `https://*/*`**
 ```
 Each of the platform-specific patterns is requested only once the user clicks that platform in the popup, and is used only to call that platform's own official web/API endpoints on the user's behalf. The broad https://*/* entry is the declared upper bound Chrome requires so one narrow, runtime-resolved request can be legal: Mastodon (federated — every instance is a different origin) requests permission for only the exact instance URL the user typed. It never requests or receives the broad pattern itself — chrome.permissions.request() is always called with one specific, narrow origin.
 ```
@@ -283,25 +303,38 @@ The radio button alone is not enough: Chrome requires the justification box to b
 even when the answer is No, and leaving it empty is one of the errors the submit check
 raises. Paste:
 ```
-No remote code is used. Every line of JavaScript, HTML and CSS the extension executes ships inside the uploaded package. Nothing is fetched or injected at runtime, and there is no eval(), no new Function(), no remotely-hosted script tag and no dynamic import. The extension-pages content security policy is "script-src 'self'; object-src 'none'", which blocks remote execution at the platform level as well. The extension's only network requests are API calls to slack.com, which return JSON data — never code.
+No remote code is used. Every line of JavaScript, HTML and CSS the extension executes ships inside the uploaded package. Nothing is fetched or injected at runtime, and there is no eval(), no new Function(), no remotely-hosted script tag and no dynamic import. The extension-pages content security policy is "script-src 'self'; object-src 'none'", which blocks remote execution at the platform level as well. The extension's only network requests are API calls to the platforms the user explicitly connects (slack.com, reddit.com, x.com, the user's own Mastodon instance, Microsoft Teams, and Telegram's MTProto servers), which return data — never code.
 ```
 
 ### Data usage
 
-**Leave every data-type checkbox UNCHECKED.**
+**Recommended (conservative): check _Authentication information_ and _Personal
+communications_.** Also consider _Personally identifiable information_ (see below).
 
-Chrome defines collection as obtaining data and **transmitting it off the user's device**.
-This extension transmits nothing to the developer or to any third party — there is no
-backend, no analytics, no telemetry, on Slack or on any of the five optional platforms
-(Reddit, X, Mastodon, Microsoft Teams, Telegram). The only network traffic, on
-any platform, is the user's own browser talking directly to that platform's own API over
-their own already-logged-in session — always a service they're already using and an
-action they explicitly asked for.
+What the code actually does with each:
 
-Do not "play it safe" by checking *Authentication information* or *Personal communications*.
-Those checkboxes render as a public "this developer collects…" panel on the listing page,
-which would tell every visitor something untrue about a tool whose entire pitch is that it
-is local-only.
+| Data type | What the extension handles | Leaves the device? |
+|---|---|---|
+| Authentication information | Reads the user's own session credentials: the Slack `xoxc-` token from the Slack page, Reddit's session cookie/modhash, X's `ct0` CSRF cookie, a captured Teams Bearer token, a Mastodon access token the user pastes, and a Telegram MTProto session created at login. Held in `chrome.storage.session` (memory-only). | Only to the same platform's own API, as that user. Never to the developer or any third party. |
+| Personal communications | Reads the user's messages/posts/comments (and, in Slack/Telegram conversations, other participants' messages in the same conversation) to filter and preview them locally; can export a CSV on request. | No — rendered locally only. |
+| Personally identifiable information | Display names (Slack `users.list` cache, 24 h), the user's X username and Mastodon account id, stored locally. | No. |
+
+Chrome's User Data policy covers data an extension **handles**, not only data it sends to
+its developer, and reviewers compare the checkboxes against what the permissions and code
+obviously touch. An extension that reads session tokens and chat messages but declares
+neither is the kind of mismatch that draws a rejection or a later takedown. Checking
+the boxes is accurate; the trust message ("nothing leaves your browser") belongs in the
+description and the privacy policy, which state plainly that this data is processed
+locally and never transmitted to the developer.
+
+If a justification/notes field is offered, use:
+```
+Erasechat handles the user's own session credentials (Slack, Reddit, X, Teams, Mastodon, Telegram) solely to call each platform's own API on the user's behalf, and reads the user's messages/posts solely to filter, preview and delete them at the user's request. All processing is local in the browser; credentials are kept only in memory-only session storage; nothing is transmitted to the developer or any third party. No analytics or telemetry.
+```
+
+The Firefox manifest's `data_collection_permissions: ["none"]` is unaffected: Mozilla
+defines collection strictly as transmission to the developer or third parties, which does
+not happen.
 
 **Certifications — check all three:**
 - [x] I do not sell or transfer user data to third parties, outside of the approved use cases
@@ -312,8 +345,10 @@ is local-only.
 ```
 https://github.com/yogesh-bhatttk/erasechat/blob/main/PRIVACY_POLICY.md
 ```
-Verified reachable (HTTP 200). Chrome requires a hosted HTTPS page here and, unlike AMO,
-will **not** accept pasted policy text.
+Chrome requires a hosted HTTPS page here and, unlike AMO, will **not** accept pasted
+policy text. **This GitHub URL only works while the repository is public** — re-check it
+returns HTTP 200 logged out before submitting. If the repo is private, host the policy
+elsewhere (any public HTTPS page; `privacy.html` is self-contained).
 
 If you would rather serve it as a real page than a GitHub file view, enable GitHub Pages on
 `main` and use `https://yogesh-bhatttk.github.io/erasechat/privacy.html` —
@@ -349,7 +384,7 @@ acts through the reviewer's own Slack session. Any free Slack workspace is enoug
 HOW TO TEST
 1. Sign in to any Slack workspace at https://app.slack.com.
 2. Open a channel or DM and post a few throwaway messages.
-3. Click the toolbar icon, then "Open Clean Dashboard" (or press Ctrl+Shift+K).
+3. Click the toolbar icon, then "Open Clean Dashboard" (Ctrl+Shift+K opens the popup).
 4. Choose filters and press "Scan Messages" — this step is read-only and deletes nothing.
 5. Review the previewed list, then press "Start Deleting".
    Jobs over 100 messages require typing DELETE to confirm.
@@ -390,11 +425,21 @@ All code is bundled in the package. Nothing is fetched or eval'd at runtime. The
 extension-pages CSP is "script-src 'self'; object-src 'none'".
 
 SOURCE
-Unminified and readable exactly as shipped; there is no build step that transforms it.
-Public source: https://github.com/yogesh-bhatttk/erasechat
+Unminified and readable exactly as shipped, except the two Telegram bundles
+(platforms/telegram/*.bundle.js), which are webpack builds of the matching *.src.js files
+plus the teleproto MTProto library: npm ci && node scripts/build-telegram.js.
+[Source link: add "Source: <repository URL>" here only if the repository is public;
+otherwise omit this line and attach the source zip (git archive of the release tag) where
+the dashboard allows it.]
 
 DATA COLLECTION
 None. Nothing leaves the user's device except the calls to Slack's own API listed above.
+
+SENDER MODES
+By default only the user's own messages are matched. The "All Messages" sender option is
+for workspace admins/owners and can delete other members' messages where Slack permits it;
+it is opt-in, previewed, and saved presets can never silently switch to it. Telegram has an
+equivalent opt-in ("Only my messages" off).
 
 OPTIONAL PLATFORMS BEYOND SLACK
 The popup also offers five further platforms — Reddit, X, Mastodon, Microsoft Teams,
@@ -425,10 +470,13 @@ Happy to answer anything — yogeshb@prosperix.com
 Neither is a reason to delay the submission — both are answered honestly in the fields
 above. They are here so a rejection email is not a surprise.
 
-1. **The trademark "for Slack".** The name follows the compliant `<name> for Slack` form
-   rather than leading with the mark, the icon does not use Slack's, and the description
-   carries an explicit non-affiliation disclaimer. Chrome can still ask for a rename; if it
-   does, the fix is a name change, not an appeal.
+1. **Platform trademarks.** The product is now **Erasechat** (multi-platform), not the
+   earlier "… for Slack" name, so no third-party mark is in the title — keep it that way
+   (the suggested `Erasechat – Bulk Delete Messages, Posts & Comments` names no platform).
+   Platform names appear only descriptively in the summary/description, the icon uses
+   none of their logos, and the description carries an explicit non-affiliation
+   disclaimer for all six. If Chrome still objects to a platform name in the copy, the
+   fix is a wording change, not an appeal.
 2. **Reading the session token from `localStorage`.** This is the part that looks unusual
    at a glance, and it is explained in two places on purpose: the host-permission
    justification (§2, shown next to the permission during review) and Test instructions

@@ -1,6 +1,6 @@
 # Terms of Use
 
-_Last updated: September 10, 2026_
+_Last updated: October 9, 2026_
 
 Erasechat ("the Extension") is a free, open-source browser extension provided
 by Yogesh Bhatt ("the Author"). By installing or using the Extension, you agree to these
@@ -34,6 +34,13 @@ use of the Extension.
   instance's own rules), Microsoft's, and Telegram's. Deleting content may be restricted
   or logged by your organization's administrators on any platform that supports one
   (e.g. a Slack workspace or a Microsoft Teams tenant).
+- Two opt-in modes can delete **other people's** content where the platform permits it:
+  Slack's "All Messages" sender mode (for workspace admins/owners) and Telegram with
+  "Only my messages" turned off. Use them only where you have the right to remove that
+  content.
+- Deleting through the Extension does not override a platform's or organization's
+  retention, legal-hold, or compliance settings (common on Microsoft Teams and enterprise
+  Slack); server-side copies may survive.
 - You are responsible for any consequences of deleting content (including compliance,
   legal-hold, or record-keeping obligations that may apply to you or your organization),
   on whichever platform(s) you use the Extension with.

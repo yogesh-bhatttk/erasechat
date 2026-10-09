@@ -2,6 +2,153 @@
 
 ## Unreleased
 
+### Seventh audit pass (2026-10-09): Telegram scope, Teams connect, ReDoS, store/build hygiene
+
+Full report: [`docs/AUDIT_REPORT_2026-10-09.md`](docs/AUDIT_REPORT_2026-10-09.md).
+
+**New features (roadmap "Now" + key "Next" items)**
+- **Advanced filters on Reddit, X, Mastodon, Teams and Telegram** (shared
+  `platforms/shared/platform-filters.js`): a date range, `/regex/` text filters with the same
+  ReDoS guard as Slack, "invert" (keep matches, delete the rest) and keep rules (Reddit:
+  minimum upvotes; X: minimum likes and keep pinned; Mastodon: minimum favourites and keep
+  pinned). Newest-first listings stop paging at the From date. Telegram passes the range to
+  Telegram's own search (`minDate`/`maxDate`).
+- **Export CSV/JSON before deleting** on all five dashboards. Files are built locally and are
+  formula-injection safe.
+- **Reddit overwrite-then-delete** (opt-in): comments and self posts are edited to a
+  replacement text, verified, then deleted, so archive sites don't keep the original text.
+- **Reddit data-export import:** load `comments.csv`/`posts.csv` from Reddit's data request to
+  delete items beyond the ~1000-per-listing cap.
+- **X archive import:** load `tweets.js`/`tweet-headers.js` to delete beyond the ~3200-post
+  timeline cap. The archive must belong to the connected account (checked by user id when
+  `tweet-headers.js` is present, otherwise confirmed by the user).
+- Long result lists draw the first 1,000 rows and keep the page responsive. Select All,
+  Delete and Export still cover every item.
+- Deliberately not built: scheduled/unattended auto-delete, which conflicts with the
+  preview-first safety model.
+
+**Teams on `teams.cloud.microsoft`**
+- Microsoft redirects Teams on the web for every work tenant from teams.microsoft.com to
+  `teams.cloud.microsoft` (MC1465764, final redirect 30 Sep 2026). Without the new host,
+  token capture saw no traffic and Teams could not connect.
+- The new host is now supported in the optional host permissions, the platform registry's
+  tab matching, the token-capture filters, the connect tab (which now opens
+  teams.cloud.microsoft), and page-link rebasing.
+- User-facing messages and privacy/store docs updated.
+
+**Regression pass** (five read-only reviews of the whole uncommitted diff, then fixes)
+- Scans no longer freeze silently: without a Cancel button wired in, `fetchWithRetry` waits
+  at most 10 s per retry. During deletes, long server waits are still honoured but shown
+  ("Rate limited -- waiting Ns") and cancellable.
+- X:
+  - The rate-limit wait during a scan has a working Cancel and keeps posts found so far.
+  - A repeated page cursor ends the scan.
+  - A stale `DeleteRetweet` id fails only reposts, not the whole run.
+  - An old "stopped after N pages" note no longer comes back.
+- Reddit keeps its truncation note after a delete. Count resets clear the remembered note
+  on every dashboard.
+- The "Stop?" confirm says "Stop scanning?" during scans and closes itself when a run ends,
+  so it no longer holds the result alert behind it. The progress text no longer carries
+  stale progressbar attributes.
+- Telegram:
+  - Log out from the popup clears the local login even offline or with a dead session.
+  - Saved Messages treats forwarded items as yours (labels, selection, counts, no `fromId`
+    filter).
+  - A page restored from bfcache reloads.
+- Teams page links on another Teams host are rebased onto the captured API base (others
+  stop and are reported as truncated) instead of failing the whole request.
+- Slack:
+  - No false "stopped outside this tab" warning on your own Cancel.
+  - Stored scan records are compact, capped and pruned (Chrome 109–111 have a 1 MB
+    session quota).
+  - Recovered jobs resume without an extra minute's delay.
+  - Fixed a Resume/Cancel race.
+  - The "scan again" message mentions the 30-minute expiry.
+  - A normal Scan always re-sweeps; only a retry after a timeout reuses the cached result.
+- Popup:
+  - Programmatic Slack injection also loads `shared-filters.js`.
+  - A failed Telegram script load can be retried.
+- Privacy policy (MD/HTML) rows aligned.
+- An expired Telegram login code stops the attempt and returns to the first step (phone
+  kept) instead of re-prompting for codes for a dead login.
+- `function-bind-shim.js` (build-time only) no longer ships in the store zips.
+- Stronger packaging tests:
+  - A real store build runs twice into a temp dir. It checks that the zips are
+    byte-identical, the Chrome zip has no `key`, license notices ship, and no
+    `.src.js`/`.map`/shim files leak in.
+  - The HTML-injection check covers every shipped script and multi-line assignments,
+    plus `+=`, `outerHTML` and `insertAdjacentHTML`.
+  - The `eval` check fails instead of skipping when the bundle is missing.
+
+**Zero-warning build**
+- `addons-linter` on the Firefox package: 0 errors, 0 warnings, 0 notices.
+  - The Slack type-DELETE dialog is built from DOM nodes instead of `innerHTML`.
+  - `get-intrinsic`'s unused `'%eval%': eval` table entry is stripped at bundle time
+    (`scripts/strip-intrinsic-eval-loader.js`).
+- webpack's 244 KiB web-page size budget is replaced with a 4 MiB budget that matches
+  the locally loaded Telegram bundle.
+- Packaging tests guard against both warnings returning.
+
+**Critical**
+- **Telegram could delete the other person's messages for everyone by default.** A DM
+  scan returned both sides, every row was pre-selected with no author shown, and delete
+  uses `revoke: true`. New **"Only my messages"** toggle (on by default) restores the
+  self-only filter; when off, rows are labelled *You* / *Someone else* and only your own
+  start selected (`resetSelection` gained an optional pre-select predicate).
+- **Microsoft Teams could never connect for a first-time user** — the popup revoked the
+  just-granted permission on Teams' normal `{ok:false, pending:true}` step, so the token
+  listener lost access before it could capture anything. Pending results no longer revoke.
+
+**High**
+- A failed Reddit connect no longer un-grants X's shared `cookies` permission; revocation
+  keeps any API permission another granted platform still needs.
+- Slack: Resume after re-login re-reads the current token, and `SET_SESSION` updates every
+  job of that workspace (no more instant re-pause loop).
+- ReDoS guard: nested quantified groups (`((a|a))+$`, `(?:(a|a))+`, …) are now rejected by
+  a paren-depth structural check (`hasQuantifiedRiskyGroup`).
+- X: live GraphQL query-ID extraction fetches bundles with `credentials:'omit'` (CORS
+  rejected `include`), and "features cannot be null" counts as a stale-signature error.
+- X: typing in the username box can no longer re-enable Delete mid-scan/mid-delete;
+  results are bound to the scanned handle.
+- Teams: the bare-host capture keeps the full `/api/chatsvc/<region>` prefix (https only);
+  on Firefox, listener registration falls back from the Chrome-only `extraHeaders`.
+- Third-party license notices (`*.bundle.js.LICENSE.txt`) now ship in the store zips.
+- Store reviewer notes corrected ("no build step", "only calls slack.com" were false).
+
+**Medium**
+- Slack: no more false "Not all messages were scanned" on custom-range scans with threads;
+  rate-limit `nextRunAt` survives a service-worker restart; pausing on the last in-flight
+  item no longer leaves the UI stuck on "Resume"; the regex preview now uses the real
+  `isSafeRegex` (`shared-filters.js` loads before `content.js` in both manifests).
+- Security: `BG_API_CALL` is limited to an allowlist (`users.list`, `users.info`,
+  `conversations.info`) and the raw-token `GET_SESSION` handler is gone; loading a preset
+  can narrow the sender to "me" but never widen it to "All Messages".
+- Mastodon & Teams honour the shared 429 circuit breaker, stop after three consecutive
+  403s, and Mastodon pacing persists for the tab's lifetime; Teams only sends the bearer
+  token to `nextLink` URLs on the captured Teams origin.
+- Platform dashboards: preview rows are styled, the modal is no longer double-centred,
+  and Slack's badge reads "Slack".
+- Accessibility: live regions on status/progress/result counts, accessible names for result
+  checkboxes and the Reddit Deep-Scan switch, `aria-expanded` on the log toggle,
+  `role="alert"` on popup errors, and higher-contrast light-mode muted/error text.
+- Docs/privacy: README build-before-load-unpacked note; the privacy policy discloses the X
+  username, Mastodon account ID, saved presets, and paused-job retention.
+
+**Store / build / CI (same pass)**
+- `scripts/build.sh` strips the dev-only `"key"` from the Chrome store manifest and builds
+  reproducible zips (`-X`, sorted entries, fixed modes, mtimes from `SOURCE_DATE_EPOCH`).
+- CI actions pinned to commit SHAs; `teleproto` and `addons-linter` pinned to exact versions.
+- Firefox's default shortcut is now `Alt+Shift+E` (`Ctrl+Shift+K` is its Web Console); the
+  command description is localized. (`use_dynamic_url` stays off -- it unstyles the Slack
+  dashboard; see the earlier R1 revert.)
+- Privacy policy / `privacy.html` / Terms: dates aligned, contact address added, light theme
+  for `privacy.html`, per-platform Disconnect and Telegram Log out, 30-day paused-job
+  expiry, the 10-minute in-memory scan cache, a full storage-key appendix, and disclosure
+  that Slack "All Messages" / Telegram with "Only my messages" off can delete others'
+  messages and that Teams/enterprise retention may keep server-side copies.
+- New packaging tests: license files kept, `key` stripped, every storage key disclosed in
+  the policy, `aria-live` status on every dashboard, `shared-filters.js` before `content.js`.
+
 ### Sixth pass: UI consistency audit — dashboard theming was silently broken
 
 Found and fixed the root cause behind why the five non-Slack dashboards

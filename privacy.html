@@ -13,6 +13,27 @@
       --border: rgba(148, 163, 184, 0.18);
       --purple: #8b5cf6;
       --pink: #ec4899;
+      --heading: #ffffff;
+      --link: #a78bfa;
+      --th-bg: rgba(139, 92, 246, 0.12);
+      color-scheme: dark;
+    }
+    /* Light theme: follows the OS/browser setting. Every colour below is a variable so
+       both themes stay in sync; contrast checked against WCAG AA (4.5:1 body text). */
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #ffffff;
+        --card: #f5f3ff;
+        --text: #1e293b;
+        --muted: #475569;
+        --border: rgba(71, 85, 105, 0.25);
+        --purple: #6d28d9;
+        --pink: #be185d;
+        --heading: #0f172a;
+        --link: #6d28d9;
+        --th-bg: rgba(109, 40, 217, 0.08);
+        color-scheme: light;
+      }
     }
     * { box-sizing: border-box; }
     body {
@@ -38,11 +59,11 @@
       -webkit-text-fill-color: transparent;
     }
     .updated { color: var(--muted); font-size: 13px; }
-    h2 { font-size: 18px; margin: 32px 0 10px; color: #fff; }
+    h2 { font-size: 18px; margin: 32px 0 10px; color: var(--heading); }
     h3 { font-size: 15px; margin: 20px 0 8px; color: var(--text); }
     p, li { color: var(--text); }
-    a { color: var(--purple); }
-    strong { color: #fff; }
+    a { color: var(--link); }
+    strong { color: var(--heading); }
     ul { padding-left: 20px; }
     li { margin: 4px 0; }
     table {
@@ -54,7 +75,7 @@
       overflow-x: auto;
     }
     th, td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
-    th { background: rgba(139, 92, 246, 0.12); color: #fff; }
+    th { background: var(--th-bg); color: var(--heading); }
     .note {
       background: var(--card);
       border: 1px solid var(--border);
@@ -72,7 +93,7 @@
   <div class="wrap">
     <header>
       <h1>Erasechat — Privacy Policy</h1>
-      <div class="updated">Last Updated: September 7, 2026</div>
+      <div class="updated">Last Updated: October 9, 2026</div>
     </header>
 
     <div class="note">
@@ -99,7 +120,11 @@
         <tr><td><strong>Slack session token</strong></td><td>Authenticate API calls to delete your messages</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
         <tr><td><strong>Workspace name, URL, user ID</strong></td><td>Show connection info in the dashboard</td><td>Browser memory (runtime)</td><td>Cleared when the tab closes</td></tr>
         <tr><td><strong>Member display names</strong></td><td>Show readable names in scan results</td><td>Local storage (<code>chrome.storage.local</code>)</td><td>24-hour cache, auto-expires</td></tr>
-        <tr><td><strong>Message metadata</strong> (timestamps, author IDs, file IDs, and — only for "preserve text" edits — the message text)</td><td>Track deletion progress; enable pause/resume/recovery</td><td>Local storage (<code>chrome.storage.local</code>)</td><td>Cleared when the job completes or is cancelled</td></tr>
+        <tr><td><strong>Message metadata</strong> (timestamps, author IDs, file IDs, and — only for "preserve text" edits — the message text)</td><td>Track deletion progress; enable pause/resume/recovery</td><td>Local storage (<code>chrome.storage.local</code>)</td><td>Cleared when the job completes or is cancelled; a paused job keeps it until you resume or cancel, and is automatically discarded after 30 days</td></tr>
+        <tr><td><strong>Most recent scan result</strong> (matched messages' IDs, timestamps, authors, text)</td><td>Deliver a long-running scan's result without re-scanning</td><td>Browser memory only (background service worker) — never written to disk</td><td>Discarded after 10 minutes, or sooner when the service worker stops</td></tr>
+        <tr><td><strong>Last scan's message timestamps and author IDs</strong> (no text)</td><td>Accept a delete request only for messages the extension's own scan returned</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Replaced by the next scan; cleared when the browser closes</td></tr>
+        <tr><td><strong>"Job is running" flag</strong> (no content)</td><td>Never auto-resume a destructive job after the browser was closed</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the job stops or the browser closes</td></tr>
+        <tr><td><strong>Saved filter presets</strong> you create (keywords, /regex/ patterns, settings)</td><td>Re-apply a filter in one click</td><td>Local storage (<code>chrome.storage.local</code>)</td><td>Until you delete the preset</td></tr>
         <tr><td><strong>Current channel ID and name</strong></td><td>Scope operations to the active conversation</td><td>Browser memory (runtime)</td><td>Cleared when the tab closes</td></tr>
       </tbody>
     </table>
@@ -115,19 +140,24 @@
       </thead>
       <tbody>
         <tr><td rowspan="2"><strong>Reddit</strong></td><td>A "modhash" Reddit's own API requires to authorize a delete call (the reddit.com session cookie itself is read live via <code>credentials: "include"</code> and never copied into storage)</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
-        <tr><td>Your Reddit username</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect Reddit</td></tr>
-        <tr><td><strong>X</strong></td><td>Your existing x.com/twitter.com session's CSRF token (<code>ct0</code>) — never your password or the underlying session cookie itself</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
+        <tr><td>Your Reddit username</td><td><code>chrome.storage.local</code></td><td>Until you disconnect Reddit in the popup (or reconnect)</td></tr>
+        <tr><td rowspan="2"><strong>X</strong></td><td>Your existing x.com/twitter.com session's CSRF token (<code>ct0</code>) — never your password or the underlying session cookie itself</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
+        <tr><td>Your X username</td><td><code>chrome.storage.local</code></td><td>Until you disconnect X in the popup (or reconnect)</td></tr>
         <tr><td rowspan="2"><strong>Mastodon</strong></td><td>A personal access token you generate yourself on that instance</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
-        <tr><td>The instance URL you type and your account username</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect Mastodon</td></tr>
-        <tr><td rowspan="2"><strong>Microsoft Teams</strong></td><td>A Bearer token passively observed from your own already-authenticated Teams traffic</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
-        <tr><td>The Teams API base URL your tenant uses</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect Teams</td></tr>
-        <tr><td rowspan="2"><strong>Telegram</strong></td><td>Your MTProto session string (created after your phone/code/2FA login)</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes (logout also revokes the session server-side)</td></tr>
-        <tr><td>Your own <code>api_id</code>/<code>api_hash</code> (from Telegram's developer portal — identifies the app, not your account)</td><td><code>chrome.storage.local</code></td><td>Until you disconnect/reconnect</td></tr>
+        <tr><td>The instance URL you type, your account username and numeric account ID</td><td><code>chrome.storage.local</code></td><td>Until you disconnect Mastodon in the popup (or reconnect)</td></tr>
+        <tr><td rowspan="3"><strong>Microsoft Teams</strong></td><td>A Bearer token passively observed from your own already-authenticated Teams traffic</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes</td></tr>
+        <tr><td>The Teams API base URL your tenant uses</td><td><code>chrome.storage.local</code></td><td>Until you disconnect Teams in the popup (or reconnect)</td></tr>
+        <tr><td>A "finish connecting" marker while you sign in to Teams (no content)</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared once connected, or when the browser closes</td></tr>
+        <tr><td rowspan="3"><strong>Telegram</strong></td><td>Your MTProto session string (created after your phone/code/2FA login)</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Cleared when the browser closes, on <strong>Log out</strong> in the Telegram dashboard (which also ends the session on Telegram's servers via <code>auth.LogOut</code>), or on disconnect</td></tr>
+        <tr><td>Your own <code>api_id</code>/<code>api_hash</code> (from Telegram's developer portal — identifies the app, not your account)</td><td><code>chrome.storage.local</code></td><td>Until you disconnect Telegram in the popup (or reconnect)</td></tr>
+        <tr><td>The phone number you type in the popup, handed to the Telegram dashboard tab to continue login</td><td>Browser memory only (<code>chrome.storage.session</code>)</td><td>Deleted as soon as the dashboard reads it</td></tr>
       </tbody>
     </table>
     <p>Every credential above — Slack's session token included — is memory-only
-      (<code>chrome.storage.session</code>), cleared the moment the browser closes, and
-      never written to disk. Only the non-sensitive labels marked
+      (<code>chrome.storage.session</code>), cleared the moment the browser closes (or
+      when you disconnect that platform), and never written to disk. Closing the browser
+      does not end a Telegram session on Telegram's side — use <strong>Log out</strong>
+      for that. A Mastodon token stays valid on your instance until you revoke it there. Only the non-sensitive labels marked
       <code>chrome.storage.local</code> above persist across a restart, purely so the
       popup can show you're still connected without asking you to reconnect every time;
       none of them can authenticate a request on their own.</p>
@@ -142,6 +172,26 @@
       honest "previous run was interrupted" notice instead of silence. It never contains
       message content, clears automatically when a deletion finishes, and cannot resume a
       delete without you running a fresh scan first.</p>
+
+    <h3>Whose content can be deleted</h3>
+    <p>By default every platform targets <strong>only your own</strong> content. Two
+      opt-in modes go further, only where the platform itself allows it:</p>
+    <ul>
+      <li><strong>Slack "All Messages"</strong> (for workspace admins/owners) can delete
+        other members' messages in the open conversation if your role permits it. Saved
+        presets never switch to it on their own.</li>
+      <li><strong>Telegram with "Only my messages" off</strong> shows every message,
+        labelled <em>You</em> / <em>Someone else</em>, and can delete selected messages for
+        everyone where Telegram permits it (e.g. both sides of a private chat, or a group
+        you administer). Only your own messages start selected.</li>
+    </ul>
+
+    <h3>What deletion can and cannot remove</h3>
+    <p>Erasechat uses each platform's normal delete action. It cannot override
+      retention, legal-hold, eDiscovery, or compliance-export settings — Microsoft Teams
+      tenants and enterprise Slack plans in particular may keep server-side copies this
+      tool cannot remove. Copies others already have (notifications, emails, other
+      clients, federated Mastodon servers) are also out of reach.</p>
 
     <h3>Data the extension does NOT access, on any platform</h3>
     <ul>
@@ -164,15 +214,16 @@
 
     <h2>Data storage &amp; sharing</h2>
     <ul>
+      <li><strong>Export and import stay on your device.</strong> "Export CSV/JSON" builds the file in your browser and saves it through your normal download. Importing a Reddit data export or an X archive reads the files you pick locally; nothing is uploaded, and imported items live only in that dashboard tab's memory.</li>
       <li><strong>No data is transmitted to external servers.</strong> Every call goes
         directly from your browser to the platform being managed — Slack, reddit.com,
-        x.com, your chosen Mastodon instance, teams.microsoft.com, or Telegram's own
+        x.com, your chosen Mastodon instance, teams.cloud.microsoft / teams.microsoft.com, or Telegram's own
         MTProto servers.</li>
       <li><strong>No platform's credential is ever written to disk.</strong> Slack's
         session token, Reddit's modhash, X's CSRF token, Mastodon's access token, the
         Teams Bearer token, and Telegram's session string all live only in
         <code>chrome.storage.session</code> (memory-only, cleared on browser close).
-        Only non-sensitive labels — your Reddit/Mastodon username, the Mastodon instance
+        Only non-sensitive labels — your Reddit/X/Mastodon username, the Mastodon instance
         URL, the Teams API base URL, and Telegram's <code>api_id</code>/<code>api_hash</code>
         — persist in <code>chrome.storage.local</code> so you don't have to reconnect
         every time; none of them can authenticate a request on their own, none ever
@@ -185,7 +236,9 @@
     <h2>User control</h2>
     <ul>
       <li>Pause, resume, or cancel any Slack deletion at any time; closing a dashboard tab stops operations for that platform.</li>
-      <li>Connect or disconnect any of the five optional platforms independently — none of them are required to use Slack, and connecting one never affects the others.</li>
+      <li>Connect or <strong>disconnect</strong> any of the five optional platforms independently from the popup. Disconnecting clears that platform's stored credential and labels and removes the browser permissions it was granted; it never affects the other platforms.</li>
+      <li>On Telegram, <strong>Log out</strong> in the dashboard also ends the session on Telegram's servers.</li>
+      <li>A paused Slack job that is never resumed or cancelled is discarded automatically after 30 days.</li>
       <li>Uninstalling the extension clears all stored data across every platform.</li>
       <li>Deletions require explicit confirmation on every platform, with a stricter "type the exact count" step for large batches (&gt;100 items) instead of a fixed one-word confirmation.</li>
     </ul>
@@ -207,8 +260,11 @@
 
     <h2>Changes &amp; contact</h2>
     <p>This policy may be updated from time to time; changes are reflected in the
-      "Last Updated" date above. Questions? Contact the developer through the extension's
-      store listing.</p>
+      "Last Updated" date above. Questions or data requests? Email
+      <a href="mailto:yogeshb@prosperix.com">yogeshb@prosperix.com</a>, or contact the
+      developer through the extension's store listing. No data about you is held on any
+      server — everything above lives in your browser and is removed by disconnecting a
+      platform or uninstalling the extension.</p>
 
     <footer>
       Erasechat is an independent tool and is not affiliated with, endorsed by, or

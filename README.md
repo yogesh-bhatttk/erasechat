@@ -91,7 +91,9 @@ _(Links will go here once published.)_
 
 **Chrome / Chromium (Chrome, Brave, Edge):**
 1. Go to `chrome://extensions`, enable **Developer mode**.
-2. **Load unpacked** → select this project folder (uses [`manifest.json`](manifest.json)).
+2. Build the Telegram bundles once (they're gitignored): `npm ci && node scripts/build-telegram.js`.
+   Without this, the Telegram popup and dashboard fail to load.
+3. **Load unpacked** → select this project folder (uses [`manifest.json`](manifest.json)).
 
 **Firefox:**
 1. Copy the Firefox manifest over the default one (Firefox uses an event page, not a
@@ -102,7 +104,9 @@ _(Links will go here once published.)_
 
 Then open the Slack **web** client (`https://app.slack.com` or your workspace subdomain),
 open a channel or DM, click the extension icon, and **Open Clean Dashboard**
-(shortcut: `Ctrl+Shift+K` / `Cmd+Shift+K`).
+(the popup also opens with `Ctrl+Shift+K` / `Cmd+Shift+K` in Chrome, `Alt+Shift+E` /
+`Cmd+Shift+K` in Firefox — where `Ctrl+Shift+K` is the Web Console; rebind it at
+`chrome://extensions/shortcuts` or `about:addons` → ⚙ → Manage Extension Shortcuts).
 
 To use one of the other five platforms, click the extension icon and pick it from the
 popup's platform list — each one requests its own (optional) permission and connects
@@ -151,11 +155,11 @@ ships two manifests with identical everything else:
 ## Development
 
 ```bash
-npm install               # dev-only (ESLint + Playwright); the extension itself
-                          # has no runtime dependencies
+npm install               # ESLint, Playwright, webpack + the one runtime dependency
+                          # (teleproto, bundled into the Telegram pages)
 npm run hooks:install     # once per clone: pre-push guard on main (see below)
 npm run lint              # correctness lint (must be 0 problems)
-npm test                  # unit + packaging tests (node --test, zero-dependency)
+npm test                  # builds the Telegram bundles, then unit + packaging tests
 npm run test:e2e          # Playwright e2e (needs: npx playwright install chromium)
 npm run verify            # the full release gate, in order:
                           # lint -> test -> test:e2e -> build -> validate:firefox

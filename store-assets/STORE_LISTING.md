@@ -67,21 +67,24 @@ first if the extension changes.
 - Works through the existing Slack login — no passwords or tokens to enter
 
 **Convenience**
-- Toolbar button or Ctrl+Shift+K (Cmd+Shift+K on macOS)
+- Toolbar button or Ctrl+Shift+K in Chrome / Alt+Shift+E in Firefox (Cmd+Shift+K on macOS)
 - Three color themes (fusion, matrix, neon)
 
 ---
 
 ## Required disclaimer
 
-Every listing carries this, verbatim. It is not optional — the name uses Slack's mark, and
-the tool destroys data irreversibly.
+Every listing carries this, verbatim. It is not optional — the copy names other
+companies' platforms, and the tool destroys data irreversibly.
 
 > Erasechat is an independent tool and is not affiliated with, endorsed by, or
-> sponsored by Slack. It acts on your behalf using your existing Slack session. Deletions
-> are permanent and cannot be undone — always preview (and export a backup) before you
-> delete. Deleting messages you do not have permission to remove may be restricted by your
-> workspace.
+> sponsored by Slack, Reddit, X Corp., Mastodon gGmbH, Microsoft, or Telegram FZ-LLC. It
+> acts on your behalf using your existing session (or a credential you provide) on the
+> platforms you connect. Deletions are permanent and cannot be undone — always preview
+> (and export a backup) before you delete. Two opt-in modes — Slack's "All Messages"
+> (admins) and Telegram with "Only my messages" off — can delete other people's messages
+> where the platform permits it. Platforms with retention or compliance policies (e.g.
+> Microsoft Teams, enterprise Slack) may keep server-side copies this tool cannot remove.
 
 ---
 
