@@ -18,16 +18,25 @@
 
   --text-primary: #101828;
   --text-secondary: #4b5563;
-  --text-muted: #98a2b3;
+  --text-muted: #667085; /* 4.8:1 on white (AA); was #98a2b3 at 2.6:1 */
+  --error-text: #dc2626; /* 4.8:1 on white; #ef4444 was 3.8:1 */
 
   --color-purple: #8b5cf6;
   --color-pink: #ec4899;
   --color-green: #10b981;
   --color-orange: #f59e0b;
-  --accent: var(--color-purple);
+  /* Accent used for TEXT and focus rings: #7c3aed is 5.7:1 on white (the old
+     #8b5cf6 was 4.2:1 -- failing at the 10-11px sizes it's used at). */
+  --accent: #7c3aed;
+  /* Status-chip text (green/amber at 11px on a tinted chip). */
+  --ok-text: #047857;
+  --warn-text: #b45309;
+  /* Non-text contrast >= 3:1 for input borders (#e6e8eb was 1.2:1). */
+  --border-input: #7a8291;
 
-  --gradient-glow: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
-  --gradient-glow-hover: linear-gradient(135deg, #a78bfa 0%, #f472b6 100%);
+  /* White text on both stops: #7c3aed 5.7:1, #db2777 4.6:1 (was 4.2 / 3.5). */
+  --gradient-glow: linear-gradient(135deg, #7c3aed 0%, #db2777 100%);
+  --gradient-glow-hover: linear-gradient(135deg, #6d28d9 0%, #be185d 100%);
 
   --radius-lg: 14px;
   --radius-md: 12px;
@@ -48,12 +57,19 @@
     --text-primary: #f1f5f9;
     --text-secondary: #cbd5e1;
     --text-muted: #94a3b8;
+    --error-text: #f87171;
+    --accent: #a78bfa;      /* 6.9:1 on --bg-primary */
+    --ok-text: #34d399;
+    --warn-text: #fbbf24;
+    --border-input: #7b8aa0;
   }
 }
 
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible,
 .platform-row:focus-visible {
   outline: 2px solid var(--accent) !important;
   outline-offset: 2px !important;
@@ -108,9 +124,9 @@ body {
 }
 
 .badge {
-  font-size: 8px;
+  font-size: 10px; /* was 8px */
   font-weight: 700;
-  letter-spacing: 1.5px;
+  letter-spacing: 1px;
   color: #fff;
   background: var(--gradient-glow);
   padding: 2px 8px;
@@ -144,19 +160,53 @@ body {
   list-style: none;
 }
 
+/* Each list item wraps the row <button> plus an optional Disconnect button. */
+.platform-item {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
 .platform-row {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
   padding: 10px 12px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface-subtle);
+  color: inherit;
+  font: inherit;
+  text-align: start;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.platform-row:hover { border-color: var(--border-hover); }
+.platform-row:hover:not(:disabled) { border-color: var(--border-hover); }
+
+.platform-disconnect {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  min-height: 24px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-input);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.platform-disconnect:hover:not(:disabled) {
+  color: var(--error-text);
+  border-color: var(--error-text);
+}
+
+.platform-disconnect:disabled { opacity: 0.6; cursor: progress; }
 
 .platform-row.is-current-tab { border-color: var(--accent); }
 
@@ -197,7 +247,7 @@ body {
   margin-top: 4px;
   font-size: 11px;
   line-height: 1.5;
-  color: #ef4444;
+  color: var(--error-text);
 }
 
 /* A "here's step 2" instruction (e.g. Teams' sign-in-then-reopen hint), styled
@@ -218,20 +268,20 @@ body {
   font-size: 13px;
   color: var(--text-primary);
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   padding: 9px 12px;
 }
 
 .text-input::placeholder { color: var(--text-muted); }
 
-.text-input:hover { border-color: var(--border-hover); }
+.text-input:hover { border-color: var(--text-muted); }
 
 .error-msg {
   display: none;
   font-size: 11px;
   font-weight: 600;
-  color: #ef4444;
+  color: var(--error-text);
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.25);
   border-radius: var(--radius-sm);
@@ -267,7 +317,7 @@ body {
 .form-group input {
   padding: 10px 12px;
   background-color: var(--surface-subtle);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 13px;
@@ -291,9 +341,7 @@ body {
 /* Inline connect form (e.g. Mastodon's instance URL + token), shown right below
    the platform row it belongs to. */
 .platform-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: block;
   padding: 10px 12px 12px;
   margin: -2px 0 0;
   border: 1px solid var(--border);
@@ -301,6 +349,12 @@ body {
   border-radius: 0 0 var(--radius-md) var(--radius-md);
   background: var(--surface-subtle);
   animation: fadeIn 0.2s ease;
+}
+
+.platform-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .platform-form .label {
@@ -318,7 +372,7 @@ body {
   font-size: 13px;
   color: var(--text-primary);
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
 }
@@ -343,7 +397,9 @@ body {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  padding: 0 0 14px 0;
+  padding: 0;
+  margin-block-end: 14px;
+  min-height: 24px;
 }
 
 .btn-back:hover { color: var(--text-primary); }
@@ -365,7 +421,7 @@ body {
 .status-card p {
   font-size: 11px;
   font-weight: 700;
-  color: var(--color-green);
+  color: var(--ok-text);
   letter-spacing: 0.2px;
 }
 
@@ -383,7 +439,7 @@ body {
   border: 1px solid rgba(245, 158, 11, 0.25);
 }
 
-.status-card.inactive p { color: var(--color-orange); }
+.status-card.inactive p { color: var(--warn-text); }
 
 .warning-dot {
   width: 8px;
@@ -483,7 +539,9 @@ body {
  * Telegram's steps are static markup, not built by that same code path, so the
  * color lives here as a class instead of being computed per-button). */
 .btn-telegram {
-  background: linear-gradient(135deg, #2AABEE, #229ED9);
+  /* Telegram blue, darkened so white text passes AA (#2AABEE was 2.6:1;
+     these stops are 5.5:1 / 7.0:1). */
+  background: linear-gradient(135deg, #0b6fa4, #0a5e8c);
   border: none;
   color: #fff;
 }
@@ -517,6 +575,28 @@ body {
 }
 
 .footer a { color: var(--accent); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+
+/* Slack "Connection lost" banner (popup.js setupLaunchButton). */
+.connection-lost-banner {
+  position: absolute;
+  bottom: 10px;
+  inset-inline: 10px;
+  padding: 10px;
+  background: #b91c1c; /* white text 6.5:1 (inline #ef4444 was 3.8:1) */
+  color: #fff;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  z-index: 1000;
+}
+
+.btn-onboarding-dismiss {
+  margin-top: 8px;
+  padding: 8px 16px;
+  font-size: 12px;
+}
 
 /* Animations ------------------------------------------------------------ */
 @keyframes fadeIn {
@@ -536,7 +616,7 @@ body {
   padding: 16px;
   background: var(--surface-subtle);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
+  border-inline-start: 3px solid var(--accent);
   border-radius: var(--radius-md);
 }
 
@@ -555,7 +635,7 @@ body {
 
 .onboarding-card ul {
   margin: 8px 0;
-  padding-left: 0;
+  padding-inline-start: 0;
   list-style: none;
   font-size: 11px;
   color: var(--text-secondary);
@@ -575,12 +655,9 @@ body {
 
 /* Reduced motion -------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
-  .state-container,
-  .btn,
-  .btn-primary,
-  .btn-secondary,
-  .pulse-indicator {
+  *, *::before, *::after {
     transition: none !important;
     animation: none !important;
+    scroll-behavior: auto !important;
   }
 }

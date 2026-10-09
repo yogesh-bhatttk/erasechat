@@ -117,3 +117,13 @@ test("resolveOrigin: rejects an IDN hostname carrying a path or port after norma
   assert.equal(resolveOrigin({ "instance-url": "münchen.social/@user" }), null);
   assert.equal(resolveOrigin({ "instance-url": "münchen.social:8080" }), null);
 });
+
+test("Teams row matches both teams.microsoft.com and teams.cloud.microsoft tabs", () => {
+  const { PLATFORMS } = require("../popup/platform-registry.js");
+  const teams = PLATFORMS.find((p) => p.id === "teams");
+  for (const host of ["teams.microsoft.com", "teams.cloud.microsoft", "x.teams.cloud.microsoft"]) {
+    assert.ok(teams.isTabMatch(host), host);
+  }
+  assert.ok(!teams.isTabMatch("teams.cloud.microsoft.evil.example"));
+  assert.ok(teams.optionalHostPermissions.includes("*://*.teams.cloud.microsoft/*"));
+});

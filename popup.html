@@ -10,7 +10,7 @@
   <div class="popup-container">
     <header class="header">
       <div class="logo-container">
-        <svg class="logo" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <svg class="logo" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
           <defs>
             <linearGradient id="logo-bubble" x1="0%" y1="0%" x2="100%" y2="100%">
               <stop offset="0%" stop-color="#8B5CF6" />
@@ -53,6 +53,21 @@
       </div>
     </header>
 
+    <!-- First-Run Onboarding (SC-UX-01). Above the platform list, since its copy
+         says "pick a platform below". -->
+    <section id="onboarding-card" class="onboarding-card hidden" aria-labelledby="onboarding-title">
+      <h3 id="onboarding-title" data-i18n="onboardingTitle">👋 Welcome to Erasechat!</h3>
+      <p data-i18n="onboardingIntro">Bulk delete your own posts and messages across Slack, Reddit, X, Mastodon, Microsoft Teams, and Telegram — pick a platform below to get started.</p>
+      <ul>
+        <li data-i18n="onboardingBullet1">🔒 All processing happens locally in your browser</li>
+        <li data-i18n="onboardingBullet2">📋 Scan & preview before deleting anything</li>
+        <li data-i18n="onboardingBullet3">🗑️ Deletions are permanent — review carefully first</li>
+        <li data-i18n="onboardingBullet4">🔑 Each platform only asks for access when you open it</li>
+      </ul>
+      <p class="onboarding-privacy"><span data-i18n="onboardingPrivacy">This is an independent tool, not affiliated with or endorsed by any of the platforms above. It uses your own existing login session on each one to delete content on your behalf; deletions are permanent. No data is sent to external servers.</span> <a href="privacy.html" id="privacy-link" target="_blank" rel="noopener" data-i18n="privacyPolicy">Privacy Policy</a></p>
+      <button id="btn-dismiss-onboarding" class="btn btn-primary btn-onboarding-dismiss" data-i18n="onboardingDismiss">Got It — Let's Go!</button>
+    </section>
+
     <main class="main-content">
       <!-- Default entry point: pick which platform to clean. Slack auto-skips this
            (see popup.js) when the active tab is already a Slack workspace, matching
@@ -60,7 +75,7 @@
            were added. -->
       <div id="platform-list-state" class="state-container">
         <ul class="platform-list" id="platform-list" data-i18n-aria="popupPlatformListAria" aria-label="Choose a platform to clean"></ul>
-        <p id="platform-connect-error" class="error-text hidden"></p>
+        <p id="platform-connect-error" class="error-text hidden" role="alert"></p>
       </div>
 
       <!-- Slack view: unchanged from before the platform picker was added, just
@@ -215,7 +230,7 @@
           </div>
           <button id="btn-dashboard" class="btn btn-primary btn-telegram">
             <span data-i18n="telegramPopupOpenDashboard">Open Dashboard</span>
-            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <line x1="5" y1="12" x2="19" y2="12"></line>
               <polyline points="12 5 19 12 12 19"></polyline>
             </svg>
@@ -223,26 +238,12 @@
           <button id="btn-logout" class="btn btn-secondary" data-i18n="telegramPopupLogOut">Log Out</button>
         </div>
 
-        <div id="error-msg-telegram" class="error-msg"></div>
+        <div id="error-msg-telegram" class="error-msg" role="alert"></div>
       </div>
     </main>
 
-    <!-- First-Run Onboarding (SC-UX-01) -->
-    <div id="onboarding-card" class="onboarding-card hidden">
-      <h3 data-i18n="onboardingTitle">👋 Welcome to Erasechat!</h3>
-      <p data-i18n="onboardingIntro">Bulk delete your own posts and messages across Slack, Reddit, X, Mastodon, Microsoft Teams, and Telegram — pick a platform below to get started.</p>
-      <ul>
-        <li data-i18n="onboardingBullet1">🔒 All processing happens locally in your browser</li>
-        <li data-i18n="onboardingBullet2">📋 Scan & preview before deleting anything</li>
-        <li data-i18n="onboardingBullet3">🗑️ Deletions are permanent — review carefully first</li>
-        <li data-i18n="onboardingBullet4">🔑 Each platform only asks for access when you open it</li>
-      </ul>
-      <p class="onboarding-privacy"><span data-i18n="onboardingPrivacy">This is an independent tool, not affiliated with or endorsed by any of the platforms above. It uses your own existing login session on each one to delete content on your behalf; deletions are permanent. No data is sent to external servers.</span> <a href="privacy.html" id="privacy-link" target="_blank" rel="noopener" data-i18n="privacyPolicy">Privacy Policy</a></p>
-      <button id="btn-dismiss-onboarding" class="btn btn-primary" style="margin-top:8px; padding:8px 16px; font-size:12px;" data-i18n="onboardingDismiss">Got It — Let's Go!</button>
-    </div>
-
     <footer class="footer">
-      <p><span data-i18n="footerLocalOnly">Local-Only Processing</span> • <a href="privacy.html" target="_blank" rel="noopener" style="color:#8B5CF6; text-decoration:none;" data-i18n="privacyPolicy">Privacy Policy</a></p>
+      <p><span data-i18n="footerLocalOnly">Local-Only Processing</span> • <a href="privacy.html" target="_blank" rel="noopener" class="footer-link" data-i18n="privacyPolicy">Privacy Policy</a></p>
     </footer>
   </div>
   <script src="popup/platform-registry.js"></script>
@@ -251,7 +252,7 @@
   <script src="platforms/mastodon/connect-mastodon.js"></script>
   <script src="platforms/teams/connect-teams.js"></script>
   <script src="popup.js"></script>
-  <script src="platforms/telegram/process-shim.js"></script>
-  <script src="platforms/telegram/telegram-popup.bundle.js"></script>
+  <!-- platforms/telegram/process-shim.js + telegram-popup.bundle.js are injected
+       by popup.js (loadTelegramBundle) the first time the Telegram view opens. -->
 </body>
 </html>

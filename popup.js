@@ -27,12 +27,31 @@ let pendingConnectCount = 0;
 // i18n helpers. Localized text is applied over the English already in the HTML,
 // so a missing key or a browser without chrome.i18n simply keeps the English —
 // no blank strings, no regression.
-function t(key, fallback) {
+// `substitutions` (optional) forwards to chrome.i18n's positional $1/$2 replacement.
+function t(key, fallback, substitutions) {
   try {
-    const m = chrome.i18n.getMessage(key);
+    const m = chrome.i18n.getMessage(key, substitutions);
     if (m) return m;
   } catch (e) { /* i18n unavailable */ }
   return fallback !== undefined ? fallback : key;
+}
+
+// Locales actually shipped in _locales/ -- any other UI language renders the
+// English default_locale, so <html lang> must say "en" then. Keep in sync with
+// _locales/ (same list as dashboard-fetch-utils.js's SHIPPED_LOCALES).
+const POPUP_SHIPPED_LOCALES = ["en", "de", "es", "fr"];
+
+// popup.html hardcoded <html lang="en"> regardless of the UI language.
+function applyDocumentLanguage() {
+  let ui = "";
+  try { ui = chrome.i18n.getUILanguage(); } catch (e) { /* i18n unavailable */ }
+  const tag = String(ui || "").replace(/_/g, "-");
+  const base = tag.split("-")[0].toLowerCase();
+  const lang = POPUP_SHIPPED_LOCALES.includes(base) ? tag : "en";
+  if (typeof document !== "undefined" && document.documentElement) {
+    document.documentElement.lang = lang;
+  }
+  return lang;
 }
 
 function localizeI18n(root) {
@@ -91,7 +110,11 @@ function hasSlackAccess() {
 // tests/popup.test.js, which exercises isSlackClientTab in isolation) without a
 // real `document` to attach to -- every real popup load always has one.
 if (typeof document !== "undefined") {
+  // { once: true } matters: loadTelegramBundle() re-dispatches a synthetic
+  // DOMContentLoaded for the lazily-injected Telegram bundle, which must not
+  // re-run this popup's own initialization.
   document.addEventListener("DOMContentLoaded", () => {
+    applyDocumentLanguage();
     localizeI18n(document);
 
     // Check for first-run onboarding
@@ -114,10 +137,11 @@ if (typeof document !== "undefined") {
       const hostname = tab && tab.url ? safeHostname(tab.url) : null;
       const slackPlatform = PLATFORMS.find((p) => p.id === "slack");
       if (hostname && slackPlatform.isTabMatch(hostname)) {
-        enterSlackView();
+        // Automatic, not user-initiated: don't move focus on popup open.
+        enterSlackView({ moveFocus: false });
       }
     });
-  });
+  }, { once: true });
 }
 
 // Cached across every call site that needs the active tab on this popup load
@@ -146,6 +170,12 @@ function safeHostname(url) {
 }
 
 // Build the platform picker from popup/platform-registry.js's PLATFORMS table.
+//
+// Each <li> holds a real <button class="platform-row" data-platform=...> (was an
+// <li role="button" tabindex="0"> with hand-rolled Enter/Space handling, which
+// also put a "button" inside a list without list semantics surviving), plus --
+// for a connected platform -- a separate Disconnect button beside it (two
+// interactive controls can't nest, hence the wrapper).
 function renderPlatformList() {
   const list = document.getElementById("platform-list");
   list.innerHTML = "";
@@ -154,30 +184,26 @@ function renderPlatformList() {
     const hostname = tab && tab.url ? safeHostname(tab.url) : null;
 
     for (const platform of PLATFORMS) {
-      const row = document.createElement("li");
+      const item = document.createElement("li");
+      item.className = "platform-item";
+      item.dataset.platformItem = platform.id;
+
+      const row = document.createElement("button");
+      row.type = "button";
       row.className = "platform-row";
       row.dataset.platform = platform.id;
 
       const isCurrentTab = hostname && typeof platform.isTabMatch === "function" && platform.isTabMatch(hostname);
       if (isCurrentTab) row.classList.add("is-current-tab");
-      if (!platform.ready) row.classList.add("is-disabled");
-
-      // Every row is a real interactive control (it launches a connect flow or a
-      // dashboard), but was previously mouse-only -- a plain <li> with only a
-      // click listener. This is the popup's primary, and first, required action,
-      // so a keyboard/screen-reader user needs a way to reach and activate it.
-      row.setAttribute("role", "button");
-      if (platform.ready) {
-        row.setAttribute("tabindex", "0");
-      } else {
-        // Matches a disabled native button: present to a screen reader, but not
-        // in the tab order, since activating it is a no-op (see onPlatformRowClick).
-        row.setAttribute("tabindex", "-1");
-        row.setAttribute("aria-disabled", "true");
+      if (!platform.ready) {
+        row.classList.add("is-disabled");
+        // A disabled native button: announced, but not focusable or clickable.
+        row.disabled = true;
       }
 
       const dot = document.createElement("span");
       dot.className = "platform-dot";
+      dot.setAttribute("aria-hidden", "true");
       dot.style.background = `linear-gradient(135deg, ${platform.accent[0]}, ${platform.accent[1]})`;
 
       const name = document.createElement("span");
@@ -193,17 +219,23 @@ function renderPlatformList() {
           : "";
 
       row.append(dot, name, status);
-      row.setAttribute("aria-label", status.textContent ? `${platform.name} — ${status.textContent}` : platform.name);
+      updatePlatformRowLabel(row, platform.name);
       row.addEventListener("click", () => onPlatformRowClick(platform));
-      row.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault(); // " " would otherwise scroll the popup
-          onPlatformRowClick(platform);
-        }
-      });
-      list.appendChild(row);
+      item.appendChild(row);
+      list.appendChild(item);
     }
+
+    refreshDisconnectButtons();
   });
+}
+
+// Keeps the row button's accessible name in sync with its visible status
+// ("Reddit — Connecting...").
+function updatePlatformRowLabel(row, platformName) {
+  if (!row) return;
+  const name = platformName || (row.querySelector(".platform-name") || {}).textContent || "";
+  const status = ((row.querySelector(".platform-status") || {}).textContent || "").trim();
+  row.setAttribute("aria-label", status ? `${name} — ${status}` : name);
 }
 
 function onPlatformRowClick(platform) {
@@ -232,70 +264,91 @@ function onPlatformRowClick(platform) {
 function togglePlatformForm(platform) {
   const existing = document.querySelector(`.platform-form[data-platform="${platform.id}"]`);
   if (existing) {
-    existing.remove();
+    removePlatformForms();
     return;
   }
   // Only one form open at a time.
-  document.querySelectorAll(".platform-form").forEach((el) => el.remove());
+  removePlatformForms();
   clearPlatformConnectError();
 
   const row = document.querySelector(`.platform-row[data-platform="${platform.id}"]`);
   if (!row) return;
+  const item = row.closest(".platform-item") || row;
 
+  // The <li> keeps .platform-form[data-platform] (tests/CSS rely on it); the
+  // fields live in a real <form>, so Enter in either input submits it.
   const formEl = document.createElement("li");
   formEl.className = "platform-form";
   formEl.dataset.platform = platform.id;
+  const form = document.createElement("form");
+  form.className = "platform-form-body";
+  form.noValidate = true;
+  form.setAttribute("aria-label", t("popupConnectFormAria", `Connect ${platform.name}`, [platform.name]));
 
   for (const field of platform.form) {
     const label = document.createElement("label");
     label.className = "label";
-    label.textContent = field.label;
+    label.textContent = field.labelKey ? t(field.labelKey, field.label) : field.label;
     label.htmlFor = `platform-form-${platform.id}-${field.id}`;
 
     const input = document.createElement("input");
     input.type = field.type || "text";
     input.id = `platform-form-${platform.id}-${field.id}`;
+    input.name = field.id;
     input.className = "text-input";
-    input.placeholder = field.placeholder || "";
+    input.placeholder = field.placeholderKey ? t(field.placeholderKey, field.placeholder || "") : (field.placeholder || "");
     input.autocomplete = "off";
     input.spellcheck = false;
+    if (field.inputmode) input.setAttribute("inputmode", field.inputmode);
     input.dataset.field = field.id;
 
-    formEl.append(label, input);
+    form.append(label, input);
   }
 
   if (platform.formHelpKey) {
     const help = document.createElement("p");
     help.className = "hint-text";
     help.textContent = t(platform.formHelpKey, platform.formHelpFallback || "");
-    formEl.appendChild(help);
+    form.appendChild(help);
   }
 
   const connectBtn = document.createElement("button");
-  connectBtn.type = "button";
+  connectBtn.type = "submit";
   connectBtn.className = "btn btn-primary platform-form-connect";
   connectBtn.textContent = t("popupConnect", "Connect");
-  connectBtn.style.background = `linear-gradient(135deg, ${platform.accent[0]}, ${platform.accent[1]})`;
-  connectBtn.addEventListener("click", () => {
+  connectBtn.style.background = platform.buttonBackground ||
+    `linear-gradient(135deg, ${platform.accent[0]}, ${platform.accent[1]})`;
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
     const values = {};
-    formEl.querySelectorAll("input[data-field]").forEach((el) => {
+    form.querySelectorAll("input[data-field]").forEach((el) => {
       values[el.dataset.field] = el.value;
     });
     connectAndLaunchPlatform(platform, values);
   });
-  formEl.appendChild(connectBtn);
+  form.appendChild(connectBtn);
+  formEl.appendChild(form);
 
-  row.insertAdjacentElement("afterend", formEl);
+  item.insertAdjacentElement("afterend", formEl);
+  row.setAttribute("aria-expanded", "true");
   const firstInput = formEl.querySelector("input");
   if (firstInput) firstInput.focus();
+}
+
+function removePlatformForms() {
+  document.querySelectorAll(".platform-form").forEach((el) => el.remove());
+  document.querySelectorAll(".platform-row[aria-expanded]").forEach((el) => el.removeAttribute("aria-expanded"));
 }
 
 function setPlatformRowStatus(platformId, text, { connecting = false } = {}) {
   const row = document.querySelector(`.platform-row[data-platform="${platformId}"]`);
   if (!row) return;
   row.classList.toggle("is-connecting", connecting);
+  if (connecting) row.setAttribute("aria-busy", "true");
+  else row.removeAttribute("aria-busy");
   const status = row.querySelector(".platform-status");
   if (status) status.textContent = text;
+  updatePlatformRowLabel(row);
 }
 
 // isHint: true renders this as a neutral "here's what to do next" note (e.g.
@@ -374,7 +427,12 @@ function connectAndLaunchPlatform(platform, formValues) {
   }
 
   setPlatformRowStatus(platform.id, t("popupConnecting", "Connecting..."), { connecting: true });
-  document.querySelectorAll(".platform-form").forEach((el) => el.remove());
+  // Leaving the inline form: put focus back on the row (it's about to vanish,
+  // which would otherwise drop keyboard focus onto <body>).
+  const hadFormFocus = !!(document.activeElement && document.activeElement.closest &&
+    document.activeElement.closest(".platform-form"));
+  removePlatformForms();
+  if (hadFormFocus && row && typeof row.focus === "function") row.focus();
 
   const request = { origins, permissions: platform.optionalPermissions || [] };
 
@@ -392,22 +450,18 @@ function connectAndLaunchPlatform(platform, formValues) {
       }
 
       // Best-effort revocation of the permission just granted for this connect
-      // attempt -- used when connect() reports failure, or when a last-instant
-      // recheck finds the permission already gone. Never lets a failure in
-      // chrome.permissions.remove() itself interfere with the caller's own
-      // error handling; it only logs and moves on.
+      // attempt -- used when connect() reports failure. See revokePlatformPermissions.
       const revokeGrantedPermission = () => {
-        try {
-          chrome.permissions.remove(request, () => {
-            void chrome.runtime.lastError;
-          });
-        } catch (e) { /* best-effort only -- never block the error path over this */ }
+        revokePlatformPermissions(platform.id, request).catch(() => {});
       };
 
       const afterConnect = (result) => {
         finishPending();
         if (result && result.ok === false) {
-          revokeGrantedPermission();
+          // pending (Teams' "step 1 of 2": open Teams, then reopen) is not a
+          // failure -- its webRequest listener needs the permission just granted
+          // to capture the token, so revoking here made Teams impossible to connect.
+          if (!result.pending) revokeGrantedPermission();
           setPlatformRowStatus(platform.id, "");
           showPlatformConnectError(
             result.message || t("popupConnectFailed", "Could not connect. Please try again."),
@@ -425,6 +479,11 @@ function connectAndLaunchPlatform(platform, formValues) {
           return;
         }
         const openDashboard = () => {
+          // Always settle this row: when another platform's connect is still
+          // pending the popup stays open below, and the row used to stay stuck
+          // on "Connecting..." (is-connecting, which also blocks re-clicking it).
+          setPlatformRowStatus(platform.id, "");
+          refreshDisconnectButtons();
           chrome.tabs.create({ url: chrome.runtime.getURL(platform.dashboard) });
           // Only close the popup once every in-flight connect has actually settled --
           // closing earlier would tear down another platform's still-running
@@ -459,7 +518,7 @@ function connectAndLaunchPlatform(platform, formValues) {
         Promise.resolve(platform.connect(formValues)).then(afterConnect).catch((err) => {
           finishPending();
           setPlatformRowStatus(platform.id, "");
-          showPlatformConnectError(String(err && err.message ? err.message : err));
+          showPlatformConnectError(connectErrorMessage(err));
         });
       } else {
         afterConnect({ ok: true });
@@ -473,9 +532,213 @@ function connectAndLaunchPlatform(platform, formValues) {
     // error shown.
     finishPending();
     setPlatformRowStatus(platform.id, "");
-    showPlatformConnectError(String(err && err.message ? err.message : err));
+    showPlatformConnectError(connectErrorMessage(err));
   }
 }
+
+// An unexpected exception's raw message (e.g. a Chrome API error string) is
+// English-only and often cryptic -- wrap it in a localized sentence.
+function connectErrorMessage(err) {
+  const detail = String(err && err.message ? err.message : err || "").trim();
+  return detail
+    ? t("popupConnectFailedDetail", `Could not connect (${detail}). Please try again.`, [detail])
+    : t("popupConnectFailed", "Could not connect. Please try again.");
+}
+
+// ---------------------------------------------------------------------------
+// Permission revocation + per-platform Disconnect.
+// ---------------------------------------------------------------------------
+
+function permissionsContains(request) {
+  return new Promise((resolve) => {
+    try {
+      if (!chrome.permissions || typeof chrome.permissions.contains !== "function") return resolve(false);
+      chrome.permissions.contains(request, (has) => {
+        void chrome.runtime.lastError;
+        resolve(!!has);
+      });
+    } catch (e) {
+      resolve(false);
+    }
+  });
+}
+
+function permissionsRemove(request) {
+  return new Promise((resolve) => {
+    try {
+      if (!chrome.permissions || typeof chrome.permissions.remove !== "function") return resolve(false);
+      chrome.permissions.remove(request, (removed) => {
+        void chrome.runtime.lastError;
+        resolve(!!removed);
+      });
+    } catch (e) {
+      resolve(false);
+    }
+  });
+}
+
+// API permissions (e.g. "cookies") are global and shared between platforms
+// (Reddit and X both use it), so one is only revoked when no OTHER platform that
+// needs it still holds its own origins -- otherwise disconnecting (or failing to
+// connect) Reddit would silently break an already-connected X.
+async function permissionsStillNeededElsewhere(platformId, permissions) {
+  const sharedNeeds = PLATFORMS.filter((p) => p.id !== platformId && p.ready &&
+    (p.optionalPermissions || []).some((perm) => permissions.includes(perm)) &&
+    (p.optionalHostPermissions || []).length > 0);
+  const stillNeeded = await Promise.all(sharedNeeds.map(async (p) =>
+    (await permissionsContains({ origins: p.optionalHostPermissions })) ? (p.optionalPermissions || []) : []));
+  return new Set(stillNeeded.flat());
+}
+
+// Revokes `request` ({origins, permissions}) for `platformId`, keeping any API
+// permission another connected platform still needs. Never throws.
+async function revokePlatformPermissions(platformId, request) {
+  try {
+    const permissions = request.permissions || [];
+    const keep = await permissionsStillNeededElsewhere(platformId, permissions);
+    const toRemove = {
+      origins: request.origins || [],
+      permissions: permissions.filter((perm) => !keep.has(perm))
+    };
+    if (toRemove.origins.length === 0 && toRemove.permissions.length === 0) return toRemove;
+    await permissionsRemove(toRemove);
+    return toRemove;
+  } catch (e) {
+    return null; // best-effort only -- never block the caller over this
+  }
+}
+
+function storageArea(area) {
+  try {
+    const s = chrome.storage && chrome.storage[area];
+    return s && typeof s.get === "function" ? s : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function storageGet(area, keys) {
+  return new Promise((resolve) => {
+    const s = storageArea(area);
+    if (!s || !keys || keys.length === 0) return resolve({});
+    try {
+      s.get(keys, (data) => {
+        void chrome.runtime.lastError;
+        resolve(data || {});
+      });
+    } catch (e) {
+      resolve({});
+    }
+  });
+}
+
+function storageRemove(area, keys) {
+  return new Promise((resolve) => {
+    const s = storageArea(area);
+    if (!s || !keys || keys.length === 0) return resolve();
+    try {
+      s.remove(keys, () => {
+        void chrome.runtime.lastError;
+        resolve();
+      });
+    } catch (e) {
+      resolve();
+    }
+  });
+}
+
+// The host-permission origins this platform was actually granted. Mastodon's
+// is the single instance origin (rebuilt from its stored hostname); the others'
+// are their fixed optionalHostPermissions.
+function grantedOriginsFor(platform, localData) {
+  if (typeof platform.resolveOrigin === "function") {
+    const host = platform.storedOriginKey && localData ? localData[platform.storedOriginKey] : null;
+    const origin = host ? platform.resolveOrigin({ "instance-url": String(host) }) : null;
+    return origin ? [origin] : [];
+  }
+  return platform.optionalHostPermissions || [];
+}
+
+// "Connected" = any of the platform's storage keys present, or (for a fixed-origin
+// platform) its host permission still granted -- either way there is something
+// for Disconnect to clean up.
+async function isPlatformConnected(platform) {
+  const keys = platform.storageKeys;
+  if (!keys) return false;
+  const [sessionData, localData] = await Promise.all([
+    storageGet("session", keys.session || []),
+    storageGet("local", keys.local || [])
+  ]);
+  if (Object.keys(sessionData).length > 0 || Object.keys(localData).length > 0) return true;
+  if (typeof platform.resolveOrigin !== "function" && (platform.optionalHostPermissions || []).length > 0) {
+    return permissionsContains({ origins: platform.optionalHostPermissions });
+  }
+  return false;
+}
+
+// Clears every stored credential/metadata key for the platform and revokes its
+// optional permissions (keeping shared API permissions another connected platform
+// still needs). For Teams, removing "webRequest" also stops the background's
+// passive token capture.
+async function disconnectPlatform(platform) {
+  const keys = platform.storageKeys || {};
+  const localData = await storageGet("local", keys.local || []);
+  const origins = grantedOriginsFor(platform, localData);
+  await Promise.all([
+    storageRemove("session", keys.session || []),
+    storageRemove("local", keys.local || [])
+  ]);
+  const revoked = await revokePlatformPermissions(platform.id, {
+    origins,
+    permissions: platform.optionalPermissions || []
+  });
+  return { clearedKeys: [...(keys.session || []), ...(keys.local || [])], revoked };
+}
+
+function refreshDisconnectButtons() {
+  if (typeof document === "undefined") return Promise.resolve();
+  return Promise.all(PLATFORMS.filter((p) => p.ready && p.storageKeys).map(async (platform) => {
+    const connected = await isPlatformConnected(platform);
+    const row = document.querySelector(`.platform-row[data-platform="${platform.id}"]`);
+    const item = row && row.closest ? row.closest(".platform-item") : null;
+    if (!item) return;
+    let btn = item.querySelector(".platform-disconnect");
+    if (!connected) {
+      if (btn) btn.remove();
+      return;
+    }
+    if (btn) return;
+    btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "platform-disconnect";
+    btn.textContent = t("popupDisconnect", "Disconnect");
+    btn.setAttribute("aria-label", t("popupDisconnectAria", `Disconnect ${platform.name}`, [platform.name]));
+    btn.title = t("popupDisconnectHint", "Forget this platform's stored login and remove the extension's access to it.");
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      await disconnectPlatform(platform);
+      // Removing the button drops focus -- keep it on the platform's row.
+      btn.remove();
+      if (row && typeof row.focus === "function") row.focus();
+      showPlatformConnectError(t("popupDisconnected", `Disconnected from ${platform.name}.`, [platform.name]), { isHint: true });
+    });
+    item.appendChild(btn);
+  }));
+}
+
+// Moves keyboard focus into a newly-shown view (view switches used to leave
+// focus on the now-hidden control that triggered them, i.e. on nothing).
+function focusFirst(...candidates) {
+  for (const el of candidates) {
+    if (el && typeof el.focus === "function" && !el.disabled && el.offsetParent !== null) {
+      el.focus();
+      return el;
+    }
+  }
+  return null;
+}
+
+let lastEnteredViewPlatformId = null;
 
 function showPlatformList() {
   document.getElementById("platform-list-state").classList.remove("hidden");
@@ -486,23 +749,97 @@ function showPlatformList() {
   // Coming back to the picker means any still-pending connect for another
   // platform is fair game to open its dashboard tab again once it resolves.
   leftPlatformPicker = false;
+  // Return focus to the row the user left from (or the first row).
+  focusFirst(
+    lastEnteredViewPlatformId && document.querySelector(`.platform-row[data-platform="${lastEnteredViewPlatformId}"]`),
+    document.querySelector(".platform-row:not([disabled])")
+  );
+  refreshDisconnectButtons();
+}
+
+// The Telegram popup bundle (teleproto + polyfills) is large; it used to be
+// parsed on EVERY popup open even though most opens never touch Telegram. It is
+// now injected the first time the Telegram view is entered.
+const TELEGRAM_POPUP_SCRIPTS = [
+  "platforms/telegram/process-shim.js",       // must define `process` first
+  "platforms/telegram/telegram-popup.bundle.js"
+];
+let telegramBundlePromise = null;
+
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[data-lazy-src="${src}"]`)) return resolve();
+    const el = document.createElement("script");
+    el.src = src;
+    el.dataset.lazySrc = src;
+    el.onload = () => resolve();
+    el.onerror = () => {
+      // Remove the failed tag, or the next attempt would see it and "succeed"
+      // without loading anything.
+      el.remove();
+      reject(new Error(`Failed to load ${src}`));
+    };
+    document.body.appendChild(el);
+  });
+}
+
+function loadTelegramBundle() {
+  if (!telegramBundlePromise) {
+    telegramBundlePromise = TELEGRAM_POPUP_SCRIPTS.reduce(
+      (chain, src) => chain.then(() => loadScriptOnce(src)), Promise.resolve()
+    ).then(() => {
+      // The bundle wires itself up in a DOMContentLoaded listener, which has
+      // already fired by the time it's injected -- re-dispatch it. popup.js's own
+      // DOMContentLoaded listener is { once: true }, so it won't run twice.
+      if (document.readyState !== "loading") {
+        document.dispatchEvent(new Event("DOMContentLoaded"));
+      }
+    }).catch((err) => {
+      telegramBundlePromise = null; // allow a retry on the next visit
+      const errEl = document.getElementById("error-msg-telegram");
+      if (errEl) {
+        errEl.textContent = t("popupTelegramLoadFailed", "Couldn't load the Telegram module. Close and reopen this popup to try again.");
+        errEl.style.display = "block";
+      }
+      throw err;
+    });
+  }
+  return telegramBundlePromise;
 }
 
 // Telegram's multi-step login flow (credentials -> code -> 2FA -> success) is
 // managed entirely by telegram-popup.bundle.js -- this only handles which view
-// is visible.
-function enterTelegramView() {
+// is visible (and loading that bundle on first entry).
+function enterTelegramView({ moveFocus = true } = {}) {
+  lastEnteredViewPlatformId = "telegram";
   document.getElementById("platform-list-state").classList.add("hidden");
-  document.getElementById("telegram-view").classList.remove("hidden");
+  const view = document.getElementById("telegram-view");
+  view.classList.remove("hidden");
   const badge = document.getElementById("brand-badge");
   if (badge) badge.textContent = "Telegram";
+  if (moveFocus) {
+    focusFirst(view.querySelector(".step.active input, .step.active button"),
+      document.getElementById("btn-back-to-platforms-telegram"));
+  }
+  loadTelegramBundle().then(() => {
+    // The bundle may switch steps on load (e.g. an existing session -> success).
+    if (moveFocus && !view.classList.contains("hidden") && view.contains(document.activeElement) === false) {
+      focusFirst(view.querySelector(".step.active input, .step.active button"));
+    }
+  }).catch(() => {});
 }
 
-function enterSlackView() {
+function enterSlackView({ moveFocus = true } = {}) {
+  lastEnteredViewPlatformId = "slack";
   document.getElementById("platform-list-state").classList.add("hidden");
   document.getElementById("slack-view").classList.remove("hidden");
   const badge = document.getElementById("brand-badge");
   if (badge) badge.textContent = "Slack";
+  // The automatic entry (moveFocus: false) still has to rescue focus if it sat on a
+  // platform row that was just hidden -- otherwise keyboard users land nowhere.
+  const listState = document.getElementById("platform-list-state");
+  const focusWasHidden = listState && listState.contains(document.activeElement);
+  if (moveFocus || focusWasHidden) focusFirst(document.getElementById("btn-back-to-platforms"));
 
   hasSlackAccess().then((granted) => {
     if (!granted) {
@@ -608,7 +945,17 @@ function isSlackClientTab(url) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isSlackClientTab };
+  module.exports = {
+    isSlackClientTab,
+    applyDocumentLanguage,
+    connectAndLaunchPlatform,
+    setPlatformRowStatus,
+    revokePlatformPermissions,
+    isPlatformConnected,
+    disconnectPlatform,
+    grantedOriginsFor,
+    _getPendingConnectCount: () => pendingConnectCount
+  };
 }
 
 function showActiveState(tabId) {
@@ -625,7 +972,7 @@ function showActiveState(tabId) {
 
       chrome.scripting.executeScript({
         target: { tabId: tabId },
-        files: ["content.js"]
+        files: ["shared-filters.js", "content.js"]
       }, () => {
         if (chrome.runtime.lastError) {
           // Injection was refused. By far the most common cause is that site access
@@ -688,10 +1035,13 @@ function setupLaunchButton(tabId, launchBtn) {
         // unreachable) stack up identical banners indefinitely.
         const existing = document.getElementById("sc-launch-connection-lost");
         if (existing) existing.remove();
+        // Styled by .connection-lost-banner (AA colours; the old inline
+        // white-on-#ef4444 was 3.8:1) and announced via role="alert".
         const customAlert = document.createElement("div");
         customAlert.id = "sc-launch-connection-lost";
-        customAlert.style.cssText = "position:absolute; bottom:10px; left:10px; right:10px; padding:10px; background:#ef4444; color:#fff; border-radius:8px; font-size:12px; text-align:center; z-index:1000;";
-        customAlert.innerText = t("popupConnectionLost", "Connection lost. Please reload the page.");
+        customAlert.className = "connection-lost-banner";
+        customAlert.setAttribute("role", "alert");
+        customAlert.textContent = t("popupConnectionLost", "Connection lost. Please reload the page.");
         document.body.appendChild(customAlert);
       } else {
         window.close();
@@ -726,6 +1076,8 @@ function showOnboarding() {
     dismissBtn.addEventListener("click", () => {
       onboardingEl.classList.add("hidden");
       chrome.storage.local.set({ erasechat_onboarding_complete: true });
+      // The dismiss button just vanished -- land focus on the first platform.
+      focusFirst(document.querySelector(".platform-row:not([disabled])"));
     });
   }
 }

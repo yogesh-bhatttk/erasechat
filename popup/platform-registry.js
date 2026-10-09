@@ -4,6 +4,11 @@
 // constraint popup.js/background.js already work under -- so it defines a plain
 // global, PLATFORMS, plus a Node-visible module.exports for the test suite.
 //
+// storageKeys: every chrome.storage key the platform writes, split by area.
+// popup.js uses them both to detect "connected" (any key present) and to wipe the
+// platform's data on Disconnect. Keep in sync with connect-*.js, the platform's
+// dashboard, and (for Teams) teams-webrequest.js.
+//
 // "ready: false" platforms are inert placeholders for this pass: the popup lists
 // them and explains they're coming soon, but does not offer a permission-request
 // or dashboard-launch flow for them yet. Each becomes "ready: true" as its own
@@ -30,6 +35,10 @@ const PLATFORMS = [
     // Called after permission grant, before opening the dashboard tab. Defined in
     // popup/connect-reddit.js (loaded by popup.html alongside this registry).
     connect: () => connectReddit(),
+    storageKeys: {
+      session: ["reddit_modhash"],
+      local: ["reddit_username", "reddit_delete_progress"]
+    },
     ready: true
   },
   {
@@ -42,6 +51,10 @@ const PLATFORMS = [
     optionalPermissions: ["cookies"],
     dashboard: "platforms/x/dashboard-x.html",
     connect: () => connectX(),
+    storageKeys: {
+      session: ["x_csrf"],
+      local: ["x_username", "x_delete_progress"]
+    },
     ready: true
   },
   {
@@ -57,10 +70,14 @@ const PLATFORMS = [
     dashboard: "platforms/mastodon/dashboard-mastodon.html",
     // Shown inline when the row is clicked, before any permission is requested --
     // there's nothing to request access to until the user names an instance.
+    // label/placeholder are English fallbacks; labelKey/placeholderKey localize them.
     form: [
-      { id: "instance-url", label: "Instance URL", type: "text", placeholder: "mastodon.social" },
-      { id: "access-token", label: "Access Token", type: "password", placeholder: "Personal access token" }
+      { id: "instance-url", label: "Instance URL", labelKey: "popupMastodonInstanceLabel", type: "text", inputmode: "url", placeholder: "mastodon.social", placeholderKey: "popupMastodonInstancePlaceholder" },
+      { id: "access-token", label: "Access Token", labelKey: "popupMastodonTokenLabel", type: "password", placeholder: "Personal access token", placeholderKey: "popupMastodonTokenPlaceholder" }
     ],
+    // #6364FF -> #563ACC put white text at 4.4:1 on the light end; this keeps the
+    // brand hue but passes AA (5.7:1 / 7.3:1).
+    buttonBackground: "linear-gradient(135deg, #5253E0, #563ACC)",
     // Generating a token means leaving the popup entirely for the instance's own
     // Settings -> Development -> New Application flow -- unlike Telegram's
     // equivalent inline hint, this form had none at all, so a first-time user had
@@ -98,19 +115,33 @@ const PLATFORMS = [
       return `https://${host}/*`;
     },
     connect: (values) => connectMastodon(values),
+    storageKeys: {
+      session: ["mstdn_token"],
+      local: ["mstdn_host", "mstdn_user_id", "mstdn_username", "mastodon_delete_progress"]
+    },
+    // The instance's own origin is the only host permission actually granted
+    // (see resolveOrigin); Disconnect rebuilds it from this stored hostname.
+    storedOriginKey: "mstdn_host",
     ready: true
   },
   {
     id: "teams",
     name: "Microsoft Teams",
     accent: ["#6264A7", "#464775"],
-    isTabMatch: (hostname) => hostname === "teams.microsoft.com" || hostname.endsWith(".teams.microsoft.com"),
-    optionalHostPermissions: ["*://*.teams.microsoft.com/*", "*://*.msg.teams.microsoft.com/*"],
+    // Teams on the web moved to teams.cloud.microsoft (Microsoft redirects every work
+    // tenant there from 30 Sep 2026; MC1465764) -- both hosts are supported.
+    isTabMatch: (hostname) => hostname === "teams.microsoft.com" || hostname.endsWith(".teams.microsoft.com") ||
+      hostname === "teams.cloud.microsoft" || hostname.endsWith(".teams.cloud.microsoft"),
+    optionalHostPermissions: ["*://*.teams.microsoft.com/*", "*://*.msg.teams.microsoft.com/*", "*://*.teams.cloud.microsoft/*"],
     optionalPermissions: ["webRequest"],
     dashboard: "platforms/teams/dashboard-teams.html",
     // No form, no cookie to check -- background/teams-webrequest.js passively
     // captures a token once permission is granted; this just waits for that.
     connect: () => connectTeams(),
+    storageKeys: {
+      session: ["teams_token", "teams_connect_pending"],
+      local: ["teams_base_url", "teams_delete_progress"]
+    },
     ready: true
   },
   {
@@ -124,6 +155,10 @@ const PLATFORMS = [
     // telegram-popup.bundle.js manages its own multi-step login entirely.
     isTabMatch: null,
     dashboard: "platforms/telegram/dashboard-telegram.html",
+    storageKeys: {
+      session: ["tg_session", "tg_login_handoff"],
+      local: ["tg_api_id", "tg_api_hash", "telegram_delete_progress"]
+    },
     ready: true
   }
 ];
