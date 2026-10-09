@@ -43,9 +43,12 @@
       max-height: 800px;
       transform: none !important;
       margin: 0 auto;
-      top: 50%;
-      transform: translateY(-50%) !important;
     }
+    .post-item .badge-removed { background-color: rgba(239, 68, 68, 0.15); color: var(--color-red); }
+    .post-item .badge-repost { background-color: rgba(16, 185, 129, 0.15); color: var(--color-green); }
+    .post-item .badge-pinned { background-color: rgba(99, 100, 255, 0.15); color: var(--accent); }
+    .post-open-link { color: var(--accent); text-decoration: underline; font-size: 11px; }
+    .post-open-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   </style>
 </head>
 <body>
@@ -54,7 +57,7 @@
       <div class="dashboard-header">
         <div class="header-left">
           <div class="brand-title">
-            <img src="/icons/icon48.png" width="24" height="24" alt="logo" style="border-radius: 6px;">
+            <img src="/icons/icon48.png" width="24" height="24" alt="" style="border-radius: 6px;">
             <h2>Erasechat — Mastodon</h2>
             <span id="connected-as" style="font-size: 12px; color: #8e8e93; margin-left: 8px;"></span>
           </div>
@@ -65,10 +68,10 @@
           <div class="config-grid">
             <div class="panel-card filter-form">
               <h3 class="panel-title" data-i18n="dashSearchFilters">1. Search Filters</h3>
-              <p class="panel-subtitle" data-i18n="dashFilterDepthNote">Only a keyword filter is available here. Slack's dashboard also has sender, date range, attachments, and /regex/ filters.</p>
+              <p class="panel-subtitle" data-i18n="mastodonDashFilterNote">Filter by keyword or /regex/, date range, favourites and pinned status. Only your own posts are listed.</p>
 
           <div class="form-group">
-            <label for="text-filter" data-i18n="dashTextMatchPlain">Text Filter (Optional — plain text, no /regex/)</label>
+            <label for="text-filter" data-i18n="dashTextMatch">Text Match (Optional)</label>
             <input type="text" id="text-filter" placeholder="Keyword or Phrase" data-i18n-ph="dashKeywordPlaceholder">
           </div>
 
@@ -81,7 +84,7 @@
             <div class="results-panel">
               <div class="results-header">
                 <h4 data-i18n="dashPreviewResults">Preview Results</h4>
-                <div class="results-selector" id="results-count">0 items found</div>
+                <div class="results-selector" id="results-count" aria-live="polite" data-i18n="socialDashZeroItems">0 items found</div>
               </div>
               <div class="results-list" id="item-list">
                 <div class="no-messages" data-i18n="dashScanPromptEmpty">Enter parameters and click Scan to begin.</div>
@@ -92,8 +95,8 @@
           <div class="action-panel">
             <div class="selected-channel-summary">
               <h4 data-i18n="dashReadyToDelete">Ready to delete?</h4>
-              <p id="status-text" data-i18n="dashUnrecoverableWarning">Items deleted will be unrecoverable.</p>
-              <p id="progress-text" style="color: #6364FF; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
+              <p id="status-text" role="status" aria-live="polite" data-i18n="dashUnrecoverableWarning">Items deleted will be unrecoverable.</p>
+              <p id="progress-text" aria-live="polite" style="color: #6364FF; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
             </div>
             <div class="action-buttons">
               <button id="sc-btn-cancel" class="dashboard-btn" hidden data-i18n="dashCancel">Cancel</button>
@@ -115,7 +118,9 @@
       </div>
     </div>
   </div>
+  <script src="../../shared-filters.js"></script>
   <script src="../shared/dashboard-fetch-utils.js"></script>
+  <script src="../shared/platform-filters.js"></script>
   <script src="dashboard-mastodon.js"></script>
 </body>
 </html>
