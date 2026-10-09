@@ -54,7 +54,7 @@ test('runDeleteLoop: deletes every item, reporting a clean "Deleted N of M" when
   assert.equal(result.expiredAuth, false);
   assert.equal(result.cancelled, false);
   assert.equal(result.totalCount, 3);
-  assert.equal(progressText.textContent, 'Deleted 3 of 3');
+  assert.equal(progressText.textContent, 'Deleted 3 of 3 · 100%');
 });
 
 test('runDeleteLoop: the progress marker is cleared from storage once the loop finishes', async () => {
@@ -88,7 +88,7 @@ test('runDeleteLoop: an ordinary per-item failure is recorded but does not stop 
   assert.equal(result.processedItems.length, 3, 'every item is still attempted after an ordinary failure');
   assert.deepEqual(result.succeededItems.map(i => i.id), ['a', 'c'],
     'the failed item must be excluded from succeededItems so a caller filtering by it stays visible, not silently vanish like a real delete');
-  assert.equal(progressText.textContent, 'Processed 3 of 3 (2 deleted, 1 failed)');
+  assert.equal(progressText.textContent, 'Processed 3 of 3 (2 deleted, 1 failed) · 100%');
 });
 
 test('runDeleteLoop: an error with expiredAuth stops immediately, leaving later items unprocessed', async () => {
@@ -374,4 +374,249 @@ test('runDeleteLoop: with no preItemWait/postItemDelayMs supplied, runs with no 
     });
     assert.deepEqual(calls, [], 'no delay hooks supplied means no waiting between items');
   });
+});
+
+// ---------------------------------------------------------------------------
+// fetchWithRetry: Retry-After / x-rate-limit-reset handling, cap, cancellation.
+// ---------------------------------------------------------------------------
+const {
+  fetchWithRetry, parseRetryAfterMs, computeRetryDelayMs,
+  formatScanCount, formatDeleteProgress,
+  resetSelection, renderSelectAllControl, addRowCheckbox, wireSelectAll,
+  getSelectedCount, getSelectedItems, resolveDocumentLanguage
+} = require('../platforms/shared/dashboard-fetch-utils.js');
+
+function fakeResponse(status, headers = {}) {
+  const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), String(v)]));
+  return { status, ok: status >= 200 && status < 300, headers: { get: (k) => lower[k.toLowerCase()] ?? null } };
+}
+
+async function withFetchSequence(responses, fn) {
+  const calls = [];
+  const original = global.fetch;
+  global.fetch = async (url) => {
+    calls.push(url);
+    const next = responses[Math.min(calls.length - 1, responses.length - 1)];
+    if (next instanceof Error) throw next;
+    return next;
+  };
+  try {
+    return await fn(calls);
+  } finally {
+    global.fetch = original;
+  }
+}
+
+test('parseRetryAfterMs: Retry-After seconds, HTTP-date, x-rate-limit-reset epoch, x-ratelimit-reset delta', () => {
+  const now = Date.UTC(2026, 9, 9, 12, 0, 0);
+  assert.equal(parseRetryAfterMs(fakeResponse(429, { 'Retry-After': '7' }), now), 7000);
+  assert.equal(parseRetryAfterMs(fakeResponse(429, { 'Retry-After': new Date(now + 15000).toUTCString() }), now), 15000);
+  assert.equal(parseRetryAfterMs(fakeResponse(429, { 'x-rate-limit-reset': String(now / 1000 + 42) }), now), 42000);
+  assert.equal(parseRetryAfterMs(fakeResponse(429, { 'x-ratelimit-reset': '12' }), now), 12000);
+  assert.equal(parseRetryAfterMs(fakeResponse(429, { 'x-ratelimit-reset': new Date(now + 3000).toISOString() }), now), 3000);
+  assert.equal(parseRetryAfterMs(fakeResponse(429, {}), now), null);
+  assert.equal(parseRetryAfterMs(fakeResponse(429, { 'Retry-After': 'garbage' }), now), null);
+});
+
+test('computeRetryDelayMs: server hint honoured for 429/503 and capped; exponential fallback otherwise', () => {
+  assert.equal(computeRetryDelayMs(fakeResponse(429, { 'Retry-After': '30' }), 0), 30000);
+  assert.equal(computeRetryDelayMs(fakeResponse(503, { 'Retry-After': '30' }), 0), 30000);
+  assert.equal(computeRetryDelayMs(fakeResponse(429, { 'Retry-After': '900' }), 0), 120000, 'capped at 120s');
+  assert.equal(computeRetryDelayMs(fakeResponse(500, { 'Retry-After': '30' }), 0), 2000, 'only 429/503 use the hint');
+  assert.equal(computeRetryDelayMs(fakeResponse(429, {}), 0), 2000);
+  assert.equal(computeRetryDelayMs(fakeResponse(429, {}), 1), 4000);
+});
+
+test('fetchWithRetry: waits for Retry-After before retrying a 429, then returns the success', async () => {
+  const waits = [];
+  const ok = fakeResponse(200);
+  await withFetchSequence([fakeResponse(429, { 'Retry-After': '5' }), ok], async (calls) => {
+    const res = await fetchWithRetry('https://example.test/a', {}, 3, { _sleep: async (ms) => { waits.push(ms); } });
+    assert.equal(res, ok);
+    assert.equal(calls.length, 2);
+  });
+  assert.equal(waits.reduce((a, b) => a + b, 0), 5000);
+});
+
+test('fetchWithRetry: persistent 5xx still returns the last bad Response after exponential backoff', async () => {
+  const waits = [];
+  const bad = fakeResponse(502);
+  await withFetchSequence([bad], async (calls) => {
+    const res = await fetchWithRetry('https://example.test/b', {}, 3, { _sleep: async (ms) => { waits.push(ms); } });
+    assert.equal(res, bad);
+    assert.equal(calls.length, 3);
+  });
+  assert.equal(waits.reduce((a, b) => a + b, 0), 2000 + 4000);
+});
+
+test('fetchWithRetry: cancelling during a long Retry-After wait returns the bad Response without retrying', async () => {
+  const controller = createCancelController();
+  const bad = fakeResponse(429, { 'Retry-After': '60' });
+  let slept = 0;
+  await withFetchSequence([bad, fakeResponse(200)], async (calls) => {
+    const res = await fetchWithRetry('https://example.test/c', {}, 3, {
+      cancelController: controller,
+      _sleep: async (ms) => { slept += ms; if (slept >= 1000) controller.cancel(); }
+    });
+    assert.equal(res, bad);
+    assert.equal(calls.length, 1, 'no retry after cancel');
+  });
+  assert.ok(slept < 60000, `stopped waiting early (slept ${slept}ms)`);
+});
+
+test('fetchWithRetry: a cancel controller can also be passed directly as the 4th argument', async () => {
+  const controller = createCancelController();
+  controller.cancel();
+  const bad = fakeResponse(503, { 'Retry-After': '30' });
+  await withFetchSequence([bad, fakeResponse(200)], async (calls) => {
+    const res = await fetchWithRetry('https://example.test/d', {}, 3, controller);
+    assert.equal(res, bad);
+    assert.equal(calls.length, 1);
+  });
+});
+
+test('fetchWithRetry: the original 3-argument call shape still works', async () => {
+  const ok = fakeResponse(200);
+  await withFetchSequence([ok], async () => {
+    assert.equal(await fetchWithRetry('https://example.test/e', {}, 3), ok);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatScanCount: the "more may exist" note survives post-delete recounts.
+// ---------------------------------------------------------------------------
+test('formatScanCount: a bare post-delete recount keeps the truncated note from the last scan', () => {
+  assert.equal(formatScanCount(50, { truncated: true, maxPages: 5, note: 'more may exist' }),
+    '50 items found (stopped after 5 pages -- more may exist)');
+  assert.equal(formatScanCount(40, { truncated: false }),
+    '40 items found (stopped after 5 pages -- more may exist)');
+  assert.equal(formatScanCount(40, { truncated: false, keepTruncated: false }), '40 items found');
+});
+
+test('formatScanCount: a fresh, complete scan clears the remembered truncation', () => {
+  formatScanCount(50, { truncated: true, maxPages: 5, note: 'older toots may exist' });
+  assert.equal(formatScanCount(12, { truncated: false, maxPages: 5, note: 'older toots may exist' }), '12 items found');
+  assert.equal(formatScanCount(10, { truncated: false }), '10 items found');
+});
+
+test('formatScanCount: keepTruncated: true reuses the remembered note explicitly', () => {
+  formatScanCount(9, { truncated: true, maxPages: 3, note: 'n' });
+  assert.equal(formatScanCount(8, { truncated: false, maxPages: 3, note: 'n', keepTruncated: true }),
+    '8 items found (stopped after 3 pages -- n)');
+});
+
+// ---------------------------------------------------------------------------
+// Progress percent + ETA.
+// ---------------------------------------------------------------------------
+test('formatDeleteProgress: percent and an ETA from the measured average per-item time', () => {
+  assert.equal(formatDeleteProgress({ deletedCount: 1, failedCount: 0, totalCount: 3, elapsedMs: 2000 }),
+    'Deleted 1 of 3 · 33%, about 4 s left');
+  assert.equal(formatDeleteProgress({ deletedCount: 10, failedCount: 2, totalCount: 100, elapsedMs: 60000 }),
+    'Processed 12 of 100 (10 deleted, 2 failed) · 12%, about 7 min left');
+  assert.equal(formatDeleteProgress({ deletedCount: 5, failedCount: 0, totalCount: 5, elapsedMs: 1 }),
+    'Deleted 5 of 5 · 100%');
+});
+
+// ---------------------------------------------------------------------------
+// Selection counter + Select All indeterminate state (minimal fake DOM).
+// ---------------------------------------------------------------------------
+function makeFakeDom() {
+  class El {
+    constructor(tag) {
+      this.tagName = tag.toUpperCase();
+      this.children = [];
+      this.parentNode = null;
+      this.attrs = {};
+      this.listeners = {};
+      this.textContent = '';
+      this.id = '';
+      this.className = '';
+      this.checked = false;
+      this.indeterminate = false;
+    }
+    get firstChild() { return this.children[0] || null; }
+    appendChild(c) { c.parentNode = this; this.children.push(c); return c; }
+    insertBefore(c, ref) {
+      c.parentNode = this;
+      const i = ref ? this.children.indexOf(ref) : -1;
+      if (i < 0) this.children.push(c); else this.children.splice(i, 0, c);
+      return c;
+    }
+    remove() { if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1); this.parentNode = null; }
+    setAttribute(k, v) { this.attrs[k] = String(v); }
+    getAttribute(k) { return this.attrs[k] ?? null; }
+    addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+    fire(type) { for (const fn of this.listeners[type] || []) fn({ target: this }); }
+  }
+  const body = new El('body');
+  const find = (node, id) => {
+    if (node.id === id) return node;
+    for (const c of node.children) { const f = find(c, id); if (f) return f; }
+    return null;
+  };
+  return {
+    body,
+    createElement: (tag) => new El(tag),
+    getElementById: (id) => find(body, id),
+    querySelectorAll: () => [],
+    querySelector: () => null
+  };
+}
+
+test('selection: "N of M selected" counter and indeterminate Select All track every change', () => {
+  const doc = makeFakeDom();
+  const prevDoc = global.document;
+  global.document = doc;
+  try {
+    const items = [{ id: 1, mine: true }, { id: 2, mine: false }, { id: 3, mine: false }];
+    const list = doc.createElement('div');
+    doc.body.appendChild(list);
+
+    resetSelection(items, (i) => i.mine);
+    const selectAll = renderSelectAllControl(list);
+    const counter = doc.getElementById('selected-count');
+    assert.ok(counter, 'renderSelectAllControl creates #selected-count');
+    assert.equal(counter.textContent, '1 of 3 selected');
+    assert.equal(selectAll.checked, false);
+    assert.equal(selectAll.indeterminate, true, 'partial pre-selection shows as indeterminate');
+
+    const boxes = [];
+    for (const item of items) {
+      const row = doc.createElement('div');
+      row.textContent = `item ${item.id}`;
+      addRowCheckbox(row, item, boxes);
+    }
+    wireSelectAll(selectAll, items, boxes);
+
+    boxes[1].checked = true; boxes[1].fire('change');
+    assert.equal(counter.textContent, '2 of 3 selected');
+    assert.equal(getSelectedCount(), 2);
+
+    boxes[2].checked = true; boxes[2].fire('change');
+    assert.equal(counter.textContent, '3 of 3 selected');
+    assert.equal(selectAll.checked, true);
+    assert.equal(selectAll.indeterminate, false);
+
+    selectAll.checked = false; selectAll.fire('change');
+    assert.equal(counter.textContent, '0 of 3 selected');
+    assert.equal(getSelectedItems(items).length, 0);
+    assert.equal(selectAll.indeterminate, false);
+    assert.ok(boxes.every((b) => b.checked === false));
+
+    // A re-render replaces (never duplicates) the counter element.
+    renderSelectAllControl(list);
+    let n = 0;
+    const count = (node) => { if (node.id === 'selected-count') n++; node.children.forEach(count); };
+    count(doc.body);
+    assert.equal(n, 1);
+  } finally {
+    global.document = prevDoc;
+  }
+});
+
+test('resolveDocumentLanguage: shipped locales keep their tag, anything else falls back to English', () => {
+  assert.equal(resolveDocumentLanguage('de'), 'de');
+  assert.equal(resolveDocumentLanguage('fr_CA'), 'fr-CA');
+  assert.equal(resolveDocumentLanguage('ja'), 'en');
+  assert.equal(resolveDocumentLanguage(''), 'en');
 });

@@ -22,21 +22,41 @@
 
   --text-primary: #101828;
   --text-secondary: #4b5563;
-  --text-muted: #98a2b3;
+  --text-muted: #667085; /* 4.8:1 on white (AA); was #98a2b3 at 2.6:1 */
 
   --shadow-modal: 0 24px 64px rgba(16, 24, 40, 0.22);
 
-  /* Accent (overridden by the theme switcher; sensible default = neon) */
-  --color-purple: #8b5cf6;
-  --color-pink: #ec4899;
-  --color-green: #10b981;
-  --color-orange: #f59e0b;
-  --color-red: #ef4444;
+  /* Accent. Light-mode values are the AA-safe shades: each passes 4.5:1 as text
+   * on --surface/--surface-subtle and with white text on top (the old #8b5cf6 /
+   * #ec4899 / #ef4444 / #f59e0b / #10b981 were 4.2 / 3.5 / 3.8 / 2.1 / 2.5:1). */
+  --color-purple: #7c3aed;
+  --color-pink: #db2777;
+  --color-green: #047857;
+  --color-orange: #b45309;
+  --color-red: #dc2626;
   --accent: var(--color-purple);
-  --accent-soft: rgba(139, 92, 246, 0.12);
+  /* Always-dark accent for white-text chips (stays AA in dark mode too). */
+  --accent-strong: #7c3aed;
+  --accent-soft: rgba(124, 58, 237, 0.12);
+  --danger: #dc2626;          /* white text 4.8:1 */
+  --danger-hover: #b91c1c;    /* white text 6.5:1 -- hover gets darker, not lighter */
+  --warn-text: #b45309;       /* 4.7:1 on --surface-subtle (#d97706 was 3.2:1) */
 
-  --gradient-glow: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
-  --gradient-glow-hover: linear-gradient(135deg, #a78bfa 0%, #f472b6 100%);
+  /* Non-text contrast (WCAG 1.4.11, >= 3:1): form-field borders and the switch's
+   * "off" track were #e6e8eb / #d3d7dd (1.2-1.4:1) -- effectively invisible. */
+  --border-input: #7a8291;    /* 3.9:1 on #fff, 3.5:1 on --field */
+  --switch-off: #7a8291;
+
+  /* White text on these stops: #7c3aed 5.7:1, #db2777 4.6:1. */
+  --gradient-glow: linear-gradient(135deg, #7c3aed 0%, #db2777 100%);
+  --gradient-glow-hover: linear-gradient(135deg, #6d28d9 0%, #be185d 100%);
+
+  /* #progress-text brand colours (see the mapping near the end of this file). */
+  --brand-reddit-text: #c2410c;
+  --brand-x-text: #0369a1;
+  --brand-mastodon-text: #4f46e5;
+  --brand-teams-text: #6264a7;
+  --brand-telegram-text: #0b6fa4;
 
   --radius-lg: 16px;
   --radius-md: 12px;
@@ -67,7 +87,22 @@
     --text-muted: #94a3b8;
 
     --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.55);
-    --accent-soft: rgba(139, 92, 246, 0.2);
+
+    --color-purple: #a78bfa;
+    --color-pink: #f472b6;
+    --color-green: #34d399;
+    --color-orange: #fbbf24;
+    --color-red: #f87171;
+    --accent-soft: rgba(167, 139, 250, 0.18);
+    --warn-text: #fbbf24;
+    --border-input: #7b8aa0;  /* 4.2:1 on --field, 5.1:1 on --surface */
+    --switch-off: #64748b;    /* 3.75:1 on --surface */
+
+    --brand-reddit-text: #ff7a45;
+    --brand-x-text: #1d9bf0;
+    --brand-mastodon-text: #a5b4fc;
+    --brand-teams-text: #9ea0d8;
+    --brand-telegram-text: #2aabee;
   }
 }
 
@@ -152,7 +187,7 @@
 }
 
 .premium-badge {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   color: #fff;
   background: var(--gradient-glow);
@@ -182,8 +217,9 @@
 
 /* Theme picker ---------------------------------------------------------- */
 .theme-bubble {
-  width: 15px;
-  height: 15px;
+  /* 24px minimum target size (WCAG 2.5.8); was 15px. */
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
@@ -220,7 +256,7 @@
 
 .config-grid {
   display: grid;
-  grid-template-columns: 1fr 1.3fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
   gap: 20px;
 }
 
@@ -268,10 +304,10 @@
 
 .badge-connected {
   color: #fff;
-  background: var(--accent);
+  background: var(--accent-strong);
   padding: 3px 8px;
   border-radius: 6px;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.5px;
 }
@@ -285,7 +321,7 @@
 
 .form-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -305,7 +341,7 @@
 .form-group select {
   padding: 10px 12px;
   background-color: var(--field);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-input);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 13px;
@@ -354,7 +390,7 @@
   position: absolute;
   cursor: pointer;
   inset: 0;
-  background-color: var(--border-hover);
+  background-color: var(--switch-off);
   transition: background-color 0.25s;
   border-radius: 22px;
 }
@@ -364,7 +400,7 @@
   content: "";
   height: 16px;
   width: 16px;
-  left: 3px;
+  inset-inline-start: 3px;
   bottom: 3px;
   background-color: #fff;
   transition: transform 0.25s;
@@ -374,6 +410,13 @@
 
 input:checked + .slider { background: var(--accent); }
 input:checked + .slider:before { transform: translateX(18px); }
+[dir="rtl"] input:checked + .slider:before { transform: translateX(-18px); }
+/* The real checkbox is visually hidden (opacity 0), so its keyboard focus ring
+   has to be drawn on the visible track instead. */
+.switch input:focus-visible + .slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 /* Activity log ------------------------------------------------------------
    A lightweight troubleshooting log (collapsed by default, so it costs no
@@ -422,12 +465,14 @@ input:checked + .slider:before { transform: translateX(18px); }
 .activity-log.open .activity-log-body { display: block; }
 
 .activity-log-line { color: var(--text-secondary); }
-.activity-log-line.warn { color: #d97706; }
-.activity-log-line.error { color: #ef4444; }
+.activity-log-line.warn { color: var(--warn-text); }
+.activity-log-line.error { color: var(--color-red); }
 
 /* Action bar ------------------------------------------------------------ */
 .action-panel {
   display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
   align-items: center;
   justify-content: space-between;
   background-color: var(--surface-subtle);
@@ -439,7 +484,19 @@ input:checked + .slider:before { transform: translateX(18px); }
 .selected-channel-summary {
   display: flex;
   flex-direction: column;
+  flex: 1 1 260px;
   max-width: 60%;
+  min-width: 0;
+}
+
+/* Persistent "deletions are permanent" note injected by ensureDangerNote() in
+   dashboard-fetch-utils.js -- separate from #status-text so status updates can
+   never overwrite it. */
+.selected-channel-summary .sc-danger-note {
+  margin: 5px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-red);
 }
 
 .selected-channel-summary h4 {
@@ -459,6 +516,7 @@ input:checked + .slider:before { transform: translateX(18px); }
 
 .action-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
 }
@@ -496,8 +554,8 @@ input:checked + .slider:before { transform: translateX(18px); }
 
 .btn-delete:hover:not(:disabled) { background: var(--gradient-glow-hover); }
 
-.btn-delete.danger { background: var(--color-red); }
-.btn-delete.danger:hover:not(:disabled) { background: #f05252; }
+.btn-delete.danger { background: var(--danger); }
+.btn-delete.danger:hover:not(:disabled) { background: var(--danger-hover); }
 
 .dashboard-btn:disabled {
   opacity: 0.45;
@@ -506,10 +564,12 @@ input:checked + .slider:before { transform: translateX(18px); }
 
 /* Results --------------------------------------------------------------- */
 .results-panel {
-  max-height: 250px;
-  height: 230px;
+  /* Grows with the viewport instead of a fixed 230px sliver, within bounds. */
+  height: clamp(230px, 40vh, 480px);
+  min-height: 200px;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .results-header {
@@ -553,22 +613,58 @@ input:checked + .slider:before { transform: translateX(18px); }
 }
 
 .msg-card:last-child { border-bottom: none; }
+
+/* Preview rows on the Reddit/X/Mastodon/Teams/Telegram dashboards: a checkbox
+   column (inserted first by addRowCheckbox) plus stacked meta/text lines. These
+   classes were referenced by every platform dashboard but never styled. */
+.post-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 12px;
+  row-gap: 3px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  word-break: break-word;
+  white-space: pre-wrap;
+  transition: background-color 0.15s;
+}
+.post-item:last-child { border-bottom: none; }
+.post-item:hover { background-color: var(--field); }
+.post-item > .msg-checkbox { grid-row: 1 / span 4; }
+.post-item > :not(.msg-checkbox) { grid-column: 2; }
+.post-time { font-size: 11px; color: var(--text-muted); white-space: normal; }
+.post-item .badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-inline-end: 4px;
+  background-color: var(--accent-soft);
+  color: var(--accent);
+}
+.post-item .badge-post { background-color: var(--field); color: var(--text-primary); }
 .msg-card:hover { background-color: var(--field); }
 
 .msg-card.thread-reply-card {
-  padding-left: 44px;
+  padding-inline-start: 44px;
   position: relative;
 }
 
 .thread-branch-connector {
   position: absolute;
-  left: 22px;
+  inset-inline-start: 22px;
   top: -10px;
   width: 12px;
   height: 26px;
-  border-left: 2px solid var(--border-hover);
+  border-inline-start: 2px solid var(--border-hover);
   border-bottom: 2px solid var(--border-hover);
-  border-bottom-left-radius: 6px;
+  border-end-start-radius: 6px;
 }
 
 .msg-checkbox {
@@ -623,7 +719,7 @@ input:checked + .slider:before { transform: translateX(18px); }
 }
 
 .msg-badge-thread {
-  font-size: 9px;
+  font-size: 10px;
   background-color: var(--accent-soft);
   color: var(--accent);
   padding: 2px 6px;
@@ -644,7 +740,7 @@ input:checked + .slider:before { transform: translateX(18px); }
 /* Monitor: progress + console ------------------------------------------ */
 .monitor-panel {
   display: grid;
-  grid-template-columns: 1fr 1.3fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
   gap: 20px;
 }
 
@@ -807,6 +903,10 @@ input:checked + .slider:before { transform: translateX(18px); }
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
+textarea:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+[role="button"]:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--accent) !important;
   outline-offset: 2px !important;
@@ -822,8 +922,8 @@ select:focus-visible,
   width: auto;
   height: auto;
   top: auto;
-  left: auto;
-  right: 24px;
+  inset-inline-start: auto;
+  inset-inline-end: 24px;
   bottom: 24px;
   background-color: transparent;
   backdrop-filter: none;
@@ -925,6 +1025,23 @@ select:focus-visible,
   }
 
   .dashboard-overlay.visible .dashboard-modal { transform: none; }
+
+  /* Everything else too: per-platform dashboards add their own transitions, and
+     the activity-log chevron / theme bubbles animate on interaction. */
+  *, *::before, *::after {
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+  .theme-bubble:hover,
+  .theme-bubble.active,
+  .activity-log.open .activity-log-toggle .chevron { transform: none; }
+  /* Backdrop blur is expensive and visually "moving" while content scrolls. */
+  .dashboard-overlay,
+  .dashboard-overlay::before,
+  .verification-overlay { backdrop-filter: none !important; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -978,7 +1095,7 @@ select:focus-visible,
 
 /* Compact stat tiles */
 .stat-item.sc-stat-compact { padding: 8px 4px; }
-.stat-item-label.sc-stat-label-sm { font-size: 8px; }
+.stat-item-label.sc-stat-label-sm { font-size: 10px; }
 #sc-stat-success, #sc-stat-fail, #sc-stat-remaining { font-size: 13px; }
 
 /* Console action links */
@@ -1026,7 +1143,7 @@ select:focus-visible,
 }
 #sc-alert-title, #sc-confirm-title { color: var(--text-primary); margin: 0 0 10px 0; font-size: 16px; }
 #sc-alert-message,
-#sc-confirm-message { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 20px; }
+#sc-confirm-message { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 20px; white-space: pre-wrap; }
 #sc-alert-ok-btn { padding: 10px 24px; }
 
 /* Prompt modal (single text input, e.g. naming a saved filter preset) */
@@ -1046,7 +1163,39 @@ select:focus-visible,
   outline: none;
   box-sizing: border-box;
 }
+#sc-prompt-input { border-color: var(--border-input); }
 #sc-prompt-input:focus { border-color: var(--accent); background-color: var(--field-focus); }
+/* Real <label> for the shared prompt input (was placeholder-only). */
+.sc-prompt-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+/* Inline validation (e.g. a typo in the DELETE confirmation); when shown it sits
+   between the input and the buttons, so the input's own bottom margin shrinks. */
+.sc-prompt-error {
+  margin: -12px 0 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-red);
+}
+#sc-prompt-input[aria-invalid="true"] { border-color: var(--color-red); }
+/* Destructive variant of the shared modals: red accent instead of purple. */
+.verification-card.sc-card-purple.sc-card-danger { border-top-color: var(--danger); }
+.sc-card-danger h4 { color: var(--color-red) !important; }
+
+/* "N of M selected" counter beside Select All (renderSelectAllControl). */
+.sc-selectall-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.sc-selected-count { font-size: 12px; color: var(--text-secondary); }
 
 /* Saved filter presets row + inline "invert" checkbox under Text Match */
 .preset-controls { display: flex; gap: 8px; align-items: center; }
@@ -1078,4 +1227,115 @@ select:focus-visible,
   color: var(--text-muted);
   text-align: center;
   padding-top: 40px;
+}
+
+/* Responsive ------------------------------------------------------------
+   Two-column grids crushed their contents at narrow windows / high zoom
+   (e.g. 400% zoom on a 1280px screen = 320 CSS px). Stack them instead. */
+@media (max-width: 760px) {
+  .config-grid,
+  .form-row,
+  .monitor-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dashboard-header { padding: 14px 16px; flex-wrap: wrap; gap: 8px; }
+  .dashboard-main { padding: 16px; }
+  .selected-channel-summary { max-width: 100%; flex-basis: 100%; }
+  .action-buttons { width: 100%; justify-content: flex-end; }
+  .progress-stats.sc-progress-panel { flex-direction: column; align-items: stretch; }
+  .verification-card { padding: 20px; }
+}
+
+/* Text colour fixes for markup owned by each platform's HTML ---------------
+   #connected-as carries an inline color:#8e8e93 (3.3:1 on white) and each
+   #progress-text an inline brand colour that fails AA on --surface-subtle in
+   light mode (Reddit 3.3, X 2.9, Telegram 2.6, Mastodon 4.1:1) or dark mode
+   (Teams 3.4:1). Inline styles can only be overridden with !important; the
+   attribute selectors keep each platform's own hue, just at an AA-safe shade. */
+#connected-as { color: var(--text-muted) !important; }
+#progress-text { color: var(--text-primary) !important; }
+#progress-text[style*="FF4500" i] { color: var(--brand-reddit-text) !important; }
+#progress-text[style*="1d9bf0" i] { color: var(--brand-x-text) !important; }
+#progress-text[style*="6364FF" i] { color: var(--brand-mastodon-text) !important; }
+#progress-text[style*="6264A7" i] { color: var(--brand-teams-text) !important; }
+#progress-text[style*="2AABEE" i] { color: var(--brand-telegram-text) !important; }
+
+/* Advanced filters ("More filters") + export buttons ------------------------
+   Injected by platforms/shared/platform-filters.js (mountAdvancedFilters /
+   mountExportButtons) -- nothing here matches until a dashboard opts in.
+   Native <details>/<summary>, so keyboard + screen-reader expand/collapse is
+   built in; the global summary:focus-visible ring above applies. */
+.af-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+}
+
+.af-summary {
+  cursor: pointer;
+  padding-block: 10px;
+  padding-inline: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--radius-md);
+}
+.af-summary::-webkit-details-marker { display: none; }
+.af-summary::before {
+  content: "";
+  inline-size: 7px;
+  block-size: 7px;
+  border-inline-end: 2px solid currentColor;
+  border-block-end: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+[dir="rtl"] .af-summary::before { transform: rotate(135deg); }
+.af-block[open] > .af-summary::before { transform: rotate(45deg); }
+.af-summary:hover { color: var(--accent); }
+
+.af-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-block: 4px 14px;
+  padding-inline: 14px;
+}
+
+.af-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted); /* AA on --surface-subtle in both themes */
+}
+
+.af-block .af-checkbox {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 0;
+}
+
+.af-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-inline-start: auto;
+}
+.af-export-actions .af-export-btn {
+  padding-block: 6px;
+  padding-inline: 12px;
+  font-size: 12px;
+}
+.results-header:has(.af-export-actions) {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .af-summary::before { transition: none; }
 }
