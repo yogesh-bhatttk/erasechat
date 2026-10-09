@@ -16,11 +16,11 @@
     "build": "bash scripts/build.sh",
     "version:set": "bash scripts/set-version.sh",
     "hooks:install": "git config core.hooksPath .githooks && echo \"pre-push guard active (main: no force-push, no deletion, gate must pass)\"",
-    "validate:firefox": "npx --yes addons-linter@^10 dist/erasechat-firefox-$npm_package_version.zip",
+    "validate:firefox": "npx --yes addons-linter@10.14.0 dist/erasechat-firefox-$npm_package_version.zip",
     "verify": "npm run lint && npm test && npm run test:e2e && npm run build && npm run validate:firefox"
   },
   "dependencies": {
-    "teleproto": "^1.229.0"
+    "teleproto": "1.229.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.44.0",

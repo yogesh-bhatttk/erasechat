@@ -22,14 +22,22 @@ const browserGlobals = {
   atob: "readonly"
 };
 
+// DOM-page globals (content script, popup, dashboard pages) -- not available in
+// the background service worker, so kept out of browserGlobals.
+const pageGlobals = {
+  getComputedStyle: "readonly",
+  location: "readonly",
+  history: "readonly",
+  Event: "readonly"
+};
+
 // Provided by shared-filters.js, which loads before background.js in BOTH browsers
 // (importScripts on Chrome, background.scripts ordering on Firefox).
 const sharedFilterGlobals = {
   qualifies: "readonly",
   decideItemAction: "readonly",
   isSlackHostname: "readonly",
-  isSafeRegex: "readonly",
-  stringToColor: "readonly"
+  isSafeRegex: "readonly"
 };
 
 // Provided by platforms/shared/dashboard-fetch-utils.js, loaded via <script>
@@ -38,6 +46,12 @@ const sharedFilterGlobals = {
 const dashboardFetchUtilsGlobals = {
   delay: "readonly",
   fetchWithRetry: "readonly",
+  deleteRetryOptions: "readonly",
+  dismissStaleCancelConfirm: "readonly",
+  scanCancelLabels: "readonly",
+  cancellableDelay: "readonly",
+  visibleRows: "readonly",
+  appendHiddenRowsNote: "readonly",
   confirmBulkDelete: "readonly",
   reportInterruptedDelete: "readonly",
   maybeSaveDeleteProgress: "readonly",
@@ -59,6 +73,24 @@ const dashboardFetchUtilsGlobals = {
   runDeleteLoop: "readonly",
   initActivityLog: "readonly",
   logActivity: "readonly"
+};
+
+// Provided by platforms/shared/platform-filters.js (advanced filters + CSV/JSON
+// export), loaded via <script> after shared-filters.js and
+// dashboard-fetch-utils.js on every platform dashboard (before the bundle for
+// Telegram). isSafeRegex comes from shared-filters.js, which those dashboards
+// now load too.
+const platformFilterGlobals = {
+  mountAdvancedFilters: "readonly",
+  readAdvancedFilters: "readonly",
+  buildTextMatcher: "readonly",
+  passesAdvancedFilters: "readonly",
+  describeActiveFilters: "readonly",
+  parseCsv: "readonly",
+  csvRows: "readonly",
+  downloadTextFile: "readonly",
+  mountExportButtons: "readonly",
+  isSafeRegex: "readonly"
 };
 
 const correctnessRules = {
@@ -137,6 +169,7 @@ export default [
       sourceType: "module",
       globals: {
         ...browserGlobals,
+        ...pageGlobals,
         window: "readonly",
         document: "readonly",
         alert: "readonly",
@@ -145,7 +178,8 @@ export default [
         // source, which doesn't call these): provided by
         // platforms/shared/dashboard-fetch-utils.js, loaded via <script> before
         // telegram-dashboard.bundle.js in dashboard-telegram.html.
-        ...dashboardFetchUtilsGlobals
+        ...dashboardFetchUtilsGlobals,
+        ...platformFilterGlobals
       }
     },
     rules: correctnessRules
@@ -180,7 +214,28 @@ export default [
         alert: "readonly",
         prompt: "readonly",
         module: "writable",
-        ...dashboardFetchUtilsGlobals
+        ...dashboardFetchUtilsGlobals,
+        ...platformFilterGlobals
+      }
+    },
+    rules: correctnessRules
+  },
+  {
+    // The shared advanced-filters/export helpers themselves: a classic dashboard
+    // <script> (t/logActivity from dashboard-fetch-utils.js, isSafeRegex from
+    // shared-filters.js) that is also a CommonJS module under `node --test`.
+    files: ["platforms/shared/platform-filters.js"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "script",
+      globals: {
+        ...browserGlobals,
+        document: "readonly",
+        Blob: "readonly",
+        module: "writable",
+        t: "readonly",
+        logActivity: "readonly",
+        isSafeRegex: "readonly"
       }
     },
     rules: correctnessRules
@@ -195,12 +250,16 @@ export default [
       sourceType: "script",
       globals: {
         ...browserGlobals,
+        ...pageGlobals,
         window: "readonly",
         document: "readonly",
         localStorage: "readonly",
         requestAnimationFrame: "readonly",
         Blob: "readonly",
         module: "writable",
+        // Provided by shared-filters.js, loaded before content.js in the Slack
+        // content script (see both manifests); content.js guards with typeof.
+        isSafeRegex: "readonly",
         // Provided by popup/platform-registry.js, loaded before popup.js.
         PLATFORMS: "readonly"
       }
@@ -260,6 +319,7 @@ export default [
         __dirname: "readonly",
         process: "readonly",
         Buffer: "readonly",
+        setImmediate: "readonly",
         // Playwright specs routinely pass callbacks to page.evaluate() that are
         // serialized and run INSIDE the extension page, not in this (Node) file's
         // own scope -- so `window`/`document` inside those callbacks refer to the
@@ -303,6 +363,13 @@ export default [
         // page-scope declaration as the identifiers above.
         Response: "readonly"
       }
+    }
+  },
+  {
+    // Browser globals used inside page.evaluate() callbacks of the dashboard e2e spec.
+    files: ["tests/dashboards.spec.js"],
+    languageOptions: {
+      globals: { ...pageGlobals }
     }
   }
 ];

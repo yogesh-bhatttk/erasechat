@@ -32,6 +32,7 @@
     "*://*.twitter.com/*",
     "*://*.teams.microsoft.com/*",
     "*://*.msg.teams.microsoft.com/*",
+    "*://*.teams.cloud.microsoft/*",
     "https://*/*"
   ],
   "content_security_policy": {
@@ -63,10 +64,10 @@
   "commands": {
     "_execute_action": {
       "suggested_key": {
-        "default": "Ctrl+Shift+K",
+        "default": "Alt+Shift+E",
         "mac": "Command+Shift+K"
       },
-      "description": "Open Erasechat Popup"
+      "description": "__MSG_commandOpenPopup__"
     }
   },
   "content_scripts": [
@@ -75,6 +76,7 @@
         "https://*.slack.com/*"
       ],
       "js": [
+        "shared-filters.js",
         "content.js"
       ],
       "run_at": "document_idle"

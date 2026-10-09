@@ -18,7 +18,8 @@
 #   * It protects this working copy. A fresh clone has no hooks until someone runs
 #     `npm run hooks:install` — hooks are not transferred by clone, by design.
 #
-# It runs the FAST half of the gate (lint + unit/packaging tests, ~2s) so pushing stays
+# It runs the FAST half of the gate (lint + unit/packaging tests -- `npm test` rebuilds the
+# Telegram bundles with webpack first, so expect tens of seconds, not ~2s) so pushing stays
 # usable. CI runs the full gate including e2e, both builds and addons-linter. To run the
 # whole thing locally before a push:  SC_PREPUSH_FULL=1 git push
 #

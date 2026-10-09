@@ -62,6 +62,24 @@ module.exports = {
       'function-bind': path.resolve(__dirname, 'platforms/telegram/function-bind-shim.js')
     }
   },
+  // webpack's default 244 KiB budget is for pages fetched over the network; these
+  // bundles load from the extension package on disk, and ~1.8 MiB is teleproto's
+  // generated Telegram API definitions, which can't be split out. Budget for the
+  // real size instead of disabling the check, so unexpected growth still warns.
+  performance: {
+    hints: 'warning',
+    maxAssetSize: 4 * 1024 * 1024,
+    maxEntrypointSize: 4 * 1024 * 1024
+  },
+  module: {
+    rules: [
+      // See scripts/strip-intrinsic-eval-loader.js.
+      {
+        test: /[\\/]get-intrinsic[\\/]index\.js$/,
+        loader: path.resolve(__dirname, 'scripts/strip-intrinsic-eval-loader.js')
+      }
+    ]
+  },
   plugins: [
     new NodePolyfillPlugin(),
     new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {

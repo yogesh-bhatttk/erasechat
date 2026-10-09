@@ -16,12 +16,20 @@ cd "$ROOT"
 command -v zip >/dev/null 2>&1 || { echo "error: 'zip' is required but not installed." >&2; exit 1; }
 
 VERSION="$(node -p "require('./manifest.json').version")"
-DIST="$ROOT/dist"
+# ERASECHAT_DIST overrides the output folder (tests/packaging.test.js builds into a
+# temp dir instead of touching dist/).
+DIST="${ERASECHAT_DIST:-$ROOT/dist}"
 rm -rf "$DIST"
 mkdir -p "$DIST/chrome" "$DIST/firefox"
 
-echo "Bundling Telegram's MTProto client (webpack)..."
-node scripts/build-telegram.js
+# ERASECHAT_SKIP_TELEGRAM_BUILD=1 reuses already-built bundles (npm test builds
+# them first; re-running webpack inside the test would double its time and memory).
+if [ "${ERASECHAT_SKIP_TELEGRAM_BUILD:-}" = "1" ] && [ -f platforms/telegram/telegram-dashboard.bundle.js ]; then
+  echo "Reusing existing Telegram bundles (ERASECHAT_SKIP_TELEGRAM_BUILD=1)."
+else
+  echo "Bundling Telegram's MTProto client (webpack)..."
+  node scripts/build-telegram.js
+fi
 
 # Runtime assets shipped in BOTH packages (the manifest is added per target below).
 # privacy.html ships because the popup links to it (in-extension policy page);
@@ -60,21 +68,63 @@ copy_assets() {
   # outside platforms/.
   find "$dest/platforms" -name '*.src.js' -delete
   find "$dest/platforms" -name '*.bundle.js.map' -delete
-  # Terser's default license-comment extraction (webpack.telegram.config.js runs
-  # with minification enabled) emits one of these per bundle -- not loaded by the
-  # built extension either, so it shouldn't ship in the store zip unreviewed.
-  find "$dest/platforms" -name '*.bundle.js.LICENSE.txt' -delete
+  # Build-time only: webpack aliases `function-bind` to this shim and inlines it
+  # into the Telegram bundles; nothing loads the file itself at runtime.
+  find "$dest/platforms" -name 'function-bind-shim.js' -delete
+  # *.bundle.js.LICENSE.txt is deliberately KEPT: Terser moves the third-party
+  # copyright/license comments (teleproto and its polyfills, MIT and others) out
+  # of the minified bundle into that file, and MIT requires the notice to ship
+  # with the code.
+}
+
+# Reproducible zips: the same commit must always produce byte-identical packages, so
+# a store upload can be re-derived from the tag and compared. Three things otherwise
+# leak the build machine into the archive -- file order (filesystem-dependent), file
+# timestamps (checkout/copy time) and owner/permission extras -- so all three are
+# pinned. SOURCE_DATE_EPOCH (https://reproducible-builds.org/specs/source-date-epoch/)
+# defaults to the last commit's time; zip's DOS timestamps are local time, hence TZ=UTC.
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null || echo 315532800)}"
+export SOURCE_DATE_EPOCH
+
+deterministic_zip() {
+  local src="$1" out="$2"
+  # Normalise modes (cp preserves the checkout's, which depends on umask) and mtimes.
+  find "$src" -type d -exec chmod 755 {} +
+  find "$src" -type f -exec chmod 644 {} +
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const t = Number(process.env.SOURCE_DATE_EPOCH);
+    (function walk(p) {
+      for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+        const full = path.join(p, e.name);
+        if (e.isDirectory()) walk(full);
+        fs.utimesSync(full, t, t);
+      }
+    })(process.argv[1]);
+  ' "$src"
+  # -X drops uid/gid + extended-timestamp extras; the sorted list (C locale, files
+  # only) fixes entry order; -D omits directory entries whose order/mtime would vary.
+  ( cd "$src" && find . -type f | LC_ALL=C sort | TZ=UTC zip -q -X -D "$out" -@ )
 }
 
 echo "Building Chrome/Chromium package (manifest.json)..."
 copy_assets "$DIST/chrome"
-cp manifest.json "$DIST/chrome/manifest.json"
-( cd "$DIST/chrome" && zip -qr "$DIST/erasechat-chrome-$VERSION.zip" . )
+# manifest.json carries a "key" so unpacked dev builds keep a stable extension id
+# (and the same chrome-extension:// origin) across machines. The Chrome Web Store
+# assigns its own id and rejects/warns on an uploaded "key", so strip it from the
+# store package only -- the repo copy keeps it for "Load unpacked".
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  delete m.key;
+  fs.writeFileSync(process.argv[2], JSON.stringify(m, null, 2) + "\n");
+' manifest.json "$DIST/chrome/manifest.json"
+deterministic_zip "$DIST/chrome" "$DIST/erasechat-chrome-$VERSION.zip"
 
 echo "Building Firefox package (manifest.firefox.json -> manifest.json)..."
 copy_assets "$DIST/firefox"
 cp manifest.firefox.json "$DIST/firefox/manifest.json"
-( cd "$DIST/firefox" && zip -qr "$DIST/erasechat-firefox-$VERSION.zip" . )
+deterministic_zip "$DIST/firefox" "$DIST/erasechat-firefox-$VERSION.zip"
 
 echo ""
 echo "Done. Packages (v$VERSION):"

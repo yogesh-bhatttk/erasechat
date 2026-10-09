@@ -422,6 +422,7 @@ test("optional permissions are pinned to exactly the multi-platform surface", ()
     "*://*.twitter.com/*",
     "*://*.teams.microsoft.com/*",
     "*://*.msg.teams.microsoft.com/*",
+    "*://*.teams.cloud.microsoft/*",
     "https://*/*"
   ];
   for (const manifest of [chromeManifest, firefoxManifest]) {
@@ -681,4 +682,291 @@ test("Telegram popup's showStep only clears the error message on a genuine step 
     "errorMsg must not be cleared unconditionally outside the step-transition guard"
   );
   assert.match(src, /currentStepId\s*=\s*id/, "showStep must update the tracked current step id");
+});
+
+// ---------------------------------------------------------------------------
+// Store-package and disclosure guards (2026-10-09 audit, "Store / build / CI").
+// ---------------------------------------------------------------------------
+
+test("build.sh keeps third-party license notices in the store zips", () => {
+  // Terser moves teleproto's (and its polyfills') MIT/other notices out of the minified
+  // bundles into *.bundle.js.LICENSE.txt. MIT requires the notice to ship with the code,
+  // so deleting those files from dist/ is a licence violation, not a size optimisation.
+  const build = fs.readFileSync(path.join(ROOT, "scripts/build.sh"), "utf8");
+  const code = build.split("\n").filter((l) => !l.trim().startsWith("#")).join("\n");
+  assert.doesNotMatch(code, /LICENSE\.txt/,
+    "scripts/build.sh must not delete (or otherwise filter) *.bundle.js.LICENSE.txt");
+  assert.match(code, /-name '\*\.bundle\.js\.map' -delete/,
+    "sanity: the sourcemap prune this test sits next to is still present");
+});
+
+test("build.sh strips the dev-only manifest \"key\" from the Chrome store package", () => {
+  // manifest.json carries "key" so unpacked dev builds keep a stable id; the Chrome Web
+  // Store assigns its own and flags an uploaded key. The repo copy must keep it (the
+  // e2e tests and local dev rely on the stable id) and the store zip must not.
+  assert.ok(chromeManifest.key, "manifest.json should keep its dev key for Load unpacked");
+  const build = fs.readFileSync(path.join(ROOT, "scripts/build.sh"), "utf8");
+  const chromeSection = build.split('echo "Building Chrome/Chromium package')[1].split('echo "Building Firefox package')[0];
+  assert.match(chromeSection, /delete\s+m\.key/, "the Chrome manifest copy must delete .key");
+  assert.doesNotMatch(chromeSection, /^\s*cp manifest\.json /m,
+    "the Chrome manifest must not be copied verbatim (that would ship the key)");
+  assert.ok(!firefoxManifest.key, "manifest.firefox.json must never carry a Chrome key");
+});
+
+test("build.sh produces deterministic zips", () => {
+  const build = fs.readFileSync(path.join(ROOT, "scripts/build.sh"), "utf8");
+  assert.match(build, /SOURCE_DATE_EPOCH/, "file mtimes must be pinned via SOURCE_DATE_EPOCH");
+  assert.match(build, /LC_ALL=C sort/, "zip entries must be added in a sorted, locale-independent order");
+  assert.match(build, /zip -q -X/, "zip must run with -X (no uid/gid/extended timestamp extras)");
+  assert.doesNotMatch(build, /zip -qr /, "a bare recursive zip reintroduces filesystem order");
+});
+
+test("both manifests load shared-filters.js before content.js in the Slack content script", () => {
+  // content.js's regex preview delegates to the real isSafeRegex() from
+  // shared-filters.js; loaded after (or not at all) it silently falls back to drift.
+  for (const [name, manifest] of [["manifest.json", chromeManifest], ["manifest.firefox.json", firefoxManifest]]) {
+    const cs = (manifest.content_scripts || []).find((c) => (c.js || []).includes("content.js"));
+    assert.ok(cs, `${name} must inject content.js`);
+    const iShared = cs.js.indexOf("shared-filters.js");
+    assert.ok(iShared !== -1, `${name}: shared-filters.js must be injected with content.js`);
+    assert.ok(iShared < cs.js.indexOf("content.js"), `${name}: shared-filters.js must load before content.js`);
+  }
+});
+
+test("every platform dashboard has an aria-live status region", () => {
+  // Scan/delete progress is announced only through these; without one, screen-reader
+  // users get no feedback that a destructive run started, progressed, or failed.
+  const dashboards = [];
+  for (const dir of fs.readdirSync(path.join(ROOT, "platforms"))) {
+    const abs = path.join(ROOT, "platforms", dir);
+    if (!fs.statSync(abs).isDirectory()) continue;
+    for (const f of fs.readdirSync(abs)) {
+      if (/^dashboard-.*\.html$/.test(f)) dashboards.push(`platforms/${dir}/${f}`);
+    }
+  }
+  assert.ok(dashboards.length >= 5, `expected the five platform dashboards, found ${dashboards.length}`);
+  for (const rel of dashboards) {
+    const html = fs.readFileSync(path.join(ROOT, rel), "utf8");
+    const tags = html.match(/<[a-z][^>]*>/gi) || [];
+    const statusLive = tags.some((t) =>
+      /\saria-live=["'](polite|assertive)["']/.test(t) &&
+      (/\srole=["']status["']/.test(t) || /\sid=["'][^"']*status[^"']*["']/.test(t)));
+    assert.ok(statusLive, `${rel} has no status element with aria-live`);
+  }
+});
+
+test("every chrome.storage key the code writes is disclosed in PRIVACY_POLICY.md", () => {
+  // The policy promises a complete account of what is stored. This collects every key
+  // written via chrome.storage.{local,session}.set() in shipped source and requires it
+  // (or, for templated keys, its literal prefix) to appear in the policy.
+  const policy = fs.readFileSync(path.join(ROOT, "PRIVACY_POLICY.md"), "utf8");
+
+  // Writes whose key is not visible at the call site. Each entry says where the
+  // concrete key names come from; those names are collected separately below.
+  const INDIRECT = {
+    // saveJobState(key, ...) — key is always `slack_state_${team}_${channel}`.
+    "background.js:key": "slack_state_",
+    // Migration: re-writes already-disclosed legacy keys under their new names.
+    "background.js:legacyRewrites": null,
+    // Shared helpers: the caller passes its own *_DELETE_PROGRESS_KEY constant.
+    "platforms/shared/dashboard-fetch-utils.js:key": null,
+    "platforms/shared/dashboard-fetch-utils.js:progressKey": null
+  };
+
+  const files = ["background.js", "content.js", "popup.js", "shared-filters.js"];
+  (function walk(rel) {
+    for (const e of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+      const r = `${rel}/${e.name}`;
+      if (e.isDirectory()) walk(r);
+      else if (/\.js$/.test(e.name) && !/\.bundle\.js$/.test(e.name)) files.push(r);
+    }
+  })("platforms");
+  files.push("popup/platform-registry.js");
+
+  // Resolve an identifier to a string/template constant in the same file.
+  const resolveIdent = (src, name) => {
+    const m = src.match(new RegExp(`\\b${name}\\s*=\\s*(["'\`])([^"'\`]*?)(\\$\\{|\\1)`));
+    return m ? m[2] : undefined;
+  };
+  const resolveFnReturn = (src, fn) => {
+    const m = src.match(new RegExp(`function\\s+${fn}\\s*\\([^)]*\\)\\s*\\{\\s*return\\s+\`([^\`]*?)\\$\\{([A-Z_]+)\\}`));
+    if (!m) return undefined;
+    // `${PREFIX}${...}` form: resolve the leading constant.
+    return m[1] === "" ? resolveIdent(src, m[2]) : m[1];
+  };
+
+  const keys = new Map(); // key or prefix -> where
+  const add = (k, where) => { if (k) keys.set(k, where); };
+  let calls = 0;
+
+  for (const rel of files) {
+    if (!fs.existsSync(path.join(ROOT, rel))) continue;
+    const src = fs.readFileSync(path.join(ROOT, rel), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+
+    // Every *_delete_progress-style constant is written via the shared helpers.
+    for (const m of src.matchAll(/["']([a-z]+_delete_progress)["']/g)) add(m[1], `${rel} (progress constant)`);
+
+    for (const m of src.matchAll(/chrome\.storage\.(?:local|session)\.set\(\s*/g)) {
+      calls++;
+      const rest = src.slice(m.index + m[0].length);
+      if (!rest.startsWith("{")) {
+        const ident = (rest.match(/^[A-Za-z_$][\w$]*/) || [])[0];
+        assert.ok(`${rel}:${ident}` in INDIRECT, `${rel}: storage write with a non-literal object (${ident}) — disclose its keys and add it to INDIRECT`);
+        add(INDIRECT[`${rel}:${ident}`], rel);
+        continue;
+      }
+      // Grab the object literal (balanced braces).
+      let depth = 0, end = 0;
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] === "{") depth++;
+        else if (rest[i] === "}" && --depth === 0) { end = i; break; }
+      }
+      const body = rest.slice(1, end);
+      // Only top-level properties: drop nested object values.
+      // Template-literal `${...}` braces are kept, not treated as nesting.
+      let top = "", d = 0, tpl = 0;
+      for (let i = 0; i < body.length; i++) {
+        const ch = body[i];
+        if (ch === "$" && body[i + 1] === "{") {
+          tpl++;
+          if (d === 0) top += "${";
+          i++;
+          continue;
+        }
+        if (ch === "}" && tpl > 0) { tpl--; if (d === 0) top += ch; continue; }
+        if (ch === "{") d++;
+        if (d === 0) top += ch;
+        if (ch === "}") d--;
+      }
+      for (const p of top.matchAll(/(?:^|,)\s*(?:([A-Za-z_$][\w$]*)\s*:|\[\s*([^\]]+?)\s*\]\s*:|([A-Za-z_$][\w$]*)\s*(?=,|$))/g)) {
+        if (p[1] || p[3]) { add(p[1] || p[3], rel); continue; }
+        const expr = p[2];
+        let k;
+        if (/^`/.test(expr)) {
+          // `prefix${...}` -> "prefix"; `${PREFIX_CONST}${...}` -> the constant's value.
+          const lead = expr.match(/^`\$\{\s*([A-Za-z_$][\w$]*)\s*\}/);
+          k = lead ? resolveIdent(src, lead[1]) : expr.slice(1).split("${")[0].replace(/`$/, "");
+        }
+        else if (/^["']/.test(expr)) k = expr.slice(1, -1);
+        else if (/^[A-Za-z_$][\w$]*\(/.test(expr)) k = resolveFnReturn(src, expr.split("(")[0]);
+        else if (/^[A-Za-z_$][\w$]*$/.test(expr)) {
+          k = resolveIdent(src, expr);
+          if (k === undefined) {
+            assert.ok(`${rel}:${expr}` in INDIRECT, `${rel}: cannot resolve storage key [${expr}] — disclose it and add it to INDIRECT`);
+            k = INDIRECT[`${rel}:${expr}`];
+          }
+        }
+        assert.ok(k !== undefined, `${rel}: cannot resolve storage key expression [${expr}]`);
+        add(k, rel);
+      }
+    }
+  }
+
+  assert.ok(calls >= 15, `expected to find the storage writes to inspect (found ${calls})`);
+  for (const [k, where] of keys) {
+    assert.ok(policy.includes(k), `storage key "${k}" (written in ${where}) is not disclosed in PRIVACY_POLICY.md`);
+  }
+});
+
+// AMO's linter flags any bare `eval` reference (DANGEROUS_EVAL) and any innerHTML
+// assignment from a non-literal (UNSAFE_VAR_ASSIGNMENT). Keep the shipped code free
+// of both so the Firefox validation stays at zero warnings.
+test("Telegram bundles contain no bare eval reference (see strip-intrinsic-eval-loader)", () => {
+  for (const name of ["telegram-dashboard.bundle.js", "telegram-popup.bundle.js"]) {
+    const file = path.join(ROOT, "platforms/telegram", name);
+    assert.ok(fs.existsSync(file),
+      `${name} is missing -- run \`node scripts/build-telegram.js\` (npm test does this first)`);
+    const src = fs.readFileSync(file, "utf8");
+    assert.doesNotMatch(src, /(?<![A-Za-z0-9_$.%])eval(?![A-Za-z0-9_$%])/,
+      `${name} references eval -- AMO will warn (DANGEROUS_EVAL)`);
+  }
+});
+
+// Every hand-written script that ships (bundles are covered above). Collected from
+// disk so a new platform file is checked automatically.
+function shippedSourceFiles() {
+  const files = ["background.js", "content.js", "popup.js", "shared-filters.js"];
+  for (const dir of ["popup", "platforms"]) {
+    const walk = (rel) => {
+      for (const ent of fs.readdirSync(path.join(ROOT, rel), { withFileTypes: true })) {
+        const child = path.join(rel, ent.name);
+        if (ent.isDirectory()) walk(child);
+        else if (child.endsWith(".js") && !child.endsWith(".bundle.js") && !child.endsWith("-shim.js")) files.push(child);
+      }
+    };
+    walk(dir);
+  }
+  return files;
+}
+
+test("no shipped script writes HTML from a dynamic value (AMO UNSAFE_VAR_ASSIGNMENT)", () => {
+  const offenders = [];
+  for (const rel of shippedSourceFiles()) {
+    const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
+    const lineOf = (i) => src.slice(0, i).split("\n").length;
+    // insertAdjacentHTML / document.write are never needed here.
+    for (const m of src.matchAll(/\.insertAdjacentHTML\s*\(|document\.write(?:ln)?\s*\(/g)) {
+      offenders.push(`${rel}:${lineOf(m.index)} ${m[0]}`);
+    }
+    for (const m of src.matchAll(/\.(innerHTML|outerHTML)\s*(\+?=)(?!=)\s*/g)) {
+      const at = `${rel}:${lineOf(m.index)}`;
+      if (m[2] === "+=") { offenders.push(`${at} ${m[1]} +=`); continue; }
+      const rest = src.slice(m.index + m[0].length);
+      const quote = rest[0];
+      if (quote === "'" || quote === '"') {
+        // A plain string literal, e.g. '' -- fine as long as nothing is concatenated.
+        const end = rest.indexOf(quote, 1);
+        if (!/^\s*[;,)\n]/.test(rest.slice(end + 1))) offenders.push(`${at} ${m[1]} = string + ...`);
+      } else if (quote === "`") {
+        const end = rest.indexOf("`", 1);
+        if (rest.slice(1, end).includes("${")) offenders.push(`${at} ${m[1]} = template with \${}`);
+        else if (!/^\s*[;,)\n]/.test(rest.slice(end + 1))) offenders.push(`${at} ${m[1]} = template + ...`);
+      } else {
+        offenders.push(`${at} ${m[1]} = ${rest.slice(0, 30).split("\n")[0]}`);
+      }
+    }
+  }
+  assert.deepStrictEqual(offenders, [], "build these nodes with the DOM API instead");
+});
+
+test("store build: real zips are reproducible, strip `key`, ship license notices, and leak no source/shims", () => {
+  const { execFileSync } = require("node:child_process");
+  const os = require("node:os");
+  for (const tool of ["zip", "unzip"]) {
+    try { execFileSync("sh", ["-c", `command -v ${tool}`]); }
+    catch { assert.fail(`'${tool}' is required to verify the store build`); }
+  }
+  const version = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8")).version;
+  const build = () => {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "erasechat-build-"));
+    execFileSync("bash", [path.join(ROOT, "scripts/build.sh")], {
+      cwd: ROOT, stdio: "pipe",
+      env: { ...process.env, ERASECHAT_DIST: out, ERASECHAT_SKIP_TELEGRAM_BUILD: "1" }
+    });
+    return out;
+  };
+  const a = build();
+  const b = build();
+  try {
+    for (const flavor of ["chrome", "firefox"]) {
+      const zipA = path.join(a, `erasechat-${flavor}-${version}.zip`);
+      const zipB = path.join(b, `erasechat-${flavor}-${version}.zip`);
+      assert.ok(fs.readFileSync(zipA).equals(fs.readFileSync(zipB)), `${flavor} zip is not reproducible`);
+
+      const entries = execFileSync("unzip", ["-Z1", zipA], { encoding: "utf8" }).split("\n").filter(Boolean);
+      assert.ok(entries.includes("platforms/telegram/telegram-dashboard.bundle.js.LICENSE.txt"),
+        `${flavor} zip must ship the bundle's third-party license notices`);
+      const leaked = entries.filter((e) => e.endsWith(".src.js") || e.endsWith(".map") || e.endsWith("function-bind-shim.js"));
+      assert.deepStrictEqual(leaked, [], `${flavor} zip ships build-only files`);
+
+      const manifest = JSON.parse(execFileSync("unzip", ["-p", zipA, "manifest.json"], { encoding: "utf8" }));
+      if (flavor === "chrome") assert.ok(!("key" in manifest), "the Chrome store zip must not contain manifest.key");
+      else assert.ok(manifest.browser_specific_settings, "the Firefox zip must carry manifest.firefox.json");
+    }
+  } finally {
+    fs.rmSync(a, { recursive: true, force: true });
+    fs.rmSync(b, { recursive: true, force: true });
+  }
 });
