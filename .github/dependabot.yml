@@ -1,8 +1,13 @@
 # Keep the toolchain current without hand-watching it.
 #
-# Nothing here ships to users: the extension has no runtime dependencies at all (see
-# package.json — devDependencies only), so these updates only touch the test/lint gate.
-# That makes them safe to take routinely, and CI proves each one before merge.
+# Dev tooling (ESLint, Playwright, webpack, ...) never ships to users, so those updates
+# only touch the test/lint gate and are safe to take routinely once CI is green.
+# The one runtime dependency, teleproto (the MTProto client bundled into the Telegram
+# pages, which holds the user's auth key), is kept OUT of that group so it always
+# arrives as its own PR: a teleproto bump needs a manual review of the upstream diff
+# and the rebuilt bundle (see CONTRIBUTING.md "Pinned dependencies"), and must never
+# block -- or ride along with -- routine tooling updates. 1.229.1, for example, was a
+# 101-file rewrite that also pulled in Node-only `timers/promises` and broke the build.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -15,6 +20,7 @@ updates:
       # failure attributable instead of bisecting a combined bump.
       dev-tooling:
         patterns: ["*"]
+        exclude-patterns: ["teleproto"]
         update-types: ["minor", "patch"]
 
   - package-ecosystem: github-actions
