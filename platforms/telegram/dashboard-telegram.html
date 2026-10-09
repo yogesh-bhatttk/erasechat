@@ -43,9 +43,20 @@
       max-height: 800px;
       transform: none !important;
       margin: 0 auto;
-      top: 50%;
-      transform: translateY(-50%) !important;
     }
+    /* Several sections below toggle via the `hidden` attribute while also carrying
+       classes that set `display` (which would otherwise win over the UA rule). */
+    [hidden] { display: none !important; }
+    #tg-main { display: flex; flex-direction: column; gap: 20px; }
+    .tg-login { max-width: 460px; width: 100%; margin: 0 auto; }
+    .tg-login form { display: flex; flex-direction: column; gap: 14px; }
+    .tg-note { font-size: 12px; color: var(--text-muted); margin: 0; line-height: 1.5; }
+    .tg-note a { color: var(--accent); }
+    .tg-error { color: #ef4444; font-size: 13px; margin: 12px 0 0; }
+    .tg-error:empty { display: none; }
+    .tg-step-status { font-size: 13px; color: var(--text-secondary); margin: 0; }
+    .tg-link-btn { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; font-size: 12px; text-decoration: underline; align-self: flex-start; }
+    #logout-btn { padding: 7px 12px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -56,23 +67,95 @@
           <div class="brand-title">
             <img src="/icons/icon48.png" width="24" height="24" alt="logo" style="border-radius: 6px;">
             <h2>Erasechat — Telegram</h2>
-            <span id="connected-as" style="font-size: 12px; color: #8e8e93; margin-left: 8px;">Connecting...</span>
+            <span id="connected-as" style="font-size: 12px; color: #8e8e93; margin-left: 8px;" data-i18n="telegramDashConnecting">Connecting...</span>
           </div>
+        </div>
+        <div class="header-right">
+          <button type="button" id="logout-btn" class="dashboard-btn" hidden data-i18n="telegramPopupLogOut">Log Out</button>
         </div>
       </div>
       <div class="dashboard-body">
         <div class="dashboard-main">
+          <!-- Login runs in this full tab, not the action popup: reading the code means
+               switching to the Telegram app, which closes the popup and used to kill
+               the login mid-flow. -->
+          <section id="tg-login" class="panel-card tg-login" hidden aria-labelledby="tg-login-title">
+            <h3 class="panel-title" id="tg-login-title" data-i18n="telegramDashLoginTitle">Log in to Telegram</h3>
+
+            <form id="tg-form-credentials" novalidate>
+              <div class="form-group">
+                <label for="api-id" data-i18n="telegramPopupApiIdLabel">API ID</label>
+                <input type="text" id="api-id" placeholder="e.g. 123456" data-i18n-ph="telegramPopupApiIdPlaceholder" autocomplete="off" inputmode="numeric" required>
+              </div>
+              <div class="form-group">
+                <label for="api-hash" data-i18n="telegramPopupApiHashLabel">API Hash</label>
+                <input type="password" id="api-hash" placeholder="Your api_hash" data-i18n-ph="telegramPopupApiHashPlaceholder" autocomplete="off" required>
+              </div>
+              <div class="form-group">
+                <label for="phone" data-i18n="telegramPopupPhoneLabel">Phone Number</label>
+                <input type="tel" id="phone" placeholder="+1 555 555 5555" data-i18n-ph="telegramPopupPhonePlaceholder" autocomplete="tel" required>
+              </div>
+              <button type="submit" id="btn-request-code" class="dashboard-btn btn-scan" style="justify-content: center;" data-i18n="telegramPopupRequestCode">Request Code</button>
+              <p class="tg-note"><span data-i18n="telegramPopupHintPre">Get your own</span> <code>api_id</code> / <code>api_hash</code> <span data-i18n="telegramPopupHintMid">at</span> <a href="https://my.telegram.org/apps" target="_blank" rel="noopener">my.telegram.org</a> <span data-i18n="telegramPopupHintApp">(create an application there first — any name/platform works)</span><span data-i18n="telegramPopupHintEnd">. Never shared with anyone.</span></p>
+            </form>
+
+            <form id="tg-form-code" novalidate hidden>
+              <p class="tg-step-status" data-i18n="telegramPopupCodeSent">Code sent to your Telegram app</p>
+              <div class="form-group">
+                <label for="auth-code" data-i18n="telegramPopupLoginCodeLabel">Login Code</label>
+                <input type="text" id="auth-code" placeholder="12345" data-i18n-ph="telegramPopupLoginCodePlaceholder" autocomplete="one-time-code" inputmode="numeric" required>
+              </div>
+              <button type="submit" id="btn-submit-code" class="dashboard-btn btn-scan" style="justify-content: center;" data-i18n="telegramPopupSubmitCode">Submit Code</button>
+              <button type="button" class="tg-link-btn tg-restart" data-i18n="telegramDashLoginStartOver">Start over with a different number</button>
+            </form>
+
+            <form id="tg-form-password" novalidate hidden>
+              <p class="tg-step-status" data-i18n="telegramPopup2faRequired">2FA password required</p>
+              <!-- Only for the browser's password manager: lets it file the cloud
+                   password under the right account instead of an anonymous entry. -->
+              <input type="text" id="password-username" autocomplete="username" hidden>
+              <div class="form-group">
+                <label for="2fa-password" data-i18n="telegramPopupCloudPasswordLabel">Cloud Password</label>
+                <input type="password" id="2fa-password" placeholder="Your 2FA password" data-i18n-ph="telegramPopupCloudPasswordPlaceholder" autocomplete="current-password" required>
+              </div>
+              <button type="submit" id="btn-submit-password" class="dashboard-btn btn-scan" style="justify-content: center;" data-i18n="telegramPopupSubmitPassword">Submit Password</button>
+              <button type="button" class="tg-link-btn tg-restart" data-i18n="telegramDashLoginStartOver">Start over with a different number</button>
+            </form>
+
+            <p id="tg-login-error" class="tg-error" role="alert"></p>
+          </section>
+
+          <p id="tg-session-note" class="tg-note" hidden data-i18n="telegramDashSessionNote">Erasechat forgets this login when you close the browser. If you close it without clicking Log Out, the session stays listed under Telegram → Settings → Devices until you end it there.</p>
+
+          <div id="tg-main" hidden>
           <div class="config-grid">
             <div class="panel-card filter-form">
               <h3 class="panel-title" data-i18n="dashSearchFilters">1. Search Filters</h3>
-              <p class="panel-subtitle" data-i18n="dashFilterDepthNote">Only a keyword filter is available here. Slack's dashboard also has sender, date range, attachments, and /regex/ filters.</p>
+              <p class="panel-subtitle" data-i18n="telegramDashFilterDepthNote">Filter by text (plain or /regex/) and, under More filters, by date range. Slack's dashboard also has sender and attachment filters.</p>
 
           <div class="form-group">
-            <label for="target-chat" data-i18n="telegramDashTargetChat">Target Chat</label>
-            <input type="text" id="target-chat" placeholder="Username, phone, or leave blank for Saved Messages" data-i18n-ph="telegramDashTargetChatPlaceholder">
+            <label for="chat-select" data-i18n="telegramDashTargetChat">Target Chat</label>
+            <input type="search" id="chat-search" placeholder="Search your chats" data-i18n-ph="telegramDashChatSearchPlaceholder" data-i18n-aria="telegramDashChatSearchAria" aria-label="Search your chats" aria-controls="chat-select" autocomplete="off">
+            <select id="chat-select">
+              <option value="me" data-i18n="telegramDashSavedMessages">Saved Messages</option>
+            </select>
           </div>
           <div class="form-group">
-            <label for="text-filter" data-i18n="dashTextMatchPlain">Text Filter (Optional — plain text, no /regex/)</label>
+            <label for="target-chat" data-i18n="telegramDashTargetChatManual">Or type a username or phone number</label>
+            <input type="text" id="target-chat" placeholder="@username or +15555555555 (overrides the list)" data-i18n-ph="telegramDashTargetChatManualPlaceholder" autocomplete="off">
+          </div>
+          <div class="form-group toggle-group" style="margin-top: 10px;">
+            <div class="toggle-label">
+              <span class="toggle-title" id="only-mine-title" data-i18n="telegramDashOnlyMine">Only my messages</span>
+              <span class="toggle-subtitle" data-i18n="telegramDashOnlyMineHint">Recommended. Turn off only to clean a chat you administer — deletion is for everyone.</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="only-mine" checked aria-labelledby="only-mine-title">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="form-group">
+            <label for="text-filter" data-i18n="telegramDashTextFilterLabel">Text Filter (Optional — plain text or /regex/)</label>
             <input type="text" id="text-filter" placeholder="Keyword or Phrase" data-i18n-ph="dashKeywordPlaceholder">
           </div>
 
@@ -85,7 +168,7 @@
             <div class="results-panel">
               <div class="results-header">
                 <h4 data-i18n="dashPreviewResults">Preview Results</h4>
-                <div class="results-selector" id="results-count">0 items found</div>
+                <div class="results-selector" id="results-count" aria-live="polite">0 items found</div>
               </div>
               <div class="results-list" id="item-list">
                 <div class="no-messages" data-i18n="dashScanPromptEmpty">Enter parameters and click Scan to begin.</div>
@@ -96,8 +179,8 @@
           <div class="action-panel">
             <div class="selected-channel-summary">
               <h4 data-i18n="dashReadyToDelete">Ready to delete?</h4>
-              <p id="status-text" data-i18n="dashUnrecoverableWarning">Items deleted will be unrecoverable.</p>
-              <p id="progress-text" style="color: #2AABEE; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
+              <p id="status-text" role="status" aria-live="polite" data-i18n="dashUnrecoverableWarning">Items deleted will be unrecoverable.</p>
+              <p id="progress-text" aria-live="polite" style="color: #2AABEE; margin-top: 4px; font-weight: bold; font-size: 11px;"></p>
             </div>
             <div class="action-buttons">
               <button id="sc-btn-cancel" class="dashboard-btn" hidden data-i18n="dashCancel">Cancel</button>
@@ -115,11 +198,14 @@
             </button>
             <div class="activity-log-body"></div>
           </div>
+          </div>
         </div>
       </div>
     </div>
   </div>
+  <script src="../../shared-filters.js"></script>
   <script src="../shared/dashboard-fetch-utils.js"></script>
+  <script src="../shared/platform-filters.js"></script>
   <script src="process-shim.js"></script>
   <script src="telegram-dashboard.bundle.js"></script>
 </body>
