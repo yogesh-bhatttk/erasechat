@@ -33,11 +33,15 @@ const PREVIEW_MAX_QUANTIFIERS = 10;
 const PREVIEW_MAX_UNBOUNDED_QUANTIFIERS = 2;
 
 function isSafeRegexPreview(pattern) {
+  // shared-filters.js is loaded ahead of this file in the Slack content script
+  // (see the manifests), so the preview uses the worker's exact check and can't
+  // drift from it. The copy below only runs where that global is absent (Node tests).
+  if (typeof isSafeRegex === "function") return isSafeRegex(pattern);
   if (pattern.length > PREVIEW_MAX_REGEX_PATTERN_LENGTH) return false;
   if (/[+*?]{2,}/.test(pattern)) return false;
   if (/\([^)]*[+*]\)[+*?{]/.test(pattern)) return false;
   if (/\([^()]*[+*][^()]*\)[^(]*\)[+*?{]/.test(pattern)) return false;
-  if (/\([^)]*\|[^)]*\)[+*]/.test(pattern)) return false;
+  if (/\([^)]*\|[^)]*\)[+*{]/.test(pattern)) return false;
   if (/\([^)]*\{[^}]+\}[^)]*\)[+*{]/.test(pattern)) return false;
   if (/\([^)]*\\[0-9]+[^)]*\)[+*]/.test(pattern)) return false;
 
@@ -180,6 +184,8 @@ if (!window.slackCleanInitialized) {
     let deleteIndex = 0;
     let stats = { success: 0, fail: 0, total: 0 };
     let isRunning = false;
+    let localCancelPending = false; // see sendJobControl
+    let scanTimedOutKey = null; // team_channel whose last scan hit SCAN_TIMEOUT_MS
     let isPaused = false;
     let throttleDelay = 1000; // ms between deletions
     let urlObserverInterval = null; // URL change polling interval ID
@@ -236,6 +242,12 @@ if (!window.slackCleanInitialized) {
     // stay disabled on "Scanning..." forever. Generous, since a throttled scan is slow;
     // an abandoned scan is read-only, so a false timeout just means the user re-scans.
     const SCAN_TIMEOUT_MS = 120000;
+    // While another scan of this conversation (with different filters) is still
+    // running in the worker, re-ask this often instead of failing the new one.
+    const SCAN_BUSY_RETRY_MS = 5000;
+    // Bumped by every runScan(). A late response (one that arrives after the
+    // client-side timeout) is still applied, but only if no newer scan started.
+    let scanGeneration = 0;
     // users.list is Slack Tier 2 (~20 req/min). 5 pages × 1000 = up to 5,000
     // member names cached at init — a balance between coverage and startup latency.
     const MAX_USER_CACHE_PAGES = 5;
@@ -309,7 +321,7 @@ if (!window.slackCleanInitialized) {
           }
           sendResponse({ workspaceName: info.team.name });
         } else {
-          sendResponse({ workspaceName: "Slack Web Client" });
+          sendResponse({ workspaceName: t("dashSlackWebClient", "Slack Web Client") });
         }
       } else if (request.type === "LAUNCH_DASHBOARD") {
         initDashboard();
@@ -325,34 +337,55 @@ if (!window.slackCleanInitialized) {
           // Translate at the boundary instead of copying background's flag as-is --
           // otherwise a paused job gets locally mislabeled as "no job" (button shows
           // "Start Deleting", inputs re-enable, workspace drift guard stands down).
+          const wasRunning = isRunning;
+          const wasPaused = isPaused;
           isRunning = request.job.isRunning || request.job.isPaused;
           isPaused = request.job.isPaused;
           deleteIndex = request.job.deleteIndex;
           stats = request.job.stats;
           throttleDelay = request.job.throttleDelay;
 
+          // A paused job isn't waiting on Slack's rate limit any more.
+          if (isPaused) {
+            clearRateLimitCountdown();
+            if (!wasPaused && ui.consoleStatus) ui.consoleStatus.innerText = t("dashStatusPaused", "Paused");
+            if (!wasPaused) announce(t("srJobPaused", "Deletion paused."));
+          }
+
           updateProgressUI();
           syncButtonStates();
           toggleInputs(isRunning);
 
           const skipped = stats.skipped || 0;
-          if (!jobFinalized && !isRunning && stats.success + stats.fail + skipped >= stats.total && stats.total > 0) {
+          const partial = stats.partial || 0;
+          if (!jobFinalized && !isRunning && stats.success + stats.fail + skipped + partial >= stats.total && stats.total > 0) {
             jobFinalized = true;
             // Report skips honestly — a skipped item ("attachment-only" mode with
             // nothing to clean) was NOT deleted, so it must not be counted under
             // "Successfully deleted".
             let summary = t("modalFinishedSummary", `Bulk deletion process completed.\n\nSuccessfully deleted: ${stats.success}\nFailed: ${stats.fail}`, [String(stats.success), String(stats.fail)]);
             if (skipped > 0) summary += t("modalFinishedSkipped", `\nSkipped (nothing to clean): ${skipped}`, [String(skipped)]);
+            if (partial > 0) summary += t("modalFinishedPartial", `\nPartially cleaned (uploaded files still attached): ${partial}`, [String(partial)]);
             showCustomAlert(t("modalFinishedTitle", "Erasechat Finished"), summary);
-            stopOperations("Finished");
+            announce(t("srJobFinished", `Deletion finished. ${stats.success} deleted, ${stats.fail} failed.`, [String(stats.success), String(stats.fail)]));
+            stopOperations(t("dashStatusFinished", "Finished"));
             // Clear the now-deleted messages from the preview so the user can't
             // re-run a delete against stale results (which would all fail as
             // message_not_found).
             resetScanResultsUI();
+            resyncTargetToUrl();
+          } else if (wasRunning && !isRunning && !jobFinalized && !localCancelPending) {
+            // Ended without completing: cancelled from another tab, or the worker
+            // lost the queue. Don't leave "Deleting..." and a stale ring behind.
+            logConsole(t("logJobStoppedElsewhere", "The deletion job was stopped outside this tab (cancelled elsewhere, or its queue was lost)."), "warn");
+            announce(t("srJobStopped", "Deletion stopped."));
+            stopOperations(t("dashStatusStopped", "Stopped"));
+            resetScanResultsUI();
+            resyncTargetToUrl();
           }
         }
       } else if (request.type === "JOB_RATELIMIT") {
-        if (matchesActiveWorkspaceChannel(request.channelId, request.teamId, activeChannel, activeTeam)) {
+        if (!isPaused && matchesActiveWorkspaceChannel(request.channelId, request.teamId, activeChannel, activeTeam)) {
           startClientRateLimitCountdown(request.pauseTime);
         }
       } else if (request.type === "JOB_LOG") {
@@ -366,10 +399,11 @@ if (!window.slackCleanInitialized) {
 
     function startClientRateLimitCountdown(pauseTime) {
       let countdown = pauseTime;
-      if (ui.consoleStatus) ui.consoleStatus.innerText = `Rate Limited (${countdown}s)`;
-      
+      const label = (n) => t("dashRateLimitedCountdown", `Rate Limited (${n}s)`, [String(n)]);
+      if (ui.consoleStatus) ui.consoleStatus.innerText = label(countdown);
+
       if (rateLimitInterval) clearInterval(rateLimitInterval);
-      
+
       rateLimitInterval = setInterval(() => {
         countdown--;
         if (countdown <= 0) {
@@ -377,9 +411,28 @@ if (!window.slackCleanInitialized) {
           rateLimitInterval = null;
           if (ui.consoleStatus) ui.consoleStatus.innerText = t("dashDeleting", "Deleting...");
         } else {
-          if (ui.consoleStatus) ui.consoleStatus.innerText = `Rate Limited (${countdown}s)`;
+          if (ui.consoleStatus) ui.consoleStatus.innerText = label(countdown);
         }
       }, 1000);
+    }
+
+    // Stops the rate-limit countdown (pause/stop) so it can't keep ticking and
+    // then overwrite the status with "Deleting..." while nothing is deleting.
+    function clearRateLimitCountdown() {
+      if (rateLimitInterval) {
+        clearInterval(rateLimitInterval);
+        rateLimitInterval = null;
+      }
+    }
+
+    // Polite screen-reader summary (start/finish/pause/cancel). The execution
+    // console itself is aria-live="off" so per-item log lines don't flood AT.
+    function announce(message) {
+      const region = shadowRoot && shadowRoot.getElementById("sc-status-live");
+      if (!region) return;
+      region.textContent = "";
+      // Re-set on the next tick so repeating the same text is still announced.
+      setTimeout(() => { region.textContent = message; }, 50);
     }
 
     function syncButtonStates() {
@@ -439,15 +492,24 @@ if (!window.slackCleanInitialized) {
         // Resolve the workspace. If the URL names a team we have NO credentials for
         // (stale link, removed from workspace, cache skew), do NOT silently fall back
         // to a different workspace — that would issue scans/deletes with the wrong
-        // team's token. Refuse instead (caller shows "not connected"). Only a URL with
-        // no team segment at all (legacy /messages/ routes) falls back to the sole/first
-        // workspace, which is the correct behavior there.
+        // team's token. Refuse instead (caller shows "not connected"). A URL with no
+        // team segment at all (legacy /messages/, /archives/ routes on a workspace
+        // domain like acme.slack.com) is resolved by matching the workspace's own
+        // URL/domain against this page's hostname; only if nothing matches does it
+        // fall back to the first workspace.
         let activeTeamId = teamSeg;
         if (activeTeamId && !teams[activeTeamId]) {
           return null;
         }
         if (!activeTeamId) {
-          activeTeamId = Object.keys(teams)[0];
+          const host = window.location.hostname.toLowerCase();
+          activeTeamId = Object.keys(teams).find((id) => {
+            const tm = teams[id] || {};
+            let urlHost = "";
+            try { urlHost = tm.url ? new URL(tm.url).hostname.toLowerCase() : ""; } catch (e) { /* malformed url */ }
+            const domainHost = tm.domain ? `${String(tm.domain).toLowerCase()}.slack.com` : "";
+            return (urlHost && urlHost === host) || (domainHost && domainHost === host);
+          }) || Object.keys(teams)[0];
         }
 
         // Real Slack conversation IDs start with C (channel), D (DM), or G
@@ -552,11 +614,36 @@ if (!window.slackCleanInitialized) {
       return null;
     }
 
+    async function pruneExpiredUserCaches(ttl) {
+      try {
+        let keys;
+        if (typeof chrome.storage.local.getKeys === "function") {
+          keys = (await chrome.storage.local.getKeys()).filter(k => k.startsWith("sc_user_cache_"));
+        } else {
+          keys = Object.keys(await chrome.storage.local.get(null)).filter(k => k.startsWith("sc_user_cache_"));
+        }
+        if (keys.length === 0) return;
+        const entries = await chrome.storage.local.get(keys);
+        const now = Date.now();
+        const expired = keys.filter((k) => {
+          const e = entries[k];
+          return !e || !e.timestamp || now - e.timestamp >= ttl;
+        });
+        if (expired.length > 0) await chrome.storage.local.remove(expired);
+      } catch (err) {
+        console.warn("SlackClean: Expired user-cache cleanup failed.", err);
+      }
+    }
+
     // Loads cache of user profiles in the workspace (24-hour TTL expiration, optimized user scope limit)
     async function loadUserCache() {
       if (!activeTeam) return;
       const cacheKey = `sc_user_cache_${activeTeam.id}`;
       const TTL = USER_CACHE_TTL_MS;
+
+      // Drop every workspace's expired name cache (not just this one's) so caches
+      // for workspaces the user no longer opens don't sit in storage forever.
+      await pruneExpiredUserCaches(TTL);
 
       try {
         const cached = await chrome.storage.local.get(cacheKey);
@@ -573,7 +660,7 @@ if (!window.slackCleanInitialized) {
       }
 
       try {
-        userCache[activeTeam.userId] = "Me";
+        userCache[activeTeam.userId] = t("dashAuthorMe", "Me");
         logConsole(t("logCachingUsers", "Caching workspace user directories..."), "info");
         
         let cursor = "";
@@ -602,7 +689,7 @@ if (!window.slackCleanInitialized) {
 
     // Resolves a user's name from cache, or fetches it dynamically if missing
     async function getUserName(userId) {
-      if (!userId) return "Unknown";
+      if (!userId) return t("dashUnknown", "Unknown");
       if (userCache[userId]) return userCache[userId];
       try {
         const res = await slackAPICallWithRetry("users.info", { user: userId });
@@ -630,36 +717,36 @@ if (!window.slackCleanInitialized) {
         const data = await slackAPICallWithRetry("conversations.info", { channel: channelId });
         if (data && data.ok && data.channel) {
           const ch = data.channel;
-          let name = ch.name || domName || "Active Chat";
-          let type = "Public Channel";
+          let name = ch.name || domName || t("dashActiveChat", "Active Chat");
+          let type = t("dashTypePublicChannel", "Public Channel");
 
           if (ch.is_im) {
-            type = "Direct Message";
+            type = t("dashTypeDirectMessage", "Direct Message");
             const fetchedName = await getUserName(ch.user);
             name = fetchedName ? `@${fetchedName}` : `@${ch.user || "User"}`;
           } else if (ch.is_mpim) {
-            type = "Group DM";
-            name = ch.purpose?.value || domName || "Group DM";
+            type = t("dashTypeGroupDm", "Group DM");
+            name = ch.purpose?.value || domName || type;
           } else if (ch.is_private) {
-            type = "Private Channel";
+            type = t("dashTypePrivateChannel", "Private Channel");
           }
 
           activeChannel = { id: channelId, name, type };
           
-          shadowRoot.getElementById("sc-selected-title").innerText = `Target: ${activeChannel.name}`;
-          shadowRoot.getElementById("sc-selected-subtitle").innerText = `Mode: ${activeChannel.type} (${activeChannel.id}). Only this open chat will be cleaned.`;
+          shadowRoot.getElementById("sc-selected-title").innerText = t("dashTargetLabel", `Target: ${activeChannel.name}`, [String(activeChannel.name)]);
+          shadowRoot.getElementById("sc-selected-subtitle").innerText = t("dashModeLabel", `Mode: ${activeChannel.type} (${activeChannel.id}). Only this open chat will be cleaned.`, [String(activeChannel.type), String(activeChannel.id)]);
           shadowRoot.getElementById("sc-btn-scan").disabled = false;
           
           logConsole(t("logTargetLoaded", `Target loaded: ${activeChannel.name} (${activeChannel.type})`, [String(activeChannel.name), String(activeChannel.type)]), "info");
         } else {
           activeChannel = {
             id: channelId,
-            name: domName || `Conversation ${channelId}`,
-            type: channelId.startsWith("D") ? "Direct Message" : "Channel"
+            name: domName || t("dashConversationFallback", `Conversation ${channelId}`, [String(channelId)]),
+            type: channelId.startsWith("D") ? t("dashTypeDirectMessage", "Direct Message") : t("dashTypeChannel", "Channel")
           };
           
-          shadowRoot.getElementById("sc-selected-title").innerText = `Target: ${activeChannel.name}`;
-          shadowRoot.getElementById("sc-selected-subtitle").innerText = `Loaded via URL (${activeChannel.id}). Only this open chat will be cleaned.`;
+          shadowRoot.getElementById("sc-selected-title").innerText = t("dashTargetLabel", `Target: ${activeChannel.name}`, [String(activeChannel.name)]);
+          shadowRoot.getElementById("sc-selected-subtitle").innerText = t("dashLoadedViaUrl", `Loaded via URL (${activeChannel.id}). Only this open chat will be cleaned.`, [String(activeChannel.id)]);
           shadowRoot.getElementById("sc-btn-scan").disabled = false;
           
           logConsole(t("logTargetLoadedUrl", `Target loaded via URL matching: ${activeChannel.name}`, [String(activeChannel.name)]), "info");
@@ -691,7 +778,7 @@ if (!window.slackCleanInitialized) {
         container.appendChild(nm);
       }
       const countEl = shadowRoot.getElementById("sc-scan-count");
-      if (countEl) countEl.innerText = "0 items found";
+      if (countEl) countEl.innerText = t("dashItemsFound", "0 items found", ["0"]);
       const exportBtn = shadowRoot.getElementById("sc-btn-export-messages");
       if (exportBtn) exportBtn.disabled = true;
       if (ui.btnDelete) ui.btnDelete.disabled = true;
@@ -736,9 +823,9 @@ if (!window.slackCleanInitialized) {
       const nameEl = shadowRoot.getElementById("sc-connection-name");
       const urlEl = shadowRoot.getElementById("sc-connection-url");
       const uidEl = shadowRoot.getElementById("sc-connection-uid");
-      if (nameEl) nameEl.innerText = activeTeam.name || "Slack Workspace";
-      if (urlEl) urlEl.innerText = activeTeam.url || "Slack URL";
-      if (uidEl) uidEl.innerText = activeTeam.userId || "User";
+      if (nameEl) nameEl.innerText = activeTeam.name || t("dashSlackWorkspace", "Slack Workspace");
+      if (urlEl) urlEl.innerText = activeTeam.url || t("dashSlackUrl", "Slack URL");
+      if (uidEl) uidEl.innerText = activeTeam.userId || t("dashUserFallback", "User");
 
       logConsole(t("logWorkspaceSwitched", `Workspace switched to ${activeTeam.name || activeTeam.id}. Reloading directory...`, [String(activeTeam.name || activeTeam.id)]), "info");
 
@@ -754,8 +841,8 @@ if (!window.slackCleanInitialized) {
         activeChannel = null;
         const titleEl = shadowRoot.getElementById("sc-selected-title");
         const subEl = shadowRoot.getElementById("sc-selected-subtitle");
-        if (titleEl) titleEl.innerText = "No Conversation Active";
-        if (subEl) subEl.innerText = "Click a Channel or DM in Slack's sidebar — it will be detected automatically.";
+        if (titleEl) titleEl.innerText = t("dashNoConversationActive", "No Conversation Active");
+        if (subEl) subEl.innerText = t("dashNoConversationHint", "Click a Channel or DM in Slack's sidebar — it will be detected automatically.");
         const scanBtn = shadowRoot.getElementById("sc-btn-scan");
         if (scanBtn) scanBtn.disabled = true;
         return undefined;
@@ -812,12 +899,14 @@ if (!window.slackCleanInitialized) {
       
       document.body.appendChild(shadowHost);
 
-      // Secure Sandboxed DOM via open mode (Accessible & Testable)
-      shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      // Closed mode: Slack's page scripts can't reach in through host.shadowRoot
+      // and drive the dashboard (e.g. click Delete). Our own reference is kept in
+      // the `shadowRoot` variable above, which is all this script ever uses.
+      shadowRoot = shadowHost.attachShadow({ mode: "closed" });
 
       // Isolate keyboard events from the host page (Slack). Slack registers global,
       // document-level keyboard-shortcut handlers that inspect document.activeElement
-      // to decide whether the user is "typing". For an input inside our (open) shadow
+      // to decide whether the user is "typing". For an input inside our shadow
       // root, document.activeElement is this HOST element — a <div>, not an input —
       // so Slack misreads each keystroke as a shortcut and can preventDefault() it,
       // which silently blocks typing in our fields (most visibly the "type DELETE"
@@ -862,15 +951,15 @@ if (!window.slackCleanInitialized) {
                 </svg>
                 <div class="brand-title">
                   <h2>Erasechat</h2>
-                  <span class="premium-badge" data-i18n="brandTag">Choose a platform</span>
+                  <span class="premium-badge">Slack</span>
                 </div>
               </div>
               <div class="header-right">
                 <div class="theme-picker">
                   <span class="info-label" data-i18n="dashVibe">Vibe:</span>
-                  <button class="theme-bubble neon active" data-theme="neon" data-i18n-title="dashThemeNeon" title="Neon Aura" aria-label="Set interface theme to Neon Aura"></button>
-                  <button class="theme-bubble matrix" data-theme="matrix" data-i18n-title="dashThemeMatrix" title="Emerald Matrix" aria-label="Set interface theme to Emerald Matrix"></button>
-                  <button class="theme-bubble fusion" data-theme="fusion" data-i18n-title="dashThemeFusion" title="Fusion Gold" aria-label="Set interface theme to Fusion Gold"></button>
+                  <button type="button" class="theme-bubble neon active" data-theme="neon" data-i18n-title="dashThemeNeon" title="Neon Aura" data-i18n-aria="dashThemeNeon" aria-label="Neon Aura" aria-pressed="true"></button>
+                  <button type="button" class="theme-bubble matrix" data-theme="matrix" data-i18n-title="dashThemeMatrix" title="Emerald Matrix" data-i18n-aria="dashThemeMatrix" aria-label="Emerald Matrix" aria-pressed="false"></button>
+                  <button type="button" class="theme-bubble fusion" data-theme="fusion" data-i18n-title="dashThemeFusion" title="Fusion Gold" data-i18n-aria="dashThemeFusion" aria-label="Fusion Gold" aria-pressed="false"></button>
                 </div>
                 <button class="close-btn" id="sc-btn-minimize" data-i18n-title="dashMinimize" title="Minimize Dashboard" data-i18n-aria="dashMinimize" aria-label="Minimize dashboard overlay">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -917,7 +1006,7 @@ if (!window.slackCleanInitialized) {
                       <div class="form-group sc-preset-group">
                         <label for="sc-preset-select" data-i18n="dashPresetLabel">Saved Presets</label>
                         <div class="preset-controls">
-                          <select id="sc-preset-select" aria-label="Load a saved filter preset">
+                          <select id="sc-preset-select">
                             <option value="" data-i18n="dashPresetChoose">Load preset…</option>
                           </select>
                           <button type="button" id="sc-btn-preset-save" class="dashboard-btn btn-scan" data-i18n="dashPresetSave">Save Current</button>
@@ -968,7 +1057,7 @@ if (!window.slackCleanInitialized) {
                           <input type="text" id="sc-filter-text" data-i18n-ph="dashKeywordPlaceholder" placeholder="Keyword or Phrase">
                           <p class="sc-field-hint" data-i18n="dashTextMatchRegexHint">Wrap in / / to use a regular expression, e.g. /ERR_\\d+/. Plain text otherwise.</p>
                           <label class="sc-inline-checkbox" for="sc-filter-invert-text">
-                            <input type="checkbox" id="sc-filter-invert-text" aria-label="Invert text match: delete everything except matches">
+                            <input type="checkbox" id="sc-filter-invert-text">
                             <span data-i18n="dashInvertText">Invert: delete everything EXCEPT matches</span>
                           </label>
                         </div>
@@ -980,33 +1069,33 @@ if (!window.slackCleanInitialized) {
 
                       <div class="toggle-group">
                         <div class="toggle-label">
-                          <span class="toggle-title" data-i18n="dashIncludeThreads">Include Thread Replies</span>
-                          <span class="toggle-subtitle" data-i18n="dashIncludeThreadsDesc">Scan and delete messages inside threads</span>
+                          <span class="toggle-title" id="sc-lbl-threads" data-i18n="dashIncludeThreads">Include Thread Replies</span>
+                          <span class="toggle-subtitle" id="sc-desc-threads" data-i18n="dashIncludeThreadsDesc">Scan and delete messages inside threads</span>
                         </div>
                         <label class="switch">
-                          <input type="checkbox" id="sc-filter-threads" checked aria-label="Include thread replies checkbox">
+                          <input type="checkbox" id="sc-filter-threads" checked aria-labelledby="sc-lbl-threads" aria-describedby="sc-desc-threads">
                           <span class="slider"></span>
                         </label>
                       </div>
 
                       <div class="toggle-group">
                         <div class="toggle-label">
-                          <span class="toggle-title" data-i18n="dashOnlyAttachments">Only Delete Attachments</span>
-                          <span class="toggle-subtitle" data-i18n="dashOnlyAttachmentsDesc">Strips files/attachments but keeps any message text (a message that is only a file is deleted)</span>
+                          <span class="toggle-title" id="sc-lbl-attachments" data-i18n="dashOnlyAttachments">Only Delete Attachments</span>
+                          <span class="toggle-subtitle" id="sc-desc-attachments" data-i18n="dashOnlyAttachmentsDesc">Strips files/attachments but keeps any message text (a message that is only a file is deleted)</span>
                         </div>
                         <label class="switch">
-                          <input type="checkbox" id="sc-filter-attachments" aria-label="Only delete attachments checkbox">
+                          <input type="checkbox" id="sc-filter-attachments" aria-labelledby="sc-lbl-attachments" aria-describedby="sc-desc-attachments">
                           <span class="slider"></span>
                         </label>
                       </div>
 
                       <div class="toggle-group">
                         <div class="toggle-label">
-                          <span class="toggle-title" data-i18n="dashSkipPinned">Skip Pinned Messages</span>
-                          <span class="toggle-subtitle" data-i18n="dashSkipPinnedDesc">Never delete a message that is currently pinned in this conversation</span>
+                          <span class="toggle-title" id="sc-lbl-skip-pinned" data-i18n="dashSkipPinned">Skip Pinned Messages</span>
+                          <span class="toggle-subtitle" id="sc-desc-skip-pinned" data-i18n="dashSkipPinnedDesc">Never delete a message that is currently pinned in this conversation</span>
                         </div>
                         <label class="switch">
-                          <input type="checkbox" id="sc-filter-skip-pinned" checked aria-label="Skip pinned messages checkbox">
+                          <input type="checkbox" id="sc-filter-skip-pinned" checked aria-labelledby="sc-lbl-skip-pinned" aria-describedby="sc-desc-skip-pinned">
                           <span class="slider"></span>
                         </label>
                       </div>
@@ -1033,7 +1122,7 @@ if (!window.slackCleanInitialized) {
                     <h4 data-i18n="dashMessagesFlagged">Messages Flagged for Deletion</h4>
                     <div class="results-selector">
                       <span id="sc-scan-count">0 items found</span>
-                      <button id="sc-btn-export-messages" class="dashboard-btn btn-scan" disabled aria-label="Download scanned messages as CSV" data-i18n="dashExportCsv">Export CSV</button>
+                      <button id="sc-btn-export-messages" class="dashboard-btn btn-scan" disabled data-i18n="dashExportCsv">Export CSV</button>
                       <label class="sc-selectall-label">
                         <input type="checkbox" id="sc-select-all" checked> <span data-i18n="dashSelectAll">Select All</span>
                       </label>
@@ -1050,7 +1139,7 @@ if (!window.slackCleanInitialized) {
                   <div class="panel-card progress-stats sc-progress-panel">
                     <div class="progress-ring-wrapper sc-ring-80">
                       <svg width="80" height="80" viewBox="0 0 100 100" class="sc-progress-svg">
-                        <circle cx="50" cy="50" r="40" stroke="rgba(255,255,255,0.05)" stroke-width="8" fill="transparent" />
+                        <circle class="sc-ring-track" cx="50" cy="50" r="40" stroke-width="8" fill="transparent" />
                         <circle id="sc-progress-circle" cx="50" cy="50" r="40" stroke="url(#logo-glow-injected)" stroke-width="8" fill="transparent" stroke-dasharray="251.33" stroke-dashoffset="251.33" stroke-linecap="round" />
                       </svg>
                       <div id="sc-progress-ring-text">0%</div>
@@ -1081,14 +1170,16 @@ if (!window.slackCleanInitialized) {
                     <div class="console-header">
                       <span data-i18n="dashExecutionLogs">Execution Logs</span>
                       <div class="console-actions">
-                        <button id="sc-btn-clear-logs" role="button" aria-label="Clear execution logs" data-i18n="dashClear">Clear</button>
-                        <button id="sc-btn-download-logs" role="button" aria-label="Export execution logs as text file" data-i18n="dashExport">Export</button>
+                        <button type="button" id="sc-btn-clear-logs" data-i18n="dashClear">Clear</button>
+                        <button type="button" id="sc-btn-download-logs" data-i18n="dashExport">Export</button>
                         <span id="sc-console-status" data-i18n="dashReady">Ready</span>
                       </div>
                     </div>
-                    <div class="console-terminal" id="sc-console-log" aria-live="polite" role="log">
-                      <div class="console-line info">Erasechat initialized in Safe (Single-Channel) Mode.</div>
+                    <div class="console-terminal" id="sc-console-log" role="log" aria-live="off" tabindex="0" data-i18n-aria="dashExecutionLogs" aria-label="Execution Logs">
+                      <div class="console-line info" data-i18n="logInitialized">Erasechat initialized in Safe (Single-Channel) Mode.</div>
                     </div>
+                    <!-- Start/finish/pause summaries for screen readers (the log above is not live). -->
+                    <div id="sc-status-live" class="sc-sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
                   </div>
                 </div>
               </main>
@@ -1100,7 +1191,7 @@ if (!window.slackCleanInitialized) {
             <div class="minimized-content">
               <div class="minimized-ring-wrapper">
                 <svg width="36" height="36" viewBox="0 0 100 100">
-                  <circle cx="50" cy="50" r="40" stroke="rgba(255,255,255,0.05)" stroke-width="8" fill="transparent" />
+                  <circle class="sc-ring-track" cx="50" cy="50" r="40" stroke-width="8" fill="transparent" />
                   <circle id="sc-min-progress-circle" cx="50" cy="50" r="40" stroke="url(#logo-glow-injected)" stroke-width="8" fill="transparent" stroke-dasharray="251.33" stroke-dashoffset="251.33" stroke-linecap="round" />
                 </svg>
               </div>
@@ -1128,7 +1219,7 @@ if (!window.slackCleanInitialized) {
             <p class="sc-verify-desc">
               You are about to delete more than 100 messages (<span id="sc-verify-count-label">0</span> messages). To confirm this operation, type the word <strong class="sc-verify-emphasis">DELETE</strong> below:
             </p>
-            <input type="text" id="sc-verify-input" data-i18n-ph="dashVerifyInputPlaceholder" placeholder="Type DELETE to confirm" aria-label="Type DELETE to confirm bulk deletion">
+            <input type="text" id="sc-verify-input" data-i18n-ph="dashVerifyInputPlaceholder" placeholder="Type DELETE to confirm" data-i18n-aria="dashVerifyInputPlaceholder" aria-label="Type DELETE to confirm">
             <div class="sc-modal-actions">
               <button class="dashboard-btn btn-scan" id="sc-verify-cancel-btn" data-i18n="dashVerifyGoBack">Go Back</button>
               <button class="dashboard-btn btn-delete danger" id="sc-verify-confirm-btn" disabled data-i18n="dashVerifyConfirm">Confirm Deletion</button>
@@ -1164,7 +1255,7 @@ if (!window.slackCleanInitialized) {
           <div class="verification-card sc-card-purple">
             <h4 id="sc-prompt-title" data-i18n="dashPromptTitle">Name This Preset</h4>
             <p id="sc-prompt-message"></p>
-            <input type="text" id="sc-prompt-input" maxlength="60" aria-label="Preset name">
+            <input type="text" id="sc-prompt-input" maxlength="60" aria-labelledby="sc-prompt-title">
             <div class="sc-modal-actions">
               <button class="dashboard-btn btn-scan" id="sc-prompt-cancel-btn" data-i18n="dashCancel">Cancel</button>
               <button class="dashboard-btn btn-delete" id="sc-prompt-ok-btn" disabled data-i18n="dashConfirm">Confirm</button>
@@ -1177,6 +1268,15 @@ if (!window.slackCleanInitialized) {
 
       // Apply translations over the freshly-injected English markup.
       localizeI18n(shadowRoot);
+
+      // The overlay is a modal dialog over Slack (aria-modal is dropped while it
+      // is minimized to the floating widget — see setupHeaderControls).
+      const modalRoot = dashboardEl.querySelector(".dashboard-modal");
+      if (modalRoot) {
+        modalRoot.setAttribute("role", "dialog");
+        modalRoot.setAttribute("aria-modal", "true");
+        modalRoot.setAttribute("aria-label", t("dashDialogLabel", "Erasechat dashboard"));
+      }
 
       // Cache DOM references
       ui = {
@@ -1208,12 +1308,12 @@ if (!window.slackCleanInitialized) {
       const info = getActiveTeamInfo();
       if (!info) {
         // UI fields default to offline
-        shadowRoot.getElementById("sc-connection-name").innerText = "Not Connected";
-        shadowRoot.getElementById("sc-connection-url").innerText = "Unknown";
-        shadowRoot.getElementById("sc-connection-uid").innerText = "Unknown";
+        shadowRoot.getElementById("sc-connection-name").innerText = t("dashNotConnected", "Not Connected");
+        shadowRoot.getElementById("sc-connection-url").innerText = t("dashUnknown", "Unknown");
+        shadowRoot.getElementById("sc-connection-uid").innerText = t("dashUnknown", "Unknown");
         
-        shadowRoot.getElementById("sc-selected-title").innerText = "No Conversation Connected";
-        shadowRoot.getElementById("sc-selected-subtitle").innerText = "Please log in to Slack and go to a workspace channel.";
+        shadowRoot.getElementById("sc-selected-title").innerText = t("dashNoConversationConnected", "No Conversation Connected");
+        shadowRoot.getElementById("sc-selected-subtitle").innerText = t("dashLoginHint", "Please log in to Slack and go to a workspace channel.");
         
         showCustomAlert(
           t("modalAuthErrorTitle", "Authentication Error"),
@@ -1227,9 +1327,9 @@ if (!window.slackCleanInitialized) {
       const targetChannelId = info.channelId;
 
       // Populate Connection Details
-      shadowRoot.getElementById("sc-connection-name").innerText = activeTeam.name || "Slack Workspace";
-      shadowRoot.getElementById("sc-connection-url").innerText = activeTeam.url || "Slack URL";
-      shadowRoot.getElementById("sc-connection-uid").innerText = activeTeam.userId || "User";
+      shadowRoot.getElementById("sc-connection-name").innerText = activeTeam.name || t("dashSlackWorkspace", "Slack Workspace");
+      shadowRoot.getElementById("sc-connection-url").innerText = activeTeam.url || t("dashSlackUrl", "Slack URL");
+      shadowRoot.getElementById("sc-connection-uid").innerText = activeTeam.userId || t("dashUserFallback", "User");
 
       // Load workspace and active channel data
       loadUserCache().then(() => {
@@ -1238,8 +1338,8 @@ if (!window.slackCleanInitialized) {
             checkAndResumeState();
           });
         } else {
-          shadowRoot.getElementById("sc-selected-title").innerText = "No Conversation Active";
-          shadowRoot.getElementById("sc-selected-subtitle").innerText = "Click a Channel or DM in Slack's sidebar — it will be detected automatically.";
+          shadowRoot.getElementById("sc-selected-title").innerText = t("dashNoConversationActive", "No Conversation Active");
+          shadowRoot.getElementById("sc-selected-subtitle").innerText = t("dashNoConversationHint", "Click a Channel or DM in Slack's sidebar — it will be detected automatically.");
           logConsole(t("logNoConversationDetected", "No conversation detected yet. Click a channel or DM in Slack and it will be picked up automatically."), "warn");
         }
       });
@@ -1273,10 +1373,16 @@ if (!window.slackCleanInitialized) {
       if (!host) return;
 
       // De-activate other theme switcher buttons
-      shadowRoot.querySelectorAll(".theme-bubble").forEach(btn => btn.classList.remove("active"));
+      shadowRoot.querySelectorAll(".theme-bubble").forEach(btn => {
+        btn.classList.remove("active");
+        btn.setAttribute("aria-pressed", "false");
+      });
       
       const targetBtn = shadowRoot.querySelector(`.theme-bubble.${themeName}`);
-      if (targetBtn) targetBtn.classList.add("active");
+      if (targetBtn) {
+        targetBtn.classList.add("active");
+        targetBtn.setAttribute("aria-pressed", "true");
+      }
 
       if (themeName === 'neon') {
         host.style.setProperty('--color-purple', '#8b5cf6');
@@ -1285,20 +1391,25 @@ if (!window.slackCleanInitialized) {
         host.style.setProperty('--gradient-glow-hover', 'linear-gradient(135deg, #a78bfa 0%, #f472b6 100%)');
         host.style.setProperty('--accent-soft', 'rgba(139, 92, 246, 0.16)');
       } else if (themeName === 'matrix') {
-        host.style.setProperty('--color-purple', '#10b981');
-        host.style.setProperty('--color-pink', '#06b6d4');
-        host.style.setProperty('--gradient-glow', 'linear-gradient(135deg, #10b981 0%, #06b6d4 100%)');
-        host.style.setProperty('--gradient-glow-hover', 'linear-gradient(135deg, #34d399 0%, #22d3ee 100%)');
-        host.style.setProperty('--accent-soft', 'rgba(16, 185, 129, 0.16)');
+        // Darker emerald/cyan stops: buttons carry white text, and the bright
+        // #10b981/#06b6d4 pair only reached ~2.2-2.5:1. These are >= 5.3:1 (AA),
+        // and hover goes darker still rather than lighter.
+        host.style.setProperty('--color-purple', '#047857');
+        host.style.setProperty('--color-pink', '#0e7490');
+        host.style.setProperty('--gradient-glow', 'linear-gradient(135deg, #047857 0%, #0e7490 100%)');
+        host.style.setProperty('--gradient-glow-hover', 'linear-gradient(135deg, #065f46 0%, #155e75 100%)');
+        host.style.setProperty('--accent-soft', 'rgba(4, 120, 87, 0.16)');
       } else if (themeName === 'fusion') {
-        host.style.setProperty('--color-purple', '#f59e0b');
-        host.style.setProperty('--color-pink', '#ef4444');
-        host.style.setProperty('--gradient-glow', 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)');
-        host.style.setProperty('--gradient-glow-hover', 'linear-gradient(135deg, #fbbf24 0%, #f87171 100%)');
-        host.style.setProperty('--accent-soft', 'rgba(245, 158, 11, 0.16)');
+        // Same reasoning for amber/red: #b45309/#b91c1c are >= 5:1 with white text.
+        host.style.setProperty('--color-purple', '#b45309');
+        host.style.setProperty('--color-pink', '#b91c1c');
+        host.style.setProperty('--gradient-glow', 'linear-gradient(135deg, #b45309 0%, #b91c1c 100%)');
+        host.style.setProperty('--gradient-glow-hover', 'linear-gradient(135deg, #92400e 0%, #991b1b 100%)');
+        host.style.setProperty('--accent-soft', 'rgba(180, 83, 9, 0.16)');
       }
       
-      logConsole(t("logThemeSet", `Interface theme set to: ${themeName.toUpperCase()}`, [themeName.toUpperCase()]), "info");
+      const themeLabel = targetBtn ? (targetBtn.getAttribute("aria-label") || themeName) : themeName;
+      logConsole(t("logThemeSet", `Interface theme set to: ${themeLabel.toUpperCase()}`, [themeLabel.toUpperCase()]), "info");
     }
 
 
@@ -1322,9 +1433,7 @@ if (!window.slackCleanInitialized) {
         }, (response) => {
           if (chrome.runtime.lastError) return;
 
-          // background.js's GET_JOB_STATUS handler always sends otherJobs (an array)
-          // alongside the singular otherJob it keeps only for backward compatibility,
-          // so there's no response shape where otherJobs is missing but otherJob isn't.
+          // background.js's GET_JOB_STATUS handler always sends otherJobs (an array).
           const pausedElsewhere = (response && response.otherJobs || []).filter(j => j.isPaused);
 
           // Only alert about a paused-elsewhere job the FIRST time it's seen — without
@@ -1394,7 +1503,7 @@ if (!window.slackCleanInitialized) {
                     sendJobControl("RESUME_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
                       if (!jobFound) {
                         logConsole(t("logResumeFailed", "Could not resume — background service worker unavailable. Please reload Slack."), "error");
-                        stopOperations("Error");
+                        stopOperations(t("dashStatusError", "Error"));
                         return;
                       }
                       isRunning = true;
@@ -1439,10 +1548,25 @@ if (!window.slackCleanInitialized) {
       }
     }
 
+    // Focus return for the modals below: remember what had focus when a modal
+    // opened (ignoring controls inside another modal, so chained dialogs return
+    // to the original trigger) and put focus back once it closes.
+    let modalOpener = null;
+    function rememberModalOpener() {
+      const active = shadowRoot.activeElement;
+      if (active && !active.closest(".verification-overlay")) modalOpener = active;
+    }
+    function restoreModalOpenerFocus() {
+      const el = modalOpener;
+      modalOpener = null;
+      if (el && el.isConnected && !el.disabled && isFocusableVisible(el)) el.focus();
+    }
+
     // Custom non-blocking Alert Dialog helper
     function showCustomAlert(title, message, callback) {
       const modal = shadowRoot.getElementById("sc-alert-modal");
       if (!modal) return;
+      rememberModalOpener();
       
       shadowRoot.getElementById("sc-alert-title").innerText = title;
       shadowRoot.getElementById("sc-alert-message").innerText = message;
@@ -1451,44 +1575,48 @@ if (!window.slackCleanInitialized) {
       const newOkBtn = okBtn.cloneNode(true);
       okBtn.parentNode.replaceChild(newOkBtn, okBtn);
       
-      newOkBtn.focus();
-      
       newOkBtn.addEventListener("click", () => {
         modal.classList.add("hidden");
+        restoreModalOpenerFocus();
         if (callback) callback();
       });
       modal.classList.remove("hidden");
+      newOkBtn.focus();
     }
 
     // Custom non-blocking Confirmation Dialog helper (prevents accidental confirmation by default-focusing cancel)
     function showCustomConfirm(title, message, okText, cancelText, callback) {
       const modal = shadowRoot.getElementById("sc-confirm-modal");
       if (!modal) return;
+      rememberModalOpener();
 
       shadowRoot.getElementById("sc-confirm-title").innerText = title;
       shadowRoot.getElementById("sc-confirm-message").innerText = message;
 
       const okBtn = shadowRoot.getElementById("sc-confirm-ok-btn");
-      okBtn.innerText = okText || "Confirm";
+      okBtn.innerText = okText || t("dashConfirm", "Confirm");
       const newOkBtn = okBtn.cloneNode(true);
       okBtn.parentNode.replaceChild(newOkBtn, okBtn);
 
       const cancelBtn = shadowRoot.getElementById("sc-confirm-cancel-btn");
-      cancelBtn.innerText = cancelText || "Cancel";
+      cancelBtn.innerText = cancelText || t("dashCancel", "Cancel");
       const newCancelBtn = cancelBtn.cloneNode(true);
       cancelBtn.parentNode.replaceChild(newCancelBtn, cancelBtn);
 
-      newCancelBtn.focus();
-
-      newOkBtn.addEventListener("click", () => {
+      newOkBtn.addEventListener("click", (e) => {
+        // Confirm is what starts deletions/cancels: only a real user gesture counts.
+        if (!e.isTrusted) return;
         modal.classList.add("hidden");
+        restoreModalOpenerFocus();
         callback(true);
       });
       newCancelBtn.addEventListener("click", () => {
         modal.classList.add("hidden");
+        restoreModalOpenerFocus();
         callback(false);
       });
       modal.classList.remove("hidden");
+      newCancelBtn.focus();
     }
 
     // Custom non-blocking single-text-input Prompt Dialog helper (e.g. naming a preset).
@@ -1496,6 +1624,7 @@ if (!window.slackCleanInitialized) {
     function showCustomPrompt(title, message, placeholder, callback) {
       const modal = shadowRoot.getElementById("sc-prompt-modal");
       if (!modal) return;
+      rememberModalOpener();
 
       shadowRoot.getElementById("sc-prompt-title").innerText = title;
       shadowRoot.getElementById("sc-prompt-message").innerText = message || "";
@@ -1521,6 +1650,7 @@ if (!window.slackCleanInitialized) {
       const finish = (value) => {
         input.removeEventListener("input", onInput);
         modal.classList.add("hidden");
+        restoreModalOpenerFocus();
         callback(value);
       };
 
@@ -1584,7 +1714,10 @@ if (!window.slackCleanInitialized) {
         if (el && val !== undefined) el.checked = !!val;
       };
 
-      setVal("sc-filter-sender", state.sender);
+      // A preset may narrow the sender to "me" but never widen it to "all": that
+      // switch targets other people's messages and must be a deliberate choice
+      // made in the form, not something a one-click preset load does silently.
+      if (state.sender === "me") setVal("sc-filter-sender", "me");
       setVal("sc-filter-date", state.dateMode);
       setVal("sc-filter-days", state.days);
       setVal("sc-filter-start-date", state.startDate);
@@ -1680,48 +1813,49 @@ if (!window.slackCleanInitialized) {
     // one exists, is still running unaffected under a different/stale key, so a
     // caller must NOT tell the user it was paused/resumed/cancelled in that case.
     function sendJobControl(type, teamId, channelId, callback) {
+      // The worker broadcasts the cancelled-job JOB_UPDATE before it answers this
+      // request, so mark the cancel as ours: otherwise that broadcast reads as a
+      // job "stopped outside this tab" (see the JOB_UPDATE handler).
+      if (type === "CANCEL_DELETION") localCancelPending = true;
       chrome.runtime.sendMessage({ type, teamId, channelId }, (res) => {
+        if (type === "CANCEL_DELETION") setTimeout(() => { localCancelPending = false; }, 2000);
         const delivered = !chrome.runtime.lastError;
         const jobFound = delivered && !!res && !!res.success;
         callback(delivered, jobFound);
       });
     }
 
-    // Auto-pauses on channel switching drift detection to prevent accidental data destruction
+    // Follows Slack navigation. A running or paused job is bound (in the worker)
+    // to the workspace/channel it was started in, so navigating elsewhere neither
+    // pauses nor re-targets it: the dashboard stays pinned to the job's channel
+    // until the job ends, then re-syncs to wherever the user is (resyncTargetToUrl).
+    // With no job, the dashboard simply follows the user to the new conversation.
+    let lastBoundNoticeKey = null;
     function handleUrlChange(oldUrl, newUrl) {
       const info = getActiveTeamInfo();
       if (!info) return;
 
+      const leftTeam = activeTeam && info.team && info.team.id !== activeTeam.id;
+      const leftChannel = activeChannel && info.channelId !== activeChannel.id;
+
+      if (isRunning && (leftTeam || leftChannel)) {
+        // Say it once per destination, not on every poll tick / hop.
+        const noticeKey = `${info.team && info.team.id}_${info.channelId}`;
+        if (noticeKey !== lastBoundNoticeKey) {
+          lastBoundNoticeKey = noticeKey;
+          const name = activeChannel ? activeChannel.name : "";
+          logConsole(isPaused
+            ? t("logPausedJobStaysBound", `The paused clean stays bound to "${name}". Resume or cancel it here at any time.`, [String(name)])
+            : t("logJobContinuesInBackground", `The clean of "${name}" keeps running in the background while you browse. This dashboard keeps showing its progress.`, [String(name)]), "info");
+        }
+        return;
+      }
+      lastBoundNoticeKey = null;
+
       // Workspace (team) switch within the same tab — handle BEFORE channel logic,
       // since the channel id also changes and would otherwise be interpreted against
       // the stale workspace. activeTeam holds the credentials every operation uses.
-      if (activeTeam && info.team && info.team.id !== activeTeam.id) {
-        if (isRunning) {
-          // A job is bound to the PREVIOUS workspace. Never rebind mid-job: pause it
-          // if it's actively deleting (drift protection), otherwise leave it bound.
-          if (!isPaused) {
-            sendJobControl("PAUSE_DELETION", activeTeam.id, activeChannel ? activeChannel.id : null, (delivered, jobFound) => {
-              if (!jobFound) {
-                // Undeliverable, or no matching job at this key -- it was NOT
-                // paused. Never claim it was: the real job may still be running
-                // unattended under whatever key it's actually bound to.
-                logConsole(t("logWorkspaceSwitchPauseFailed", "[Warning] Workspace switch detected, but the background worker found no matching job to pause. If a clean is still running, it was NOT paused by this — check the original workspace."), "error");
-                return;
-              }
-              isPaused = true;
-              syncButtonStates();
-              logConsole(t("logWorkspaceSwitchPause", "[Warning] Workspace switch detected! Bulk clean auto-paused to avoid operating on the wrong workspace."), "error");
-              showCustomAlert(
-                t("modalExecutionPausedTitle", "Execution Paused"),
-                t("modalExecutionPausedWorkspaceMsg", "You switched workspaces while a clean was running. It was paused and stays bound to the original workspace. Return there to resume, or cancel it before working here.")
-              );
-            });
-          } else {
-            logConsole(t("logPausedBoundWorkspace", "A paused clean is still bound to its original workspace. Return to it to resume, or cancel it before switching."), "warn");
-          }
-          return; // stay pinned to the old workspace/channel
-        }
-        // No job in flight — adopt the new workspace (and its conversation).
+      if (leftTeam) {
         if (shadowHost && shadowHost.style.display !== "none") {
           switchWorkspace(info);
         }
@@ -1739,34 +1873,23 @@ if (!window.slackCleanInitialized) {
         return;
       }
 
-      if (info.channelId !== activeChannel.id) {
-        if (isRunning && !isPaused) {
-          // Drift protection: pause if we leave the target while deleting
-          // (including navigating to a non-conversation view).
-          sendJobControl("PAUSE_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
-            if (!jobFound) {
-              logConsole(t("logNavigationPauseFailed", "[Warning] Slack navigation detected, but the background worker found no matching job to pause. If a clean is still running, it was NOT paused by this."), "error");
-              return;
-            }
-            isPaused = true;
-            syncButtonStates();
-            logConsole(t("logNavigationPause", "[Warning] Slack navigation detected! Bulk clean auto-paused to prevent channel drift."), "error");
+      if (leftChannel && info.channelId && shadowHost && shadowHost.style.display !== "none") {
+        logConsole(t("logSyncingChannel", `Syncing workspace channel target details: ${info.channelId}`, [String(info.channelId)]), "info");
+        switchTargetChannel(info.channelId);
+      }
+    }
 
-            showCustomAlert(
-              t("modalExecutionPausedTitle", "Execution Paused"),
-              t("modalExecutionPausedChannelMsg", "You have navigated away from the target channel. The cleaner process has been paused. Return to the target channel to resume, or discard operations.")
-            );
-          });
-        } else if (!isRunning && info.channelId && shadowHost && shadowHost.style.display !== "none") {
-          // Re-target only when there's an actual new conversation AND no job is
-          // active. If a job is paused (isRunning && isPaused), it stays bound to
-          // its original channel — re-targeting here would orphan that job and
-          // misroute subsequent pause/resume/cancel messages to the wrong channel.
-          logConsole(t("logSyncingChannel", `Syncing workspace channel target details: ${info.channelId}`, [String(info.channelId)]), "info");
-          switchTargetChannel(info.channelId);
-        } else if (isRunning) {
-          logConsole(t("logPausedBoundChannel", "A paused clean is still bound to its channel. Return to it to resume, or cancel it before switching."), "warn");
-        }
+    // Once a job has ended, point the (visible) dashboard back at the workspace/
+    // conversation the user is actually looking at — it stayed pinned to the job's
+    // channel while the job ran (see handleUrlChange).
+    function resyncTargetToUrl() {
+      if (isRunning || !shadowHost || shadowHost.style.display === "none") return;
+      const info = getActiveTeamInfo();
+      if (!info) return;
+      if (activeTeam && info.team && info.team.id !== activeTeam.id) {
+        switchWorkspace(info);
+      } else if (info.channelId && (!activeChannel || info.channelId !== activeChannel.id)) {
+        switchTargetChannel(info.channelId);
       }
     }
 
@@ -1791,57 +1914,31 @@ if (!window.slackCleanInitialized) {
       const getEl = (id) => shadowRoot.getElementById(id);
 
       // Minimize Overlay View to bottom floating widget
+      const modalRoot = dashboardEl.querySelector(".dashboard-modal");
       getEl("sc-btn-minimize").addEventListener("click", () => {
         dashboardEl.classList.add("minimized");
+        // The floating widget doesn't block Slack, so it isn't modal.
+        if (modalRoot) modalRoot.setAttribute("aria-modal", "false");
         logConsole(t("logMinimized", "Dashboard minimized to floating widget."), "info");
       });
 
       // Maximize Overlay View to full-screen view
       getEl("sc-btn-maximize").addEventListener("click", () => {
         dashboardEl.classList.remove("minimized");
+        if (modalRoot) modalRoot.setAttribute("aria-modal", "true");
         logConsole(t("logMaximized", "Dashboard maximized to full view."), "info");
       });
 
-      // Close Dashboard (Hide host in DOM instead of destroying)
+      // Close Dashboard (Hide host in DOM instead of destroying). Closing never
+      // cancels anything: a running job keeps going in the background and a paused
+      // one stays paused. Cancel is its own explicit button.
       getEl("sc-btn-close").addEventListener("click", () => {
         if (isRunning) {
-          showCustomConfirm(
-            t("modalCloseDashboardTitle", "Close Dashboard?"),
-            t("modalCloseDashboardMsg", "A clean operation is running. Exiting will cancel all ongoing processes. Are you sure you want to close?"),
-            t("modalCloseAndStop", "Close and Stop"),
-            t("modalKeepRunning", "Keep Running"),
-            (confirmed) => {
-              if (confirmed) {
-                sendJobControl("CANCEL_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
-                  if (!delivered) {
-                    // The cancel didn't reach the worker — the job may STILL be running.
-                    // Don't claim it stopped or hide the dashboard; tell the user to retry.
-                    logConsole(t("logStopUnreachable", "Could not reach the background worker to stop the job. It may still be running — reload Slack and try again."), "error");
-                    showCustomAlert(
-                      t("modalCouldNotStopTitle", "Could Not Stop"),
-                      t("modalCouldNotStopMsg", "The stop request didn't reach the background worker, so the clean may still be running. Reload the Slack page and try again.")
-                    );
-                    return;
-                  }
-                  if (!jobFound) {
-                    // No job existed at this key -- warn, but still reset the local UI:
-                    // from this tab's view there's nothing left to track either way.
-                    logConsole(t("logCancelNoJob", "Cancel reached the background worker, but found no matching job at this workspace/channel."), "warn");
-                  }
-                  stopOperations();
-                  // Prune already-deleted messages from the checklist, same as the
-                  // "Finished" path -- otherwise reopening the dashboard and clicking
-                  // Delete without a fresh scan resubmits everything, including
-                  // whatever this job already deleted before the cancel landed.
-                  resetScanResultsUI();
-                  hideDashboard();
-                });
-              }
-            }
-          );
-        } else {
-          hideDashboard();
+          logConsole(isPaused
+            ? t("logClosedJobPaused", "Dashboard closed. The paused clean stays paused — reopen Erasechat to resume or cancel it.")
+            : t("logClosedJobRunning", "Dashboard closed. The clean keeps running in the background — reopen Erasechat to follow it."), "info");
         }
+        hideDashboard();
       });
 
       function hideDashboard() {
@@ -1876,8 +1973,10 @@ if (!window.slackCleanInitialized) {
         runScan();
       });
 
-      // Delete Action Button Event (Toggle Start/Pause/Resume)
-      getEl("sc-btn-delete").addEventListener("click", () => {
+      // Delete Action Button Event (Toggle Start/Pause/Resume). Destructive, so
+      // only a real user gesture counts — never a synthetic .click().
+      getEl("sc-btn-delete").addEventListener("click", (e) => {
+        if (!e.isTrusted) return;
         handleDeleteClick();
       });
 
@@ -1907,12 +2006,14 @@ if (!window.slackCleanInitialized) {
                 } else {
                   logConsole(t("logCanceledByUser", "Bulk deletion canceled by user."), "warn");
                 }
-                stopOperations("Canceled");
+                announce(t("srJobCanceled", "Deletion canceled."));
+                stopOperations(t("dashStatusCanceled", "Canceled"));
                 // Prune already-deleted messages from the checklist, same as the
                 // "Finished" path -- otherwise clicking Delete again without a fresh
                 // scan resubmits everything, including whatever this job already
                 // deleted before the cancel landed.
                 resetScanResultsUI();
+                resyncTargetToUrl();
               });
             }
           }
@@ -2081,12 +2182,16 @@ if (!window.slackCleanInitialized) {
       getEl("sc-verify-cancel-btn").addEventListener("click", () => {
         getEl("sc-verify-modal").classList.add("hidden");
         getEl("sc-verify-input").value = "";
+        restoreModalOpenerFocus();
       });
 
-      getEl("sc-verify-confirm-btn").addEventListener("click", () => {
+      getEl("sc-verify-confirm-btn").addEventListener("click", (e) => {
+        // Starts a bulk delete: only a real user gesture counts.
+        if (!e.isTrusted) return;
         getEl("sc-verify-confirm-btn").disabled = true;
         getEl("sc-verify-modal").classList.add("hidden");
         getEl("sc-verify-input").value = "";
+        restoreModalOpenerFocus();
         startDeletionProcess();
       });
     }
@@ -2095,10 +2200,19 @@ if (!window.slackCleanInitialized) {
     function setupThemeControls() {
       shadowRoot.querySelectorAll(".theme-bubble").forEach(btn => {
         btn.addEventListener("click", (e) => {
-          const themeName = e.target.getAttribute("data-theme");
+          const themeName = e.currentTarget.getAttribute("data-theme");
           setTheme(themeName);
         });
       });
+    }
+
+    // True when the element is actually rendered: not inside a .hidden/[hidden]
+    // subtree and laid out (offsetParent is null for display:none ancestors;
+    // position:fixed elements have a null offsetParent too, so allow those).
+    function isFocusableVisible(el) {
+      if (el.closest(".hidden, [hidden]")) return false;
+      if (el.offsetParent !== null) return true;
+      return getComputedStyle(el).position === "fixed";
     }
 
     // Keyboard focus trap inside Shadow DOM for Accessibility (a11y) compliance (Modal Scoped)
@@ -2150,7 +2264,9 @@ if (!window.slackCleanInitialized) {
           }
 
           const focusableSelectors = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
-          const focusables = Array.from(containerEl.querySelectorAll(focusableSelectors));
+          // Skip controls in hidden modals/rows — otherwise Tab from the last
+          // visible control "wraps" onto an invisible button and focus vanishes.
+          const focusables = Array.from(containerEl.querySelectorAll(focusableSelectors)).filter(isFocusableVisible);
           if (focusables.length === 0) return;
 
           const firstEl = focusables[0];
@@ -2205,19 +2321,13 @@ if (!window.slackCleanInitialized) {
       // results and leaving the user to wonder why. This is an advisory check only
       // (see isSafeRegexPreview above); the actual decision is always made by
       // shared-filters.js in the background worker.
-      //
-      // Deliberately NOT run through t()/data-i18n: this is a diagnostic edge case
-      // (an invalid or unsafe filter pattern), and this codebase's existing i18n
-      // scope decision already leaves comparable diagnostic text — the live
-      // execution-log narration — English-only (see CHANGELOG.md). Adding new
-      // locale keys here is out of scope for this change.
       const patternIssue = checkTextFilterPattern(filterText);
       if (patternIssue) {
         const warnMsg = patternIssue === "unsafe"
-          ? `Your /regex/ text filter ("${filterText}") looks unsafe (too long, or shaped like a runaway backtracking pattern) and will be treated as a plain literal substring instead of a regex — it will likely match nothing. Simplify the pattern if you intended it as a regex.`
-          : `Your /regex/ text filter ("${filterText}") isn't a valid regular expression and will be treated as a plain literal substring instead — it will likely match nothing. Check the pattern syntax.`;
+          ? t("warnRegexUnsafe", `Your /regex/ text filter ("${filterText}") looks unsafe (too long, or shaped like a runaway backtracking pattern) and will be treated as a plain literal substring instead of a regex — it will likely match nothing. Simplify the pattern if you intended it as a regex.`, [String(filterText)])
+          : t("warnRegexInvalid", `Your /regex/ text filter ("${filterText}") isn't a valid regular expression and will be treated as a plain literal substring instead — it will likely match nothing. Check the pattern syntax.`, [String(filterText)]);
         logConsole(warnMsg, "warn");
-        showCustomAlert("Text Filter Pattern Rejected", warnMsg);
+        showCustomAlert(t("modalRegexRejectedTitle", "Text Filter Pattern Rejected"), warnMsg);
       }
 
       const rangeResult = computeScanTimeRange(filterDate, {
@@ -2244,8 +2354,12 @@ if (!window.slackCleanInitialized) {
       logConsole(t("logQuerying", "Querying Slack APIs in background..."), "info");
 
       // Guard the scan against a response that never arrives (SW suspended mid-scan).
-      // `scanSettled` ensures the timeout and the real callback don't both run.
+      // `scanSettled` ensures the timeout and the real callback don't both restore
+      // the UI; a response that arrives after the timeout is still applied below
+      // (as long as no newer scan has started), so a slow scan isn't simply lost.
+      const myGeneration = ++scanGeneration;
       let scanSettled = false;
+      let busyNoticeShown = false;
       const restoreScanUI = () => {
         scanBtn.disabled = false;
         scanBtn.innerText = t("dashScan", "Scan Messages");
@@ -2257,18 +2371,19 @@ if (!window.slackCleanInitialized) {
         restoreScanUI();
         // Deliberately does NOT claim the scan stopped: this timeout only means no
         // response arrived in time. The worker may have been suspended (scan really
-        // is gone) or may still be paginating a heavily-throttled channel. It refuses
-        // a duplicate sweep of the same conversation while one is still running, so
-        // re-scanning is safe either way — it just reports "already running" instead
-        // of doubling the API load.
-        logConsole(t("logScanTimeout", "No scan result after 2 minutes. The background worker may have been suspended, or may still be working through a throttled channel. Re-run Scan — a scan that is still running will say so rather than starting a second one."), "error");
+        // is gone) or may still be paginating a heavily-throttled channel. If it is
+        // still running, its result is shown here when it arrives, and re-running
+        // Scan with the same filters joins that sweep (or gets its cached result)
+        // instead of starting a second one.
+        scanTimedOutKey = `${activeTeam.id}_${targetChannelId}`;
+        logConsole(t("logScanTimeoutWaiting", "No scan result after 2 minutes. The background worker may have been suspended, or may still be working through a throttled channel — if it finishes, the results will appear here. Re-running Scan with the same filters picks up that result instead of starting over."), "error");
         showCustomAlert(
           t("modalScanTimeoutTitle", "Scan Did Not Finish In Time"),
-          t("modalScanTimeoutMsg", "No result came back within 2 minutes. The background worker was either suspended or is still working through a heavily rate-limited channel.\n\nRe-run Scan: if one is still in progress you'll be told, and nothing is deleted either way.")
+          t("modalScanTimeoutWaitingMsg", "No result came back within 2 minutes. The background worker was either suspended or is still working through a heavily rate-limited channel.\n\nIf it is still running, the results will appear here when it finishes. Re-running Scan with the same filters reuses that result. Nothing is deleted either way.")
         );
       }, SCAN_TIMEOUT_MS);
 
-      chrome.runtime.sendMessage({
+      const scanRequest = {
         type: "RUN_SCAN",
         teamId: activeTeam.id,
         channelId: targetChannelId,
@@ -2280,18 +2395,45 @@ if (!window.slackCleanInitialized) {
         onlyAttachments,
         invertText,
         excludePinned,
-        userId: activeTeam.userId
-      }, (response) => {
-        // The timeout may have already restored the UI and given up on this scan.
-        if (scanSettled) return;
-        scanSettled = true;
-        clearTimeout(scanTimeout);
-        restoreScanUI();
+        userId: activeTeam.userId,
+        // Reuse the worker's just-finished result only when retrying a scan that
+        // timed out here; a normal Scan click always re-sweeps.
+        allowCached: scanTimedOutKey === `${activeTeam.id}_${targetChannelId}`
+      };
+      scanTimedOutKey = null;
 
-        if (chrome.runtime.lastError) {
-          logConsole(t("logScanApiFailed", `Scan API call failed: ${chrome.runtime.lastError.message}`, [chrome.runtime.lastError.message]), "error");
+      const sendScan = () => chrome.runtime.sendMessage(scanRequest, (response) => {
+        // A newer scan superseded this one; its own callback owns the UI.
+        if (myGeneration !== scanGeneration) return;
+
+        if (!chrome.runtime.lastError && response && response.error === "scan_in_progress" && !scanSettled) {
+          // Another scan of this conversation (different filters) is still
+          // sweeping. Wait for it to finish rather than failing this one.
+          if (!busyNoticeShown) {
+            busyNoticeShown = true;
+            logConsole(t("logScanWaitingForOther", "Another scan of this conversation is still running. Waiting for it to finish, then this scan will start..."), "warn");
+          }
+          setTimeout(() => {
+            if (!scanSettled && myGeneration === scanGeneration) sendScan();
+          }, SCAN_BUSY_RETRY_MS);
           return;
         }
+
+        const lateResult = scanSettled;
+        if (!scanSettled) {
+          scanSettled = true;
+          clearTimeout(scanTimeout);
+          restoreScanUI();
+        }
+
+        if (chrome.runtime.lastError) {
+          if (!lateResult) logConsole(t("logScanApiFailed", `Scan API call failed: ${chrome.runtime.lastError.message}`, [chrome.runtime.lastError.message]), "error");
+          return;
+        }
+
+        // A result arriving after the timeout is only useful if nothing has
+        // happened since: no job started, no newer results on screen.
+        if (lateResult && (isRunning || !response || !response.ok)) return;
 
         // Channel/workspace Race Protection: discard stale results if the user
         // navigated away during the scan. Check BOTH activeChannel/activeTeam AND
@@ -2314,6 +2456,13 @@ if (!window.slackCleanInitialized) {
         }
 
         if (response && response.ok) {
+          if (lateResult) {
+            logConsole(t("logScanLateResult", "The slow scan finished after all — showing its results now."), "info");
+          }
+          if (response.cached) {
+            const ageMin = Math.max(0, Math.round((Date.now() - (response.cachedAt || Date.now())) / 60000));
+            logConsole(t("logScanCached", `Reusing the result of the identical scan that finished ${ageMin} min ago (no new Slack requests).`, [String(ageMin)]), "info");
+          }
           scanResults = response.results || [];
           // Tag the results with the channel/workspace they were scanned in, so
           // the delete path can refuse to dispatch them against a different
@@ -2333,17 +2482,19 @@ if (!window.slackCleanInitialized) {
             ? t("logScanCappedNote", " (5,000-result limit reached — narrow your filters for more)")
             : (moreAvailable ? t("logScanMoreNote", " (scan depth limit reached — older messages were NOT examined)") : "");
           logConsole(t("logScanComplete", `Scan complete. Matches found: ${scanResults.length}`, [String(scanResults.length)]) + note, truncated ? "warn" : "info");
+          announce(t("srScanComplete", `Scan complete. ${scanResults.length} messages found.`, [String(scanResults.length)]));
 
-          // Advisory only, same rationale/scope as the pre-scan pattern-safety warning
-          // above (deliberately not routed through t() -- see that comment): a valid
-          // /regex/ filter only ever runs against the first 300 characters of a
-          // message's filterable text (shared-filters.js's MAX_REGEX_INPUT, a hard
-          // ReDoS backstop). That cap can silently under-match ordinary long messages
-          // with no indication anything was skipped, so report it when it actually
-          // happened rather than leaving it undiscoverable.
+          if (response.threadLookbackLimited) {
+            logConsole(t("logScanThreadLookbackNote", "Note: thread replies are checked for threads started up to 30 days before your start date. Replies under older threads were not checked."), "warn");
+          }
+
+          // A valid /regex/ filter only ever runs against the first 300 characters
+          // of a message's filterable text (shared-filters.js's MAX_REGEX_INPUT, a
+          // hard ReDoS backstop). That cap can silently under-match ordinary long
+          // messages, so report it when it actually happened.
           if (response.regexTruncatedCount > 0) {
             logConsole(
-              `Note: your /regex/ text filter only checks the first 300 characters of a message (a fixed safety limit). ${response.regexTruncatedCount} scanned message(s) were longer than that, so a match past character 300 would have been missed.`,
+              t("logRegexTruncatedNote", `Note: your /regex/ text filter only checks the first 300 characters of a message (a fixed safety limit). ${response.regexTruncatedCount} scanned message(s) were longer than that, so a match past character 300 would have been missed.`, [String(response.regexTruncatedCount)]),
               "warn"
             );
           }
@@ -2373,22 +2524,13 @@ if (!window.slackCleanInitialized) {
               t("modalMoreNotScannedMsg", `This channel has more history than a single scan examines, so only its most recent messages were checked (${scanResults.length} matched). Older matching messages exist but were NOT scanned. Use a date range to scan older messages, or delete this batch and scan again.`, [String(scanResults.length)])
             );
           }
-        } else if (response && response.error === "scan_in_progress") {
-          // A previous scan of this same conversation is still sweeping Slack (most
-          // likely the user hit the client-side scan timeout and retried). Say so
-          // plainly rather than reporting it as a failure — the first scan is still
-          // coming, and starting a second would only compete for the rate limit.
-          logConsole(t("logScanAlreadyRunning", "A scan of this conversation is already running. Waiting for it to finish rather than starting a second one."), "warn");
-          showCustomAlert(
-            t("modalScanAlreadyRunningTitle", "Scan Already Running"),
-            t("modalScanAlreadyRunningMsg", "A scan of this conversation is still in progress. Starting another would compete for the same Slack rate limit and make both slower, so this request was skipped. Give the first scan a moment to finish.")
-          );
         } else {
-          const reason = response ? (response.message || response.error || "Unknown error") : "No response from the background worker";
+          const reason = response ? (response.message || response.error || "Unknown error") : t("dashNoBgResponse", "No response from the background worker");
           logConsole(t("logScanRuntimeError", `Scan runtime error: ${reason}`, [String(reason)]), "error");
           showCustomAlert(t("modalScanFailedTitle", "Scan Failed"), t("modalScanFailedMsg", `The scan could not be completed: ${reason}`, [String(reason)]));
         }
       });
+      sendScan();
     }
 
     // NOTE: message filtering/qualification and ReDoS-safe regex checks live in
@@ -2421,7 +2563,7 @@ if (!window.slackCleanInitialized) {
         nm.textContent = t("dashNoMatches", "Zero messages matched the active filters. Try widening criteria.");
         container.innerHTML = "";
         container.appendChild(nm);
-        if (countEl) countEl.innerText = "0 items found";
+        if (countEl) countEl.innerText = t("dashItemsFound", "0 items found", ["0"]);
         return;
       }
 
@@ -2441,7 +2583,7 @@ if (!window.slackCleanInitialized) {
           const msg = scanResults[i];
           // Some messages (integrations/system posts) have no `user`; never let
           // that throw and abort the whole render chunk.
-          const authorName = userCache[msg.user] || msg.user || "Unknown";
+          const authorName = userCache[msg.user] || msg.user || t("dashUnknown", "Unknown");
           const initials = authorName.substring(0, 2).toUpperCase();
           
           const card = document.createElement("div");
@@ -2490,14 +2632,16 @@ if (!window.slackCleanInitialized) {
           if (msg.isThreadReply) {
             const threadBadge = document.createElement("span");
             threadBadge.className = "msg-badge-thread";
-            threadBadge.textContent = "Thread Reply";
+            threadBadge.textContent = t("dashBadgeThreadReply", "Thread Reply");
             meta.appendChild(threadBadge);
           } else if (msg.replyCount > 0) {
             const rootBadge = document.createElement("span");
             rootBadge.className = "msg-badge-thread";
             rootBadge.style.backgroundColor = "var(--color-pink)";
             rootBadge.style.color = "white";
-            rootBadge.textContent = `Thread Root (${msg.replyCount} replies will be deleted!)`;
+            // Deleting a thread root does NOT delete its replies: Slack keeps them
+            // and shows the parent as "This message was deleted."
+            rootBadge.textContent = t("dashBadgeThreadRoot", `Thread root (${msg.replyCount} replies stay; parent shows as deleted)`, [String(msg.replyCount)]);
             meta.appendChild(rootBadge);
           }
 
@@ -2505,7 +2649,7 @@ if (!window.slackCleanInitialized) {
 
           const textDiv = document.createElement("div");
           textDiv.className = "msg-text";
-          textDiv.textContent = msg.text || "[Empty Message]";
+          textDiv.textContent = msg.text || t("dashEmptyMessage", "[Empty Message]");
           wrapper.appendChild(textDiv);
 
           if (msg.files && msg.files.length > 0) {
@@ -2513,7 +2657,7 @@ if (!window.slackCleanInitialized) {
             fileDiv.style.fontSize = "10px";
             fileDiv.style.color = "var(--color-pink)";
             fileDiv.style.marginTop = "2px";
-            fileDiv.textContent = `📎 Contains ${msg.files.length} attached files`;
+            fileDiv.textContent = "📎 " + t("dashContainsFiles", `Contains ${msg.files.length} attached files`, [String(msg.files.length)]);
             wrapper.appendChild(fileDiv);
           }
 
@@ -2540,7 +2684,7 @@ if (!window.slackCleanInitialized) {
         }
       }
 
-      if (countEl) countEl.innerText = `${scanResults.length} items found`;
+      if (countEl) countEl.innerText = t("dashItemsFound", `${scanResults.length} items found`, [String(scanResults.length)]);
 
       renderChunk();
     }
@@ -2549,7 +2693,7 @@ if (!window.slackCleanInitialized) {
     function updateScanBadgeCount() {
       const checkboxes = shadowRoot.querySelectorAll(".msg-checkbox:checked");
       const countEl = shadowRoot.getElementById("sc-scan-count");
-      if (countEl) countEl.innerText = `${checkboxes.length} selected of ${scanResults.length} scanned`;
+      if (countEl) countEl.innerText = t("dashSelectedOfScanned", `${checkboxes.length} selected of ${scanResults.length} scanned`, [String(checkboxes.length), String(scanResults.length)]);
       
       // Don't flip the delete button while the chunked render is still adding
       // cards — enabling it early would allow a queue built from a partial list.
@@ -2575,8 +2719,12 @@ if (!window.slackCleanInitialized) {
         if (deleteQueue.length === 0) return;
 
         const hasThreadRoots = deleteQueue.some(msg => msg.replyCount > 0);
+        // Deleting a thread root doesn't delete its replies — Slack keeps them and
+        // shows the parent as "This message was deleted." — but the thread loses
+        // its opening message, which the user should know before confirming.
+        const threadRootNotice = t("modalThreadRootNotice", "Note: you selected one or more thread starters. Their replies (including other people's) are NOT deleted, but each thread will show \"This message was deleted.\" in place of its first message.");
         const warningPrefix = hasThreadRoots
-          ? t("modalThreadRootWarning", "CRITICAL WARNING: You have selected one or more Thread Roots. Slack will permanently delete ALL replies by other users in those threads!") + " "
+          ? threadRootNotice + " "
           : t("modalWarningPrefix", "WARNING: ");
 
         // Pin this queue to the channel/workspace it was built against.
@@ -2593,39 +2741,76 @@ if (!window.slackCleanInitialized) {
         }
         throttleDelay = delayVal;
 
-        if (deleteQueue.length > LARGE_DELETE_THRESHOLD) {
-          const verifyModal = shadowRoot.getElementById("sc-verify-modal");
-          const verifyDesc = verifyModal.querySelector(".sc-verify-desc");
-          if (verifyDesc) {
-            const verifyCountSpan = '<span id="sc-verify-count-label"></span>';
-            const verifyDeleteSpan = '<strong class="sc-verify-emphasis">DELETE</strong>';
-            const verifyIntroHtml = t("verifyCountIntro", `You are about to delete more than 100 messages (${verifyCountSpan} messages).`, [verifyCountSpan]);
-            const verifyConfirmHtml = t("verifyTypeDelete", `To confirm this operation, type the word ${verifyDeleteSpan} below:`, [verifyDeleteSpan]);
-            if (hasThreadRoots) {
-              const verifyWarningHtml = `<strong style="color:var(--color-pink)">${t("modalThreadRootWarning", "CRITICAL WARNING: You have selected one or more Thread Roots. Slack will permanently delete ALL replies by other users in those threads!")}</strong>`;
-              verifyDesc.innerHTML = `${verifyIntroHtml} <br><br>${verifyWarningHtml}<br><br>${verifyConfirmHtml}`;
-            } else {
-              verifyDesc.innerHTML = `${verifyIntroHtml} ${verifyConfirmHtml}`;
+        const confirmDeletion = () => {
+          if (deleteQueue.length > LARGE_DELETE_THRESHOLD) {
+            const verifyModal = shadowRoot.getElementById("sc-verify-modal");
+            const verifyDesc = verifyModal.querySelector(".sc-verify-desc");
+            if (verifyDesc) {
+              // Built from DOM nodes, never innerHTML: the translated sentences get an
+              // invisible marker as their $1 and are split around it, so the styled
+              // count/word are inserted as real elements and the text stays text.
+              const PLACEHOLDER = "\u2063";
+              const withNode = (text, node) => {
+                const [before, ...after] = text.split(PLACEHOLDER);
+                const frag = document.createDocumentFragment();
+                frag.append(before);
+                if (after.length) frag.append(node, after.join(""));
+                return frag;
+              };
+              const countLabel = document.createElement("span");
+              countLabel.id = "sc-verify-count-label";
+              const deleteWord = document.createElement("strong");
+              deleteWord.className = "sc-verify-emphasis";
+              deleteWord.textContent = "DELETE";
+              const introText = t("verifyCountIntro", `You are about to delete more than 100 messages (${PLACEHOLDER} messages).`, [PLACEHOLDER]);
+              const confirmText = t("verifyTypeDelete", `To confirm this operation, type the word ${PLACEHOLDER} below:`, [PLACEHOLDER]);
+              verifyDesc.replaceChildren(withNode(introText, countLabel));
+              if (hasThreadRoots) {
+                const warningEl = document.createElement("strong");
+                warningEl.style.color = "var(--color-pink)";
+                warningEl.textContent = threadRootNotice;
+                verifyDesc.append(document.createElement("br"), document.createElement("br"), warningEl,
+                  document.createElement("br"), document.createElement("br"));
+              } else {
+                verifyDesc.append(" ");
+              }
+              verifyDesc.append(withNode(confirmText, deleteWord));
             }
             shadowRoot.getElementById("sc-verify-count-label").innerText = deleteQueue.length;
+            shadowRoot.getElementById("sc-verify-confirm-btn").disabled = true;
+            rememberModalOpener();
+            verifyModal.classList.remove("hidden");
+            shadowRoot.getElementById("sc-verify-input").focus();
           } else {
-            shadowRoot.getElementById("sc-verify-count-label").innerText = deleteQueue.length;
+            showCustomConfirm(
+              t("modalConfirmDeletionTitle", "Confirm Deletion"),
+              t("modalConfirmDeletionMsg", `${warningPrefix}You are about to permanently delete ${deleteQueue.length} messages in channel "${activeChannel.name}". This action cannot be undone.`, [warningPrefix, String(deleteQueue.length), String(activeChannel.name)]),
+              t("dashStartDeleting", "Start Deleting"),
+              t("dashVerifyGoBack", "Go Back"),
+              (confirmed) => {
+                if (confirmed) {
+                  startDeletionProcess();
+                }
+              }
+            );
           }
-          shadowRoot.getElementById("sc-verify-confirm-btn").disabled = true;
-          verifyModal.classList.remove("hidden");
-          shadowRoot.getElementById("sc-verify-input").focus();
-        } else {
+        };
+
+        // "All Messages (admin)" scans can queue other people's messages. Make
+        // that explicit before the usual confirmation, with the actual count.
+        const othersCount = deleteQueue.filter(msg => !activeTeam.userId || msg.user !== activeTeam.userId).length;
+        if (othersCount > 0) {
           showCustomConfirm(
-            t("modalConfirmDeletionTitle", "Confirm Deletion"),
-            t("modalConfirmDeletionMsg", `${warningPrefix}You are about to permanently delete ${deleteQueue.length} messages in channel "${activeChannel.name}". This action cannot be undone.`, [warningPrefix, String(deleteQueue.length), String(activeChannel.name)]),
-            t("dashStartDeleting", "Start Deleting"),
+            t("modalOthersMessagesTitle", "Includes Other People's Messages"),
+            t("modalOthersMessagesMsg", `${othersCount} of the ${deleteQueue.length} selected messages were posted by other people (or by apps/bots), not by you. Deleting them requires admin rights and removes their content for everyone. Continue only if you intend to delete other people's messages.`, [String(othersCount), String(deleteQueue.length)]),
+            t("modalOthersMessagesContinue", "Yes, include them"),
             t("dashVerifyGoBack", "Go Back"),
             (confirmed) => {
-              if (confirmed) {
-                startDeletionProcess();
-              }
+              if (confirmed) confirmDeletion();
             }
           );
+        } else {
+          confirmDeletion();
         }
       } else {
         if (!isPaused) {
@@ -2639,8 +2824,11 @@ if (!window.slackCleanInitialized) {
               return;
             }
             isPaused = true;
+            clearRateLimitCountdown();
+            if (ui.consoleStatus) ui.consoleStatus.innerText = t("dashStatusPaused", "Paused");
             syncButtonStates();
             logConsole(t("logRequestingPause", "Requesting pause in background..."), "warn");
+            announce(t("srJobPaused", "Deletion paused."));
           });
         } else {
           sendJobControl("RESUME_DELETION", activeTeam.id, activeChannel.id, (delivered, jobFound) => {
@@ -2653,8 +2841,10 @@ if (!window.slackCleanInitialized) {
               return;
             }
             isPaused = false;
+            if (ui.consoleStatus) ui.consoleStatus.innerText = t("dashDeleting", "Deleting...");
             syncButtonStates();
             logConsole(t("logRequestingResume", "Requesting resume in background..."), "info");
+            announce(t("srJobResumed", "Deletion resumed."));
           });
         }
       }
@@ -2683,7 +2873,7 @@ if (!window.slackCleanInitialized) {
           t("modalDeletionAbortedTitle", "Deletion Aborted"),
           t("modalDeletionAbortedMsg", "The active conversation changed before deletion started, so the operation was cancelled to protect against deleting from the wrong channel. Please re-scan and try again.")
         );
-        stopOperations("Aborted");
+        stopOperations(t("dashStatusAborted", "Aborted"));
         return;
       }
 
@@ -2691,7 +2881,7 @@ if (!window.slackCleanInitialized) {
       isPaused = false;
       jobFinalized = false;
       deleteIndex = 0;
-      stats = { success: 0, fail: 0, skipped: 0, total: deleteQueue.length };
+      stats = { success: 0, fail: 0, skipped: 0, partial: 0, total: deleteQueue.length };
 
       toggleInputs(true);
       syncButtonStates();
@@ -2701,6 +2891,7 @@ if (!window.slackCleanInitialized) {
       if (minTitle) minTitle.innerText = t("dashDeleting", "Deleting...");
 
       logConsole(t("logDelegatingDeletion", `Delegating deletion of ${stats.total} items to background service worker...`, [String(stats.total)]), "info");
+      announce(t("srJobStarted", `Deleting ${stats.total} messages.`, [String(stats.total)]));
 
       const filterAttachments = shadowRoot.getElementById("sc-filter-attachments").checked;
 
@@ -2712,7 +2903,9 @@ if (!window.slackCleanInitialized) {
         // each item's action via the shared decideItemAction() (single source of
         // truth), so "preserve text" behavior survives a service-worker restart.
         // `hasAttachments` is carried because the worker never receives the full
-        // attachments array (only file IDs are needed for deletion).
+        // attachments array (only file IDs are needed for deletion). Scan results
+        // are already slimmed by the worker (see toScanResult in background.js):
+        // `blocks` is only present on items with files/attachments.
         deleteQueue: deleteQueue.map(msg => ({
           ts: msg.ts,
           user: msg.user,
@@ -2720,7 +2913,7 @@ if (!window.slackCleanInitialized) {
           text: msg.text,
           isThreadReply: msg.isThreadReply,
           parentTs: msg.parentTs,
-          hasAttachments: (msg.attachments || []).length > 0,
+          hasAttachments: !!msg.hasAttachments || (msg.attachments || []).length > 0,
           files: (msg.files || []).map(f => ({ id: f.id, name: f.name })),
           blocks: msg.blocks || []
         })),
@@ -2735,10 +2928,18 @@ if (!window.slackCleanInitialized) {
               t("modalAlreadyRunningTitle", "Already Running"),
               t("modalAlreadyRunningMsg", "A deletion job for this conversation is already running — possibly from another tab with the same channel open. Wait for it to finish, or pause/cancel it from that tab, before starting a new one.")
             );
+          } else if (response && (response.error === "scan_required" || response.error === "queue_not_from_scan" || response.error === "queue_not_owned")) {
+            // The worker only deletes what its own last scan of this conversation
+            // returned (and, in "Only My Messages" mode, only your messages).
+            logConsole(t("logQueueRejected", `The background worker refused the delete list (${response.error}). Run a fresh scan of this conversation, then try again.`, [String(response.error)]), "error");
+            showCustomAlert(
+              t("modalQueueRejectedTitle", "Please Scan Again"),
+              t("modalQueueRejectedMsg", "Some selected messages don't match a recent scan of this conversation (scans expire after 30 minutes). Nothing was deleted. Run Scan again, then start the deletion.")
+            );
           } else {
             logConsole(t("logStartDeletionError", "Error starting deletion process in background."), "error");
           }
-          stopOperations("Error");
+          stopOperations(t("dashStatusError", "Error"));
         }
       });
     }
@@ -2754,7 +2955,7 @@ if (!window.slackCleanInitialized) {
       }
 
       if (ui.progressTitle) {
-        ui.progressTitle.innerText = `Processing: ${deleteIndex}/${stats.total}`;
+        ui.progressTitle.innerText = t("dashProcessingProgress", `Processing: ${deleteIndex}/${stats.total}`, [String(deleteIndex), String(stats.total)]);
       }
       if (ui.statSuccess) ui.statSuccess.innerText = stats.success;
       if (ui.statFail) ui.statFail.innerText = stats.fail;
@@ -2768,23 +2969,22 @@ if (!window.slackCleanInitialized) {
         minCircle.style.strokeDashoffset = offset;
       }
       if (minProgressText) {
-        minProgressText.innerText = `Deleted ${deleteIndex} of ${stats.total}`;
+        // deleteIndex counts every processed item — failures, skips and partial
+        // trims included — so "Deleted X" would overstate what was removed.
+        minProgressText.innerText = t("dashProcessedOf", `Processed ${deleteIndex} of ${stats.total}`, [String(deleteIndex), String(stats.total)]);
       }
     }
 
     // Reset operations controls
     function stopOperations(statusText) {
-      // Default resting state is localized; explicit statuses (Finished/Canceled/
-      // Aborted/Error) are passed by callers as operational text.
+      // Default resting state is "Idle"; callers pass an already-localized
+      // status (Finished/Canceled/Aborted/Error/Stopped).
       statusText = statusText || t("dashIdle", "Idle");
       isRunning = false;
       isPaused = false;
 
       // Clear active rate limit countdown timers
-      if (rateLimitInterval) {
-        clearInterval(rateLimitInterval);
-        rateLimitInterval = null;
-      }
+      clearRateLimitCountdown();
       
       toggleInputs(false);
 
@@ -2844,11 +3044,7 @@ if (!window.slackCleanInitialized) {
       checkboxes.forEach(cb => cb.disabled = disabled);
     }
 
-    // Convert member strings to HSL matching colors
-    // KEEP THIS IN SYNC WITH shared-filters.js's stringToColor(). Duplicated (rather
-    // than shared) because this is a content script, isolated from the background
-    // worker's own copy -- purely cosmetic (avatar color), so a drift here would only
-    // ever produce a wrong color, never a wrong delete.
+    // Deterministic avatar color from a user ID (purely cosmetic).
     function stringToColor(str) {
       if (!str) return "#8B5CF6";
       let hash = 0;

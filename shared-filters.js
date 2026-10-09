@@ -93,6 +93,32 @@ function maskCharClasses(pattern) {
   return out;
 }
 
+// Structural check the regex-based rules below can't express: they only see one
+// level of parens, so wrapping a dangerous group in another group -- ((a|a))+,
+// (?:(a|a))+, ((a+)b)+ -- slipped past every one of them. Walks the (class-masked)
+// pattern with a paren stack and rejects any quantified group (+, *, {n,m}) whose
+// contents, at ANY nesting depth, contain an alternation or another quantifier.
+function hasQuantifiedRiskyGroup(masked) {
+  const stack = [];
+  for (let i = 0; i < masked.length; i++) {
+    const ch = masked[i];
+    if (ch === "\\") { i++; continue; }
+    if (ch === "(") {
+      stack.push(false);
+    } else if (ch === ")") {
+      if (stack.length === 0) continue;
+      const risky = stack.pop();
+      const next = masked[i + 1];
+      if (risky && (next === "+" || next === "*" || next === "{")) return true;
+      // A risky inner group makes every enclosing group risky too.
+      if (risky && stack.length) stack[stack.length - 1] = true;
+    } else if (stack.length && (ch === "|" || ch === "+" || ch === "*" || ch === "{")) {
+      stack[stack.length - 1] = true;
+    }
+  }
+  return false;
+}
+
 // Comprehensive ReDoS safety checker.
 function isSafeRegex(pattern) {
   // Reject excessively long patterns
@@ -133,6 +159,7 @@ function isSafeRegex(pattern) {
   // quantifiers (e.g. [{], [*]) — mask class contents first so they aren't
   // counted below.
   const maskedPattern = maskCharClasses(pattern);
+  if (hasQuantifiedRiskyGroup(maskedPattern)) return false;
   const quantifiers = (maskedPattern.match(/(?<!\\)[*+?{]/g) || []).length;
   if (quantifiers > MAX_QUANTIFIERS) return false;
 
@@ -344,23 +371,6 @@ function isSlackHostname(urlStr) {
   }
 }
 
-
-
-// Deterministic avatar color from an arbitrary string (UI helper, pure).
-function stringToColor(str) {
-  if (!str || typeof str !== "string") return "#8B5CF6";
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const colors = [
-    "#8B5CF6", "#EC4899", "#3B82F6", "#10B981", "#F59E0B",
-    "#EF4444", "#06B6D4", "#14B8A6", "#84CC16", "#A855F7"
-  ];
-  const idx = Math.abs(hash) % colors.length;
-  return colors[idx];
-}
-
 // Export for Node (tests). In the service worker / event page these become globals.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
@@ -368,7 +378,6 @@ if (typeof module !== "undefined" && module.exports) {
     isSafeRegex,
     qualifies,
     decideItemAction,
-    isSlackHostname,
-    stringToColor
+    isSlackHostname
   };
 }

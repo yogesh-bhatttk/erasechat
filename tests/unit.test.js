@@ -11,7 +11,6 @@ const {
   isSafeRegex,
   qualifies,
   decideItemAction,
-  stringToColor,
   isSlackHostname
 } = require('../shared-filters.js');
 
@@ -497,28 +496,6 @@ test('decideItemAction: attachment mode + no attachments/files -> skip (never de
 });
 
 
-
-// ============================================================
-// stringToColor — Deterministic Color Assignment
-// ============================================================
-
-test('stringToColor: returns default color for null/empty input', () => {
-  assert.equal(stringToColor(null), "#8B5CF6");
-  assert.equal(stringToColor(""), "#8B5CF6");
-  assert.equal(stringToColor(undefined), "#8B5CF6");
-});
-
-test('stringToColor: returns consistent color for same input', () => {
-  assert.equal(stringToColor("U123456"), stringToColor("U123456"));
-});
-
-test('stringToColor: returns a color from the predefined palette', () => {
-  const palette = [
-    "#8B5CF6", "#EC4899", "#3B82F6", "#10B981", "#F59E0B",
-    "#EF4444", "#06B6D4", "#14B8A6", "#84CC16", "#A855F7"
-  ];
-  assert.ok(palette.includes(stringToColor("TestUser123")));
-});
 
 // ============================================================
 // isSlackHostname — Origin validation (verifies the SECURE behavior,

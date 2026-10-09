@@ -21,10 +21,15 @@
   --field-focus: #ffffff;
   --border: #e6e8eb;
   --border-hover: #d3d7dd;
+  /* Form-control boundaries (inputs/selects, switch off-track) must reach 3:1
+   * against their surroundings (WCAG 1.4.11); --border is only ~1.2:1. */
+  --border-field: #7c8698; /* 3.3:1 on --field, 3.7:1 on white */
+  --switch-off: #7c8698;
+  --ring-track: #d3d7dd;
 
   --text-primary: #101828;
   --text-secondary: #4b5563;
-  --text-muted: #98a2b3;
+  --text-muted: #667085; /* 4.8:1 on white (AA); was #98a2b3 at 2.6:1 */
 
   --shadow-modal: 0 24px 64px rgba(16, 24, 40, 0.22);
 
@@ -63,6 +68,9 @@
     --field-focus: #223150;
     --border: rgba(255, 255, 255, 0.09);
     --border-hover: rgba(255, 255, 255, 0.18);
+    --border-field: #64748b; /* 3.1:1 on --field */
+    --switch-off: #64748b;
+    --ring-track: rgba(255, 255, 255, 0.12);
 
     --text-primary: #f1f5f9;
     --text-secondary: #cbd5e1;
@@ -183,9 +191,10 @@
 }
 
 /* Theme picker ---------------------------------------------------------- */
+/* 24px: the WCAG 2.5.8 minimum target size (was 15px). */
 .theme-bubble {
-  width: 15px;
-  height: 15px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
@@ -194,8 +203,8 @@
 }
 
 .theme-bubble.neon { background: linear-gradient(135deg, #8b5cf6, #ec4899); }
-.theme-bubble.matrix { background: linear-gradient(135deg, #10b981, #06b6d4); }
-.theme-bubble.fusion { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+.theme-bubble.matrix { background: linear-gradient(135deg, #047857, #0e7490); }
+.theme-bubble.fusion { background: linear-gradient(135deg, #b45309, #b91c1c); }
 
 .theme-bubble:hover { transform: scale(1.15); }
 
@@ -298,7 +307,7 @@
 .form-group select {
   padding: 10px 12px;
   background-color: var(--field);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-field);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-size: 13px;
@@ -352,7 +361,7 @@
   position: absolute;
   cursor: pointer;
   inset: 0;
-  background-color: var(--border-hover);
+  background-color: var(--switch-off);
   transition: background-color 0.25s;
   border-radius: 22px;
 }
@@ -742,6 +751,23 @@ input:checked + .slider:before { transform: translateX(18px); }
 
 .hidden { display: none !important; }
 
+/* Visually hidden but announced (the polite status region). */
+.sc-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Progress ring background track: visible in light mode too (the old inline
+ * rgba(255,255,255,0.05) was invisible on a white card). */
+.sc-ring-track { stroke: var(--ring-track); }
+
 /* Focus rings ----------------------------------------------------------- */
 button:focus-visible,
 input:focus-visible,
@@ -976,7 +1002,7 @@ select:focus-visible,
   width: 100%;
   padding: 10px 12px;
   background-color: var(--field);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-field);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-family: inherit;

@@ -464,10 +464,11 @@ const SCAN_REQUEST = {
   userId: "U1"
 };
 
-test("RUN_SCAN: a duplicate scan of the same conversation is refused, not run twice", async () => {
+test("RUN_SCAN: a duplicate scan of the same conversation joins the running sweep, not run twice", async () => {
   // The dashboard abandons a scan after its own client-side timeout and invites a
-  // retry, while the worker keeps paginating. Without this guard the retry starts a
-  // second full sweep concurrently — doubling the API load that made the first slow.
+  // retry, while the worker keeps paginating. The retry must neither start a second
+  // full sweep (doubling the API load that made the first slow) nor be bounced:
+  // it waits for the in-flight sweep and gets its result.
   let releaseFirstScan;
   const gate = new Promise((resolve) => { releaseFirstScan = resolve; });
 
@@ -486,17 +487,189 @@ test("RUN_SCAN: a duplicate scan of the same conversation is refused, not run tw
   const first = sendMessage(handlers, SCAN_REQUEST);
   // Let the first scan get past ensureToken and into fetch before racing it.
   await new Promise((r) => setTimeout(r, 10));
-  const second = await sendMessage(handlers, SCAN_REQUEST);
-
-  assert.strictEqual(second.ok, false);
-  assert.strictEqual(second.error, "scan_in_progress",
-    "the second scan must be refused while the first is still sweeping");
+  // `latest` drifts forward on a real retry ("now" moved on) — still the same scan.
+  const second = sendMessage(handlers, { ...SCAN_REQUEST, latest: SCAN_REQUEST.latest + 30 });
 
   releaseFirstScan();
-  const firstResult = await first;
+  const [firstResult, secondResult] = await Promise.all([first, second]);
   assert.strictEqual(firstResult.ok, true, "the original scan still completes normally");
+  assert.strictEqual(secondResult.ok, true, "the retry receives the in-flight scan's result");
+  assert.deepStrictEqual(Array.from(secondResult.results, r => r.ts), ["1000.000"]);
   assert.strictEqual(stub.calls["conversations.history"], 1,
-    "the refused scan must not have issued any Slack API calls");
+    "the joined scan must not have issued any Slack API calls of its own");
+});
+
+test("RUN_SCAN: a scan with DIFFERENT filters is refused while one is in flight", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const stub = makeSlackFetch({
+    "conversations.history": async () => {
+      await gate;
+      return { ok: true, messages: [], response_metadata: { next_cursor: "" } };
+    }
+  });
+  const { handlers } = loadBackground({
+    fetchImpl: stub.fetch,
+    sessionTokens: { sc_token_T1: "xoxc-test" }
+  });
+
+  const first = sendMessage(handlers, SCAN_REQUEST);
+  await new Promise((r) => setTimeout(r, 10));
+  const second = await sendMessage(handlers, { ...SCAN_REQUEST, filterText: "other" });
+  assert.strictEqual(second.ok, false);
+  assert.strictEqual(second.error, "scan_in_progress");
+
+  release();
+  assert.strictEqual((await first).ok, true);
+});
+
+test("RUN_SCAN: a finished scan is served from the short-lived cache on retry, and START_DELETION invalidates it", async () => {
+  const stub = makeSlackFetch({
+    "conversations.history": () => ({
+      ok: true, messages: [{ ts: "1000.000", user: "U1", text: "hi" }], response_metadata: { next_cursor: "" }
+    }),
+    "chat.delete": () => ({ ok: true })
+  });
+  const { handlers } = loadBackground({
+    fetchImpl: stub.fetch,
+    sessionTokens: { sc_token_T1: "xoxc-test" }
+  });
+
+  const first = await sendMessage(handlers, SCAN_REQUEST);
+  assert.strictEqual(first.ok, true);
+  assert.ok(!first.cached);
+
+  const retry = await sendMessage(handlers, { ...SCAN_REQUEST, latest: SCAN_REQUEST.latest + 60, allowCached: true });
+  assert.strictEqual(retry.ok, true);
+  assert.strictEqual(retry.cached, true, "same filters within the TTL must come from the cache");
+  assert.deepStrictEqual(Array.from(retry.results, r => r.ts), ["1000.000"]);
+  assert.strictEqual(stub.calls["conversations.history"], 1, "the cached retry must not hit Slack");
+
+  // A normal Scan click (no allowCached) always re-sweeps.
+  const fresh = await sendMessage(handlers, SCAN_REQUEST);
+  assert.ok(!fresh.cached);
+  assert.strictEqual(stub.calls["conversations.history"], 2);
+
+  // Different filters are a different scan.
+  const other = await sendMessage(handlers, { ...SCAN_REQUEST, filterText: "hi", allowCached: true });
+  assert.ok(!other.cached);
+  assert.strictEqual(stub.calls["conversations.history"], 3);
+
+  // Deleting makes the cached result stale: a later scan must re-sweep.
+  const started = await sendMessage(handlers, {
+    type: "START_DELETION", teamId: "T1", channelId: "C1",
+    deleteQueue: [{ ts: "1000.000", user: "U1", text: "hi", files: [] }], throttleDelay: 1000
+  });
+  assert.strictEqual(started.success, true);
+  const afterDelete = await sendMessage(handlers, { ...SCAN_REQUEST, filterText: "hi", allowCached: true });
+  assert.ok(!afterDelete.cached, "a scan after START_DELETION must not be served stale results");
+  await new Promise((r) => setTimeout(r, 50)); // let the queued delete settle
+});
+
+test("RUN_SCAN: results are slimmed — no full file objects/attachments, blocks only where a trim could need them", async () => {
+  const stub = makeSlackFetch({
+    "conversations.history": () => ({
+      ok: true,
+      messages: [
+        { ts: "1.000", user: "U1", text: "plain", blocks: [{ type: "rich_text" }] },
+        { ts: "2.000", user: "U1", text: "with file", blocks: [{ type: "rich_text" }],
+          files: [{ id: "F1", name: "a.png", url_private: "https://files.slack.com/x", thumb_64: "t" }] },
+        { ts: "3.000", user: "U1", text: "unfurl", attachments: [{ title: "x", text: "y" }] }
+      ],
+      response_metadata: { next_cursor: "" }
+    })
+  });
+  const { handlers } = loadBackground({
+    fetchImpl: stub.fetch,
+    sessionTokens: { sc_token_T1: "xoxc-test" }
+  });
+
+  const res = await sendMessage(handlers, SCAN_REQUEST);
+  const [plain, withFile, unfurl] = res.results;
+  assert.strictEqual(plain.blocks, undefined, "a message with nothing to trim carries no blocks");
+  assert.strictEqual(plain.hasAttachments, false);
+  assert.strictEqual(withFile.blocks.length, 1);
+  assert.deepStrictEqual(Object.keys(withFile.files[0]).sort(), ["id", "name"]);
+  assert.strictEqual(unfurl.attachments, undefined);
+  assert.strictEqual(unfurl.hasAttachments, true);
+});
+
+test("START_DELETION: rejects queue items that the worker's last scan never returned", async () => {
+  const stub = makeSlackFetch({
+    "conversations.history": () => ({
+      ok: true, messages: [{ ts: "1000.000", user: "U1", text: "hi" }], response_metadata: { next_cursor: "" }
+    }),
+    "chat.delete": () => { throw new Error("must not delete"); }
+  });
+  const { handlers, context } = loadBackground({
+    fetchImpl: stub.fetch,
+    sessionTokens: { sc_token_T1: "xoxc-test" }
+  });
+
+  // No scan at all yet.
+  const noScan = await sendMessage(handlers, {
+    type: "START_DELETION", teamId: "T1", channelId: "C1",
+    deleteQueue: [{ ts: "1000.000", user: "U1" }], throttleDelay: 1000
+  });
+  assert.strictEqual(noScan.success, false);
+  assert.strictEqual(noScan.error, "scan_required");
+
+  await sendMessage(handlers, SCAN_REQUEST);
+  const res = await sendMessage(handlers, {
+    type: "START_DELETION", teamId: "T1", channelId: "C1",
+    deleteQueue: [{ ts: "1000.000", user: "U1" }, { ts: "5555.000", user: "U1" }], throttleDelay: 1000
+  });
+  assert.strictEqual(res.success, false);
+  assert.strictEqual(res.error, "queue_not_from_scan");
+  assert.strictEqual(res.count, 1);
+  const activeJobs = vm.runInContext("activeJobs", context);
+  assert.strictEqual(activeJobs["slack_state_T1_C1"], undefined, "no job may be created");
+});
+
+test("START_DELETION: in 'me' mode rejects items not authored by the scanning user", async () => {
+  const { context } = loadBackground();
+  const validate = vm.runInContext("validateQueueAgainstScan", context);
+  const record = { users: { "1.0": "U1", "2.0": "U2" }, filterSender: "me", userId: "U1" };
+
+  assert.strictEqual(validate([{ ts: "1.0", user: "U1" }], record).ok, true);
+  // The page claims U1 wrote it, but the scan saw U2.
+  const forged = validate([{ ts: "2.0", user: "U1" }], record);
+  assert.strictEqual(forged.ok, false);
+  assert.strictEqual(forged.error, "queue_not_owned");
+  // The page's own claim also has to match.
+  assert.strictEqual(validate([{ ts: "1.0", user: "U9" }], record).error, "queue_not_owned");
+  // "all" (admin) mode accepts other authors — that's what it is for.
+  assert.strictEqual(validate([{ ts: "2.0", user: "U2" }], { ...record, filterSender: "all" }).ok, true);
+});
+
+test("START_DELETION: the scan record survives a worker restart via session storage", async () => {
+  const session = {};
+  const { sandbox, context } = loadBackground();
+  sandbox.chrome.storage.session.set = async (items) => { Object.assign(session, items); };
+  sandbox.chrome.storage.session.get = async (key) => (key in session ? { [key]: session[key] } : {});
+
+  const remember = vm.runInContext("rememberScanRecord", context);
+  const load = vm.runInContext("loadScanRecord", context);
+  await remember("T1", "C1", { filterSender: "me", userId: "U1" }, [{ ts: "1.0", user: "U1" }]);
+  vm.runInContext("lastScanRecords.clear()", context); // simulated idle-death
+  const record = await load("T1", "C1");
+  assert.ok(record, "record must be recovered from chrome.storage.session");
+  assert.strictEqual(record.scans[0].users["1.0"], "U1");
+});
+
+test("START_DELETION: a re-scan (e.g. from another tab) doesn't invalidate an earlier scan's selection", async () => {
+  const { context } = loadBackground();
+  const remember = vm.runInContext("rememberScanRecord", context);
+  const load = vm.runInContext("loadScanRecord", context);
+  const validate = vm.runInContext("validateQueueAgainstScan", context);
+  await remember("T1", "C1", { filterSender: "me", userId: "U1" }, [{ ts: "1.0", user: "U1" }]);
+  await remember("T1", "C1", { filterSender: "me", userId: "U1" }, [{ ts: "2.0", user: "U1" }]);
+  const record = await load("T1", "C1");
+  assert.strictEqual(validate([{ ts: "1.0", user: "U1" }, { ts: "2.0", user: "U1" }], record).ok, true);
+  assert.strictEqual(validate([{ ts: "3.0", user: "U1" }], record).error, "queue_not_from_scan");
+  // Expired scans no longer count.
+  record.scans[0].at = Date.now() - 31 * 60 * 1000;
+  assert.strictEqual(validate([{ ts: "1.0", user: "U1" }], record).error, "queue_not_from_scan");
 });
 
 test("RUN_SCAN: a different conversation may be scanned concurrently", async () => {
@@ -618,7 +791,7 @@ test("parseJobKey: rejects a key whose team/channel segments aren't alphanumeric
   assert.strictEqual(parseJobKey("slack_state_T123_C 456"), null);
 });
 
-test("GET_JOB_STATUS: returns otherJob if there is a job in another channel", async () => {
+test("GET_JOB_STATUS: returns otherJobs if there is a job in another channel", async () => {
   const { handlers, context } = loadBackground();
   const activeJobs = vm.runInContext("activeJobs", context);
   activeJobs["slack_state_T1_C2"] = {
@@ -630,9 +803,10 @@ test("GET_JOB_STATUS: returns otherJob if there is a job in another channel", as
 
   const res = await sendMessage(handlers, { type: "GET_JOB_STATUS", teamId: "T1", channelId: "C1" });
   assert.strictEqual(res.exists, false);
-  assert.ok(res.otherJob);
-  assert.strictEqual(res.otherJob.channelId, "C2");
-  assert.strictEqual(res.otherJob.isPaused, true);
+  assert.strictEqual(res.otherJob, undefined, "the legacy singular field is gone");
+  assert.strictEqual(res.otherJobs.length, 1);
+  assert.strictEqual(res.otherJobs[0].channelId, "C2");
+  assert.strictEqual(res.otherJobs[0].isPaused, true);
 });
 
 test("executeQueue: trim mode preserves structural blocks while removing files and images", async () => {
@@ -754,7 +928,7 @@ test("saveJobState persists rate-limit/transient retry streaks, and recoverAllJo
     _transientRetries: 2
   };
   await saveJobQueue(job);
-  await saveJobState(key, job, true);
+  await saveJobState(key, job);
 
   // Simulate the SW dying and restarting: the in-memory map is gone, only what
   // was persisted to chrome.storage.local (via the mock above) survives.
@@ -1037,8 +1211,6 @@ test("SET_SESSION: propagates a session-storage write failure to the caller, but
   // restart.
   const userTokens = vm.runInContext("userTokens", context);
   assert.strictEqual(userTokens.T1, "xoxc-new");
-  const getRes = await sendMessage(handlers, { type: "GET_SESSION", teamId: "T1" });
-  assert.strictEqual(getRes.token, "xoxc-new");
 });
 
 test("SET_SESSION: reports success once the session-storage write actually resolves", async () => {
@@ -1089,4 +1261,68 @@ test("slackAPICallWithRetry (via runScanInBg): a very long Retry-After fails fas
   assert.deepStrictEqual(Array.from(scan.results, r => r.ts), ["100.000"]);
   assert.strictEqual(scan.moreAvailable, true, "must honestly report the scan stopped early");
   assert.strictEqual(scan.capped, false);
+});
+
+test("BG_API_CALL: only the read-only lookup endpoints are proxied", async () => {
+  const { handlers } = loadBackground();
+  await sendMessage(handlers, { type: "SET_SESSION", teamId: "T1", token: "xoxc-ok" });
+  const res = await sendMessage(handlers, { type: "BG_API_CALL", teamId: "T1", endpoint: "chat.delete", params: { channel: "C1", ts: "1.1" } });
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.error, "endpoint_not_allowed");
+});
+
+test("executeQueue: a trim on a message with uploaded files is reported as partial, not cleaned", async () => {
+  const stub = makeSlackFetch({ "chat.update": () => ({ ok: true }) });
+  const logs = [];
+  const { sandbox, context } = loadBackground({
+    fetchImpl: stub.fetch,
+    sessionTokens: { sc_token_T1: "xoxc-test" }
+  });
+  sandbox.chrome.tabs.query = (_q, cb) => cb([{ id: 1 }]);
+  sandbox.chrome.tabs.sendMessage = (_id, msg, cb) => { if (msg.type === "JOB_LOG") logs.push(msg.log); if (cb) cb(); };
+
+  const activeJobs = vm.runInContext("activeJobs", context);
+  activeJobs["slack_state_T1_C1"] = {
+    teamId: "T1", channelId: "C1", token: "xoxc-test", isRunning: true, isPaused: false,
+    deleteQueue: [
+      { ts: "1", time: "t1", action: "trim", text: "caption", blocks: [], files: [{ id: "F1" }] },
+      { ts: "2", time: "t2", action: "trim", text: "unfurl only", blocks: [], files: [] }
+    ],
+    deleteIndex: 0,
+    stats: { success: 0, fail: 0, skipped: 0, partial: 0, total: 2 },
+    throttleDelay: 1000
+  };
+  const executeQueue = vm.runInContext("executeQueue", context);
+  const clearScheduled = vm.runInContext("clearScheduled", context);
+  await executeQueue("slack_state_T1_C1");
+  clearScheduled("slack_state_T1_C1");
+  const job = activeJobs["slack_state_T1_C1"];
+  assert.strictEqual(job.stats.partial, 1, "files remain attached -> partial");
+  assert.strictEqual(job.stats.success, 0, "must not be counted as fully cleaned");
+  assert.ok(logs.some(l => l.message.startsWith("[Partial]")), "log must say partial, not [Success]");
+  assert.ok(!logs.some(l => l.message.startsWith("[Success]")));
+
+  await executeQueue("slack_state_T1_C1");
+  assert.strictEqual(job.stats.success, 1, "a trim with no uploaded files is a genuine clean");
+});
+
+test("recoverAllJobs: a job paused for more than 30 days is discarded with its queue; a recent one is kept", async () => {
+  const { sandbox, context } = loadBackground();
+  const { local, store } = makePersistentLocalStorage();
+  sandbox.chrome.storage.local = local;
+  const DAY = 24 * 60 * 60 * 1000;
+  store["slack_state_T1_C1"] = { isPaused: true, isRunning: false, deleteIndex: 3, stats: { total: 10 }, timestamp: Date.now() - 31 * DAY };
+  store["slack_q_T1_C1"] = [{ ts: "1", action: "trim", text: "secret" }];
+  store["slack_state_T1_C2"] = { isPaused: true, isRunning: false, deleteIndex: 1, stats: { total: 5 }, timestamp: Date.now() - 2 * DAY };
+  store["slack_q_T1_C2"] = [{ ts: "2", action: "delete" }];
+
+  const recoverAllJobs = vm.runInContext("recoverAllJobs", context);
+  await recoverAllJobs();
+  const activeJobs = vm.runInContext("activeJobs", context);
+
+  assert.strictEqual(activeJobs["slack_state_T1_C1"], undefined, "expired job must not be recovered");
+  assert.ok(!("slack_state_T1_C1" in store), "expired job record must be removed from storage");
+  assert.ok(!("slack_q_T1_C1" in store), "expired job queue (with message text) must be removed");
+  assert.ok(activeJobs["slack_state_T1_C2"], "a recently paused job is still recoverable");
+  assert.ok("slack_q_T1_C2" in store);
 });

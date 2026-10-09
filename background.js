@@ -80,6 +80,26 @@ const STALL_GRACE_MS = 60000;    // a job is "stalled" (SW died) only if this fa
 // "slack_state_" so recoverAllJobs never mistakes it for a job record.
 const QUEUE_PREFIX = "slack_q_";
 
+// A finished scan is kept briefly so a retry with the same filters (typically the
+// dashboard giving up on a slow scan after its client-side timeout, then the user
+// clicking Scan again) gets the result immediately instead of re-sweeping Slack.
+const SCAN_CACHE_TTL_MS = 10 * 60 * 1000;
+// chrome.storage.session key prefix for the last completed scan's ts -> author map
+// per conversation (see rememberScanRecord / START_DELETION).
+const SCAN_RECORD_PREFIX = "sc_scan_";
+// Several recent scans are kept per conversation (not just the last one), so a
+// re-scan of the same channel in another tab doesn't invalidate the selection this
+// tab is about to delete. Older or surplus scans are dropped.
+const SCAN_RECORD_MAX_SCANS = 3;
+const SCAN_RECORD_TTL_MS = 30 * 60 * 1000;
+// chrome.storage.session was only 1 MB before Chrome 112 (the floor is 109) and
+// is shared with the session token and run flags -- only this many conversations'
+// records are kept there (the in-memory copy is unaffected).
+const SCAN_RECORD_MAX_STORED = 5;
+// A paused job nobody resumed for this long is abandoned; its queue (which keeps
+// message text for trim items) should not sit in storage.local forever.
+const PAUSED_JOB_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
 let activeJobs = {}; // key: `slack_state_${teamId}_${channelId}` -> job state
 let userTokens = {}; // key: `${teamId}` -> xoxc- token
 
@@ -93,7 +113,143 @@ let userTokens = {}; // key: `${teamId}` -> xoxc- token
 // load that made the first one slow and pushing the workspace further into 429s.
 // Memory-only on purpose: if the worker is torn down the scan really did stop, so a
 // fresh request should be allowed through.
-const inFlightScans = new Set();
+// Value: { params, promise }. A repeat request with the SAME filters joins the
+// running sweep (awaits its promise) instead of being refused; a request with
+// different filters is still refused with scan_in_progress.
+const inFlightScans = new Map();
+
+// Last successful scan result per `${teamId}_${channelId}`: { params, result, at }.
+// Memory-only and short-lived (SCAN_CACHE_TTL_MS); dropped when a deletion starts
+// so a re-scan after deleting never serves already-deleted messages.
+const scanResultCache = new Map();
+
+// Recent completed scans per `${teamId}_${channelId}`:
+// { scans: [{ users: ts -> author, filterSender, userId, at }] }. START_DELETION only accepts queue items that
+// this worker itself returned from a scan, so a content-script bug or a hostile
+// page can't hand the worker arbitrary message timestamps to delete. Mirrored to
+// chrome.storage.session so it survives the worker's idle-death between the scan
+// and the user clicking Delete.
+const lastScanRecords = new Map();
+
+const SCAN_PARAM_FIELDS = [
+  "oldest", "includeThreads", "filterSender", "filterText",
+  "onlyAttachments", "invertText", "excludePinned", "userId"
+];
+
+// Two scan requests ask for the same thing. `latest` is "now" for the open-ended
+// date modes, so a retry a few minutes later naturally carries a slightly later
+// upper bound — treat that drift (up to the cache TTL) as the same scan.
+function scanParamsMatch(a, b) {
+  const norm = (v) => (v === undefined || v === null || v === false ? "" : String(v));
+  for (const f of SCAN_PARAM_FIELDS) {
+    if (norm(a[f]) !== norm(b[f])) return false;
+  }
+  if (norm(a.latest) === norm(b.latest)) return true;
+  const la = Number(a.latest);
+  const lb = Number(b.latest);
+  return Number.isFinite(la) && Number.isFinite(lb) &&
+    Math.abs(la - lb) <= SCAN_CACHE_TTL_MS / 1000;
+}
+
+// Normalizes a stored record to its list of still-valid scans. Also accepts the
+// earlier single-scan shape ({ users, filterSender, userId }).
+function recentScansOf(record, now = Date.now()) {
+  if (!record) return [];
+  const scans = Array.isArray(record.scans) ? record.scans : (record.users ? [record] : []);
+  return scans.filter((sc) => sc && sc.users && (!sc.at || now - sc.at <= SCAN_RECORD_TTL_MS));
+}
+
+// Stored form of one scan: in "me" mode every result is the scanning user's, so
+// only the timestamps are kept (about a fifth of the ts -> author map's size).
+function compactScan(scan) {
+  if (scan.filterSender === "me" && scan.userId) {
+    return { ts: Object.keys(scan.users), filterSender: "me", userId: scan.userId, at: scan.at };
+  }
+  return scan;
+}
+
+function expandScan(scan) {
+  if (scan && !scan.users && Array.isArray(scan.ts)) {
+    const users = {};
+    for (const ts of scan.ts) users[ts] = scan.userId;
+    return { users, filterSender: scan.filterSender, userId: scan.userId, at: scan.at };
+  }
+  return scan;
+}
+
+async function rememberScanRecord(teamId, channelId, request, results) {
+  const users = {};
+  for (const r of results) users[r.ts] = r.user || "";
+  const scan = { users, filterSender: request.filterSender, userId: request.userId || null, at: Date.now() };
+  const previous = await loadScanRecord(teamId, channelId);
+  const record = { scans: [...recentScansOf(previous), scan].slice(-SCAN_RECORD_MAX_SCANS) };
+  const scanKey = `${teamId}_${channelId}`;
+  lastScanRecords.set(scanKey, record);
+  try {
+    await chrome.storage.session.set({
+      [`${SCAN_RECORD_PREFIX}${scanKey}`]: { scans: record.scans.map(compactScan) }
+    });
+    await pruneStoredScanRecords();
+  } catch (e) { /* session storage unavailable — memory copy still applies */ }
+}
+
+// Drops stored scan records that have fully expired, and all but the
+// SCAN_RECORD_MAX_STORED most recent conversations.
+async function pruneStoredScanRecords(now = Date.now()) {
+  const all = await chrome.storage.session.get(null);
+  const entries = Object.entries(all || {})
+    .filter(([k]) => k.startsWith(SCAN_RECORD_PREFIX))
+    .map(([k, v]) => {
+      const scans = (v && Array.isArray(v.scans)) ? v.scans : (v ? [v] : []);
+      return [k, Math.max(0, ...scans.map((sc) => (sc && sc.at) || 0))];
+    })
+    .sort((a, b) => b[1] - a[1]);
+  const drop = entries
+    .filter(([, newest], i) => i >= SCAN_RECORD_MAX_STORED || (newest && now - newest > SCAN_RECORD_TTL_MS))
+    .map(([k]) => k);
+  if (drop.length) await chrome.storage.session.remove(drop);
+}
+
+async function loadScanRecord(teamId, channelId) {
+  const scanKey = `${teamId}_${channelId}`;
+  if (lastScanRecords.has(scanKey)) return lastScanRecords.get(scanKey);
+  try {
+    const storageKey = `${SCAN_RECORD_PREFIX}${scanKey}`;
+    const d = await chrome.storage.session.get(storageKey);
+    const record = d && d[storageKey];
+    if (record && (record.users || Array.isArray(record.scans))) {
+      const expanded = Array.isArray(record.scans) ? { scans: record.scans.map(expandScan) } : record;
+      lastScanRecords.set(scanKey, expanded);
+      return expanded;
+    }
+  } catch (e) { /* session storage unavailable */ }
+  return null;
+}
+
+// Every queued item must come from one of this conversation's recent scans; when
+// that scan ran in "me" mode it must also belong to the user that scan ran as.
+// Returns { ok } or { ok: false, error, count }.
+function validateQueueAgainstScan(queue, record) {
+  const scans = recentScansOf(record);
+  if (scans.length === 0) return { ok: false, error: "scan_required", count: queue.length };
+  const inScan = (sc, ts) => typeof ts === "string" && Object.prototype.hasOwnProperty.call(sc.users, ts);
+  const ownedPer = (sc, item) => sc.filterSender !== "me" ||
+    (!!sc.userId && sc.users[item.ts] === sc.userId &&
+      (item.user === undefined || item.user === sc.userId));
+  let notInScan = 0;
+  let notOwned = 0;
+  for (const item of queue) {
+    const containing = item ? scans.filter((sc) => inScan(sc, item.ts)) : [];
+    if (containing.length === 0) {
+      notInScan++;
+    } else if (!containing.some((sc) => ownedPer(sc, item))) {
+      notOwned++;
+    }
+  }
+  if (notInScan > 0) return { ok: false, error: "queue_not_from_scan", count: notInScan };
+  if (notOwned > 0) return { ok: false, error: "queue_not_owned", count: notOwned };
+  return { ok: true };
+}
 
 // Reentrancy lock keyed by job key. Module-level (not on the job object) so it
 // survives recoverAllJobs() replacing job objects, and is acquired BEFORE any
@@ -125,6 +281,8 @@ function parseJobKey(key) {
 // cache was cleared by a service-worker idle-death mid-session (e.g. the SW died
 // between a scan and a delete). Without this, token-dependent messages fail with
 // not_authed even though the session is still valid.
+const BG_API_CALL_ALLOWED = new Set(["users.list", "users.info", "conversations.info"]);
+
 async function ensureToken(teamId) {
   if (userTokens[teamId]) return userTokens[teamId];
   try {
@@ -166,7 +324,7 @@ chrome.runtime.onStartup.addListener(async () => {
       job.isPaused = true;
       clearScheduled(key);
       markRunning(key, false);
-      await saveJobState(key, job, true);
+      await saveJobState(key, job);
     }
   }
   maybeClearWatchdog();
@@ -187,7 +345,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       job.isPaused = true;
       clearScheduled(key);
       markRunning(key, false);
-      await saveJobState(key, job, true);
+      await saveJobState(key, job);
     }
   }
   maybeClearWatchdog();
@@ -243,7 +401,7 @@ if (chrome.runtime.onSuspend && typeof chrome.runtime.onSuspend.addListener === 
   chrome.runtime.onSuspend.addListener(() => {
     for (const [key, job] of Object.entries(activeJobs)) {
       if (job.isRunning) {
-        saveJobState(key, job, true);
+        saveJobState(key, job);
       }
     }
   });
@@ -299,6 +457,7 @@ async function recoverAllJobs() {
       }
     }
 
+    const expiredKeys = [];
     for (const [key, val] of Object.entries(storage)) {
       if (key.startsWith("slack_state_") && val) {
         // Never clobber a live in-memory job — storage is only a backup, and a
@@ -308,6 +467,17 @@ async function recoverAllJobs() {
         const parsed = parseJobKey(key);
         if (parsed) {
           const { teamId, channelId } = parsed;
+
+          // Abandoned paused job: drop it (and its queue, which may hold message
+          // text for trim items) instead of keeping it in storage.local forever.
+          // `timestamp` is the last saveJobState, i.e. when it was paused.
+          const paused = val.isPaused !== undefined ? !!val.isPaused : true;
+          if (paused && !val.isRunning && val.timestamp &&
+              Date.now() - val.timestamp > PAUSED_JOB_MAX_AGE_MS) {
+            console.warn(`SlackClean BG: discarding job ${key} — paused for more than 30 days without being resumed.`);
+            expiredKeys.push(key, queueKeyFor(teamId, channelId));
+            continue;
+          }
 
           // Queue lives in a companion key; fall back to any legacy inline queue.
           const companionQueue = storage[queueKeyFor(teamId, channelId)];
@@ -329,7 +499,12 @@ async function recoverAllJobs() {
             isPaused: val.isPaused !== undefined ? !!val.isPaused : true,
             throttleDelay: val.throttleDelay || DEFAULT_THROTTLE_DELAY,
             filterAttachments: val.filterAttachments || false,
-            nextRunAt: 0,     // 0 => immediately due to the watchdog after a crash
+            // Restored so a pending rate-limit backoff is still honored; 0 (or a
+            // past time) => immediately due to the watchdog after a crash.
+            // Only a FUTURE nextRunAt is a pending backoff; per-item saves also
+            // store the (already past) time of the step just run, and restoring
+            // that would make the watchdog wait out STALL_GRACE_MS first.
+            nextRunAt: (val.nextRunAt && val.nextRunAt > Date.now()) ? val.nextRunAt : 0,
             _timer: null,
             // Restore retry streaks across a SW restart (see saveJobState) so a
             // rate-limit/transient backoff that survives via chrome.alarms keeps
@@ -339,6 +514,13 @@ async function recoverAllJobs() {
             _transientRetries: val.transientRetries || 0
           };
         }
+      }
+    }
+    if (expiredKeys.length > 0) {
+      try {
+        await chrome.storage.local.remove(expiredKeys);
+      } catch (e) {
+        console.error("SlackClean BG: expired job cleanup failed", e);
       }
     }
 
@@ -465,6 +647,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.type === "SET_SESSION") {
     userTokens[request.teamId] = request.token;
+    // A re-login hands over a new token; jobs paused on invalid_auth still hold
+    // the revoked one (executeQueue only re-reads it when job.token is empty).
+    for (const job of Object.values(activeJobs)) {
+      if (job && job.teamId === request.teamId) job.token = request.token;
+    }
     // Persist token in session storage (memory-only, cleared on browser close).
     // Awaited (not fire-and-forget) so a failed write is actually reported to the
     // caller instead of claiming success regardless — the in-memory cache above
@@ -483,13 +670,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // async response
   }
 
-  else if (request.type === "GET_SESSION") {
-    const token = userTokens[request.teamId] || null;
-    sendResponse({ token });
-    return false;
-  }
-
   else if (request.type === "BG_API_CALL") {
+    // Read-only lookups the dashboard actually needs. Anything else (chat.delete,
+    // chat.update, ...) only ever runs through the background's own job queue, so
+    // a content-script bug or a compromised Slack renderer can't drive arbitrary
+    // API calls with the user's token through this proxy.
+    if (!BG_API_CALL_ALLOWED.has(request.endpoint)) {
+      sendResponse({ ok: false, error: "endpoint_not_allowed" });
+      return false;
+    }
     ensureToken(request.teamId).then(token => {
       if (!token) { sendResponse({ ok: false, error: "not_authed" }); return; }
       return slackAPICall(token, request.endpoint, request.params).then(res => sendResponse(res));
@@ -504,16 +693,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
       // otherJobs: every OTHER job in this same team, not just the first one found —
       // a user can have paused jobs in more than one other channel at once, and the
-      // dashboard needs to be able to warn about all of them, not silently drop all
-      // but the first. otherJob (singular, first match) is kept alongside for
-      // backward compatibility with existing callers/tests.
+      // dashboard needs to be able to warn about all of them.
       const otherJobs = [];
       for (const [, j] of Object.entries(activeJobs)) {
         if (j.teamId === request.teamId && j.channelId !== request.channelId) {
           otherJobs.push({ channelId: j.channelId, isPaused: j.isPaused, isRunning: j.isRunning });
         }
       }
-      const otherJob = otherJobs.length > 0 ? otherJobs[0] : null;
 
       if (job) {
         sendResponse({
@@ -526,11 +712,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             throttleDelay: job.throttleDelay,
             filterAttachments: job.filterAttachments
           },
-          otherJob,
           otherJobs
         });
       } else {
-        sendResponse({ exists: false, otherJob, otherJobs });
+        sendResponse({ exists: false, otherJobs });
       }
     };
 
@@ -546,15 +731,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   else if (request.type === "RUN_SCAN") {
-    // Refuse a duplicate concurrent sweep of the same conversation (see inFlightScans).
     const scanKey = `${request.teamId}_${request.channelId}`;
-    if (inFlightScans.has(scanKey)) {
+
+    // Same filters as a scan that finished moments ago: answer from the cache --
+    // but only for a retry after the page's own scan timeout (allowCached). A
+    // normal Scan click always re-sweeps, so new or manually deleted messages
+    // show up instead of a result up to 10 minutes old.
+    const cached = scanResultCache.get(scanKey);
+    if (request.allowCached && cached && Date.now() - cached.at < SCAN_CACHE_TTL_MS && scanParamsMatch(cached.params, request)) {
+      sendResponse({ ...cached.result, cached: true, cachedAt: cached.at });
+      return false;
+    }
+    if (cached) scanResultCache.delete(scanKey);
+
+    // Never run two sweeps of the same conversation at once (see inFlightScans):
+    // a retry with the same filters waits for the running one; anything else is
+    // refused so the caller can wait and try again.
+    const inFlight = inFlightScans.get(scanKey);
+    if (inFlight) {
+      if (scanParamsMatch(inFlight.params, request)) {
+        inFlight.promise.then(sendResponse);
+        return true; // async response
+      }
       sendResponse({ ok: false, error: "scan_in_progress" });
       return false;
     }
-    inFlightScans.add(scanKey);
 
-    (async () => {
+    const promise = (async () => {
       let result;
       try {
         const token = await ensureToken(request.teamId);
@@ -566,9 +769,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             ok: true,
             results: scan.results,
             moreAvailable: scan.moreAvailable,
+            threadLookbackLimited: !!scan.threadLookbackLimited,
             capped: scan.capped,
             regexTruncatedCount: scan.regexTruncatedCount
           };
+          await rememberScanRecord(request.teamId, request.channelId, request, scan.results);
+          // A scan cut short by a long rate limit is not cached: re-scanning later
+          // can get further, and the cache would only hand back the partial result.
+          if (!scan.rateLimited) {
+            scanResultCache.set(scanKey, { params: { ...request }, result, at: Date.now() });
+          }
         }
       } catch (err) {
         result = { ok: false, error: "scan_error", message: err.message };
@@ -581,8 +791,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // until the worker is torn down.
         inFlightScans.delete(scanKey);
       }
-      sendResponse(result);
+      return result;
     })();
+    inFlightScans.set(scanKey, { params: { ...request }, promise });
+    promise.then(sendResponse);
     return true; // async response
   }
 
@@ -614,6 +826,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
       }
 
+      // Only delete what this worker's own last scan of this conversation
+      // returned (and, in "me" mode, only the scanning user's messages) —
+      // never an arbitrary ts list handed over by the page.
+      const scanRecord = await loadScanRecord(request.teamId, request.channelId);
+      const check = validateQueueAgainstScan(request.deleteQueue || [], scanRecord);
+      if (!check.ok) {
+        sendResponse({ success: false, error: check.error, count: check.count });
+        return;
+      }
+
       // Re-check after the async token fetch: another START_DELETION/PAUSE could
       // have landed while this one was awaiting ensureToken().
       if (activeJobs[key] && (activeJobs[key].isRunning || activeJobs[key].isPaused)) {
@@ -638,7 +860,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         token: token,
         deleteQueue: preparedQueue,
         deleteIndex: request.deleteIndex || 0,
-        stats: request.stats || { success: 0, fail: 0, skipped: 0, total: request.deleteQueue.length },
+        stats: request.stats || { success: 0, fail: 0, skipped: 0, partial: 0, total: preparedQueue.length },
         isRunning: true,
         isPaused: false,
         // Clamp to the server-side minimum too, not just falsy-guard: a caller
@@ -660,6 +882,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       markRunning(key, true);
       ensureWatchdog();
       scheduleNextStep(key, 0);
+      // The cached scan is about to go stale (its messages are being deleted).
+      scanResultCache.delete(`${request.teamId}_${request.channelId}`);
       sendResponse({ success: true });
     }).catch(err => sendResponse({ success: false, error: "catch_error", message: err.message }));
     return true; // async response
@@ -685,7 +909,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         job.isPaused = true;
         clearScheduled(key);
         markRunning(key, false);
-        await saveJobState(key, job, true);
+        await saveJobState(key, job);
         broadcastJobUpdate(job);
         maybeClearWatchdog();
       }
@@ -703,6 +927,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (!activeJobs[key]) await recoverAllJobs();
       const job = activeJobs[key];
       if (job) {
+        // Pick up a token refreshed since the pause (the invalid_auth pause tells
+        // the user to re-log in and resume) instead of retrying the revoked one.
+        const freshToken = await ensureToken(job.teamId);
+        // A CANCEL_DELETION may have removed (or a START replaced) this job while
+        // the token was read -- don't write the stale job back to storage.
+        if (activeJobs[key] !== job) { sendResponse({ success: false }); return; }
+        if (freshToken) job.token = freshToken;
         job.isPaused = false;
         job.isRunning = true;
         // A manual resume is a fresh attempt, not a continuation of whatever streak of
@@ -712,7 +943,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // happened since Resume.
         job._rateLimitRetries = 0;
         job._transientRetries = 0;
-        await saveJobState(key, job, true);
+        await saveJobState(key, job);
         markRunning(key, true);
         broadcastJobUpdate(job);
         ensureWatchdog();
@@ -820,8 +1051,10 @@ function scheduleNextStep(key, delayMs) {
       executeQueue(key);
     }, delay);
   } else {
-    // Long wait (rate-limit backoff): an alarm survives SW termination.
+    // Long wait (rate-limit backoff): an alarm survives SW termination, and the
+    // persisted nextRunAt keeps the watchdog from firing early after recovery.
     chrome.alarms.create(`sc_queue_${key}`, { when: job.nextRunAt });
+    saveJobState(key, job);
   }
 }
 
@@ -847,6 +1080,32 @@ async function runWatchdogSweep() {
 }
 
 // Background Scan Execution
+// Slim a raw Slack message down to what the dashboard renders and the delete path
+// needs. Results travel worker -> page -> worker for up to MAX_SCAN_RESULTS
+// messages, so full file objects, unfurl attachments and rich-text blocks are not
+// carried for every one: files shrink to { id, name }, attachments to a flag, and
+// blocks are kept only where a "trim" could need them to rebuild the message —
+// decideItemAction only ever trims an item that has files or attachments.
+function toScanResult(msg, parentTs) {
+  const files = Array.isArray(msg.files)
+    ? msg.files.filter(Boolean).map(f => ({ id: f.id, name: f.name }))
+    : [];
+  const hasAttachments = Array.isArray(msg.attachments) && msg.attachments.length > 0;
+  const entry = {
+    ts: msg.ts,
+    user: msg.user,
+    text: msg.text || "",
+    time: new Date(parseFloat(msg.ts) * 1000).toLocaleString(),
+    isThreadReply: !!parentTs,
+    files,
+    hasAttachments,
+    replyCount: msg.reply_count || 0
+  };
+  if (parentTs) entry.parentTs = parentTs;
+  if (files.length > 0 || hasAttachments) entry.blocks = msg.blocks || [];
+  return entry;
+}
+
 // Expands one thread root's replies (conversations.replies, paginated), pushing
 // qualifying ones into `opts.results` and deduping against `opts.seenTs` (both
 // mutated in place, exactly as when this was inline in runScanInBg's own loop --
@@ -886,18 +1145,7 @@ async function expandThreadReplies(token, channelId, parentTs, opts) {
 
         if (qualifies(reply, userId, filterSender, filterText, onlyAttachments, qualifyOpts) && !seenTs.has(reply.ts)) {
           seenTs.add(reply.ts);
-          results.push({
-            ts: reply.ts,
-            user: reply.user,
-            text: reply.text || "",
-            time: new Date(replyTsNum * 1000).toLocaleString(),
-            isThreadReply: true,
-            parentTs: parentTs,
-            files: reply.files || [],
-            attachments: reply.attachments || [],
-            blocks: reply.blocks || [],
-            replyCount: reply.reply_count || 0
-          });
+          results.push(toScanResult(reply, parentTs));
 
           if (results.length >= MAX_SCAN_RESULTS) {
             capped = true;
@@ -984,7 +1232,7 @@ async function runScanInBg(token, req) {
   // above) when a thread root could predate the 30-day lookback window, so replies in
   // it went unexamined. Folded into `moreAvailable` below — the UI already warns
   // honestly that older/deeper messages were NOT scanned.
-  let threadsTruncated = lookbackMayMissThreads;
+  let threadsTruncated = false;
 
   while (continueScan) {
     const res = await slackAPICallWithRetry(token, "conversations.history", {
@@ -1005,7 +1253,7 @@ async function runScanInBg(token, req) {
       // repeats the exact API load that triggered the rate limit in the first
       // place.
       if (res.error === "rate_limited_too_long") {
-        return { results, capped, moreAvailable: true, regexTruncatedCount: truncationStats.count };
+        return { results, capped, moreAvailable: true, rateLimited: true, regexTruncatedCount: truncationStats.count };
       }
       throw new Error(`Conversations history failed: ${res.error}`);
     }
@@ -1021,17 +1269,7 @@ async function runScanInBg(token, req) {
 
       if (rootInWindow && qualifies(msg, userId, filterSender, filterText, onlyAttachments, qualifyOpts) && !seenTs.has(msg.ts)) {
         seenTs.add(msg.ts);
-        results.push({
-          ts: msg.ts,
-          user: msg.user,
-          text: msg.text || "",
-          time: new Date(parseFloat(msg.ts) * 1000).toLocaleString(),
-          isThreadReply: false,
-          files: msg.files || [],
-          attachments: msg.attachments || [],
-          blocks: msg.blocks || [],
-          replyCount: msg.reply_count || 0
-        });
+        results.push(toScanResult(msg, null));
 
         if (results.length >= MAX_SCAN_RESULTS) {
           capped = true;
@@ -1062,7 +1300,22 @@ async function runScanInBg(token, req) {
   // messages we never examined — either older history (the history page cap) or
   // deeper thread replies (MAX_THREAD_PAGES). Honest truncation signal for the UI.
   const moreAvailable = (!!cursor && pageCount >= maxPages) || threadsTruncated;
-  return { results, capped, moreAvailable, regexTruncatedCount: truncationStats.count };
+
+  // The 30-day lookback only matters if the channel actually has messages older
+  // than it -- one limit=1 probe instead of warning on every custom-range scan
+  // (lookbackCutoff > 0 holds for any real date, so the flag alone always fired).
+  // Reported separately from moreAvailable: it is a narrow "replies under very
+  // old threads" caveat, not "older history was not scanned".
+  let threadLookbackLimited = false;
+  if (lookbackMayMissThreads && !moreAvailable) {
+    const probe = await slackAPICallWithRetry(token, "conversations.history", {
+      channel: channelId,
+      latest: String(lookbackCutoff),
+      limit: 1
+    });
+    threadLookbackLimited = !probe.ok || (Array.isArray(probe.messages) && probe.messages.length > 0);
+  }
+  return { results, capped, moreAvailable, threadLookbackLimited, regexTruncatedCount: truncationStats.count };
 }
 
 // Read a queued item's resolved action. The decision is made once at enqueue time
@@ -1104,7 +1357,7 @@ async function handleRateLimitBackoff(job, key, pauseTime, context) {
     job.isPaused = true;
     clearScheduled(key);
     markRunning(key, false);
-    await saveJobState(key, job, true);
+    await saveJobState(key, job);
     broadcastJobUpdate(job);
     maybeClearWatchdog();
     return;
@@ -1116,7 +1369,7 @@ async function handleRateLimitBackoff(job, key, pauseTime, context) {
   // routes through chrome.alarms (see scheduleNextStep), and the SW is expected to
   // be torn down while it's pending. Save first so a restart mid-wait recovers the
   // correct count (see recoverAllJobs) instead of resetting it to 0.
-  await saveJobState(key, job, true);
+  await saveJobState(key, job);
   scheduleNextStep(key, waitSec * 1000);
 }
 
@@ -1129,7 +1382,7 @@ async function pauseJobForFatalError(job, key, message) {
   job.isPaused = true;
   clearScheduled(key);
   markRunning(key, false);
-  await saveJobState(key, job, true);
+  await saveJobState(key, job);
   broadcastJobUpdate(job);
   maybeClearWatchdog();
 }
@@ -1160,7 +1413,7 @@ async function handleTransientError(job, key, msg, response) {
     // identical reasoning) so a SW restart mid-retry recovers the correct
     // count instead of resetting it to 0 and letting a permanently-failing
     // item retry forever across restarts.
-    await saveJobState(key, job, true);
+    await saveJobState(key, job);
     scheduleNextStep(key, TRANSIENT_RETRY_DELAY_MS);
     return true;
   }
@@ -1262,7 +1515,7 @@ async function executeQueue(key) {
         job.isPaused = true;
         clearScheduled(key);
         markRunning(key, false);
-        await saveJobState(key, job, true);
+        await saveJobState(key, job);
         broadcastJobUpdate(job);
         maybeClearWatchdog();
         return;
@@ -1271,6 +1524,9 @@ async function executeQueue(key) {
 
     if (job.deleteIndex >= job.deleteQueue.length) {
       job.isRunning = false;
+      // A pause clicked while the last item was in flight must not leave the UI
+      // showing "Resume" for a job that is about to be deleted.
+      job.isPaused = false;
       broadcastJobUpdate(job);
       if (job.deleteQueue.length === 0 && job.stats.total > 0) {
         sendLogMessage(job, t("bgLogQueueLost", "Error: The deletion queue was lost from storage. Please run a new scan."), "error");
@@ -1298,7 +1554,7 @@ async function executeQueue(key) {
     if (response.error === "rate_limited") {
       // Do NOT advance deleteIndex: retry the same item after the backoff (or pause
       // the job if it has been throttled too many times in a row).
-      await handleRateLimitBackoff(job, key, response.retryAfter || 15, "Slack API throttled.");
+      await handleRateLimitBackoff(job, key, response.retryAfter || 15, t("bgLogApiThrottled", "Slack API throttled."));
       return;
     }
 
@@ -1342,6 +1598,13 @@ async function executeQueue(key) {
       } else if (response.alreadyGone) {
         job.stats.success++;
         sendLogMessage(job, t("bgLogAlreadyRemoved", `[Success] Message at ${msg.time} was already removed.`, [String(msg.time)]), "info");
+      } else if (action === "trim" && Array.isArray(msg.files) && msg.files.length > 0) {
+        // chat.update can strip unfurls and image/file blocks, but it cannot detach
+        // uploaded files (msg.files) — and files.delete is deliberately never used
+        // (see executeQueueItem). The files are still on the message, so this is a
+        // partial result, not "cleaned".
+        job.stats.partial = (job.stats.partial || 0) + 1;
+        sendLogMessage(job, t("bgLogTrimFilesRemain", `[Partial] Message at ${msg.time} was updated, but its ${msg.files.length} uploaded file(s) remain attached. Delete the whole message to remove them.`, [String(msg.time), String(msg.files.length)]), "warn");
       } else {
         job.stats.success++;
         sendLogMessage(job, t("bgLogCleaned", `[Success] Cleaned msg at ${msg.time}`, [String(msg.time)]));
@@ -1361,6 +1624,9 @@ async function executeQueue(key) {
     // "finished" alert). Broadcasting isRunning:false here triggers it promptly.
     if (job.deleteIndex >= job.deleteQueue.length) {
       job.isRunning = false;
+      // A pause clicked while the last item was in flight must not leave the UI
+      // showing "Resume" for a job that is about to be deleted.
+      job.isPaused = false;
       broadcastJobUpdate(job);
       sendLogMessage(job, t("bgLogCompletedSuccess", "Bulk clean operation completed successfully."), "info");
       markRunning(key, false);
@@ -1514,8 +1780,7 @@ async function saveJobQueue(job) {
   }
 }
 
-// forceImmediate retained for call-site compatibility; writes are already light.
-async function saveJobState(key, job, forceImmediate = false) {
+async function saveJobState(key, job) {
   try {
     await chrome.storage.local.set({
       [key]: {
@@ -1537,6 +1802,9 @@ async function saveJobState(key, job, forceImmediate = false) {
         // repeated SW restarts.
         rateLimitRetries: job._rateLimitRetries || 0,
         transientRetries: job._transientRetries || 0,
+        // A pending rate-limit backoff (see scheduleNextStep's alarm branch) must
+        // survive a SW restart, or the watchdog retries before Retry-After passes.
+        nextRunAt: job.nextRunAt || 0,
         timestamp: Date.now()
       }
     });
