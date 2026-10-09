@@ -368,14 +368,14 @@ test('Teams opens its sign-in tab and gives actionable next steps when no token 
     await page.evaluate(() => {
       chrome.permissions.request = (_req, cb) => cb(true);
       // connectTeams() now opens a real Teams tab itself (see connect-teams.js) --
-      // stub it so this test doesn't actually navigate to teams.microsoft.com.
+      // stub it so this test doesn't actually navigate to teams.cloud.microsoft.
       chrome.tabs.create = () => Promise.resolve({});
     });
 
     await page.locator('.platform-row[data-platform="teams"]').click();
 
     await expect(page.locator('#platform-connect-error')).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('#platform-connect-error')).toContainText(/teams\.microsoft\.com/i);
+    await expect(page.locator('#platform-connect-error')).toContainText(/teams\.cloud\.microsoft/i);
   } finally {
     await context.close();
   }
