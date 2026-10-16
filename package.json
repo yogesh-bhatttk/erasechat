@@ -23,7 +23,7 @@
     "teleproto": "1.229.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.63.0",
+    "@playwright/test": "^1.64.0",
     "esbuild": "^0.28.2",
     "eslint": "^10.12.0",
     "node-polyfill-webpack-plugin": "^4.1.0",
